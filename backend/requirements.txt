@@ -1,10 +1,11 @@
-fastapi
-uvicorn[standard]
-pydantic
-python-multipart
-youtube-transcript-api
-httpx
-python-dotenv
-sse-starlette
-google-generativeai
-openai
+fastapi==0.143.0
+uvicorn[standard]==0.54.0
+pydantic==2.14.0
+python-multipart==0.0.32
+youtube-transcript-api==1.2.4
+httpx==0.28.1
+python-dotenv==1.2.4
+sse-starlette==3.5.0
+google-generativeai==0.8.6
+# Reserved for the planned multi-provider AI abstraction.
+openai==3.26.1

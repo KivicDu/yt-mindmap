@@ -1,6 +1,7 @@
 import { useEffect, useRef, forwardRef, useImperativeHandle } from 'react'
 import { Transformer } from 'markmap-lib'
 import { Markmap } from 'markmap-view'
+import { collapseOlderBranches, collectNames, findFirstNew } from '../lib/mindmapTree'
 
 const transformer = new Transformer()
 
@@ -20,50 +21,6 @@ interface MindMapProps {
 }
 
 const COLLAPSE_KEEP_LAST = 3
-
-function plainText(content: unknown): string {
-  return String(content ?? '')
-    .replace(/<[^>]*>/g, '')
-    .replace(/&amp;/g, '&')
-    .replace(/&lt;/g, '<')
-    .replace(/&gt;/g, '>')
-    .replace(/&quot;/g, '"')
-    .replace(/&#39;/g, "'")
-    .replace(/\s+/g, ' ')
-    .trim()
-}
-
-function collectNames(node: any, names: Set<string>): void {
-  if (!node) return
-  const text = plainText(node.content)
-  if (text) names.add(text)
-  for (const child of node.children || []) {
-    collectNames(child, names)
-  }
-}
-
-function findFirstNew(node: any, known: Set<string>, root: any): any {
-  if (!node) return null
-  const text = plainText(node.content)
-  if (node !== root && text && !known.has(text)) {
-    return node
-  }
-  for (const child of node.children || []) {
-    const found = findFirstNew(child, known, root)
-    if (found) return found
-  }
-  return null
-}
-
-function collapseOlderBranches(root: any, keepLast: number): void {
-  const children = root?.children || []
-  if (children.length <= keepLast) return
-  children.forEach((child: any, index: number) => {
-    if (index < children.length - keepLast) {
-      child.payload = { ...(child.payload || {}), fold: 1 }
-    }
-  })
-}
 
 const MindMap = forwardRef<MindMapHandle, MindMapProps>(({ onSeek, collapseOld }, ref) => {
   const refSvg = useRef<SVGSVGElement>(null)

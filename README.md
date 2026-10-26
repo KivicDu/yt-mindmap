@@ -1,5 +1,7 @@
 # YouTube Mind Map Generator
 
+[![CI](https://github.com/KivicDu/yt-mindmap/actions/workflows/ci.yml/badge.svg)](https://github.com/KivicDu/yt-mindmap/actions/workflows/ci.yml)
+
 An AI-powered real-time mind map generator that builds a mind map in parallel as a YouTube lecture video plays.
 
 ## Project Overview
@@ -39,10 +41,27 @@ This project creates a dual-view setup: alongside the YouTube video, there's a d
 - [x] Click a topic to seek the video to its timestamp
 - [x] Retry with exponential backoff and request timeout for AI calls
 - [x] Rolling context (truncated map + compact summary) to control token cost
+- [x] Health endpoint, configurable CORS, Docker images and CI
 
 ## Getting Started
 
-### 1. Backend
+### Option A — Docker (one command)
+
+```bash
+export GEMINI_API_KEY=your_gemini_key_here
+docker compose up --build
+```
+
+Open http://localhost:8080. The API runs on http://localhost:8001 (docs at
+`/docs`), and the mind map cache is kept in the `mindmap-data` volume.
+
+> `VITE_API_BASE` is baked into the frontend at build time. When deploying,
+> rebuild with `--build-arg VITE_API_BASE=https://your-api-host` and set
+> `ALLOWED_ORIGINS` to the frontend origin.
+
+### Option B — Local development
+
+#### 1. Backend
 
 ```bash
 cd backend
@@ -53,9 +72,9 @@ cp .env.example .env              # then set GEMINI_API_KEY
 uvicorn main:app --port 8001 --host 127.0.0.1
 ```
 
-API docs: http://127.0.0.1:8001/docs
+API docs: http://127.0.0.1:8001/docs · Health: http://127.0.0.1:8001/healthz
 
-### 2. Frontend
+#### 2. Frontend
 
 ```bash
 cd frontend
@@ -67,6 +86,57 @@ npm run dev -- --port 5173 --host 127.0.0.1
 Open http://127.0.0.1:5173, paste a YouTube lecture URL, then press **Load Video** and play.
 
 If the video has no captions, enter its URL and use **Upload .srt / .vtt** with a subtitle file.
+
+## Testing and CI
+
+```bash
+# Backend
+cd backend
+pip install -r requirements-dev.txt
+ruff check .
+pytest
+
+# Frontend
+cd frontend
+npm run lint
+npm test
+npm run build
+```
+
+`.github/workflows/ci.yml` runs the same commands on every push and pull
+request to `main` and `develop`.
+
+## Project Structure
+
+```
+yt-mindmap/
+├── backend/
+│   ├── main.py            # FastAPI app: transcript, SSE, update-map, health
+│   ├── ai_engine.py       # Gemini calls, retries, payload normalisation
+│   ├── chunking.py        # Pure chunk/seek rules (unit-tested)
+│   ├── subtitles.py       # .srt / .vtt parser (unit-tested)
+│   ├── transcript.py      # YouTube captions fetcher
+│   └── tests/             # pytest suite
+├── frontend/
+│   └── src/
+│       ├── App.tsx        # player + update loop + session recovery
+│       ├── components/    # markmap wrapper (lazy-loaded)
+│       └── lib/           # pure tree helpers + vitest tests
+├── docs/
+│   ├── architecture.md    # flows, invariants, data model
+│   └── adr/               # architecture decision records
+├── docker-compose.yml
+└── .github/workflows/ci.yml
+```
+
+## Documentation
+
+- [Architecture](docs/architecture.md) — component and sequence diagrams, invariants
+- [ADR 0001](docs/adr/0001-incremental-budgeted-ai.md) — incremental, budgeted AI calls
+- [ADR 0002](docs/adr/0002-sessions-sse-disk-cache.md) — sessions, SSE, disk cache
+- [ADR 0003](docs/adr/0003-markdown-to-node-tree.md) — Markdown today, node tree next
+- [ADR 0004](docs/adr/0004-collaboration-scope.md) — collaboration scope
+- [Contributing workflow](CONTRIBUTING.md) — branch model and commit conventions
 
 ## How It Works
 
@@ -80,6 +150,7 @@ If the video has no captions, enter its URL and use **Upload .srt / .vtt** with 
 
 - Sessions are stored in memory (with TTL cleanup); the mind map cache is persisted to `backend/data/video_cache.json`.
 - One backend worker only (in-memory session store); use Redis/DB to scale horizontally.
-- Editing/deleting/pinning individual nodes is not implemented yet.
+- Editing/deleting/pinning individual nodes is not implemented yet (blocked on the node-tree migration, see ADR 0003).
+- Collaboration, accounts and a database are planned but not built yet (see ADR 0004).
+- Captions are fetched in English; Vietnamese and other languages are on the roadmap.
 - AI usage costs and rate limits apply.
-- Large markmap bundle (~900 kB); consider code-splitting for production.

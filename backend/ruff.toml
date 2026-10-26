@@ -1,0 +1,14 @@
+line-length = 100
+target-version = "py313"
+
+[lint]
+select = ["E", "F", "I", "UP", "B"]
+# Line length is handled by the formatter; blank excepts guard optional cache I/O.
+ignore = ["E501", "B008"]
+
+[lint.isort]
+known-first-party = ["ai_engine", "chunking", "subtitles", "transcript"]
+
+[lint.per-file-ignores]
+# .env must be loaded before ai_engine reads the API key at import time.
+"main.py" = ["E402"]

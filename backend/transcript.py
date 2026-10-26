@@ -1,20 +1,17 @@
-from youtube_transcript_api import YouTubeTranscriptApi
-from youtube_transcript_api._errors import (
-    TranscriptsDisabled,
-    NoTranscriptFound,
-    VideoUnavailable
-)
-from typing import List, Dict, Any, Optional
 import re
+from typing import Any
 
-def extract_video_id(url: str) -> Optional[str]:
+from youtube_transcript_api import YouTubeTranscriptApi
+
+
+def extract_video_id(url: str) -> str | None:
     reg_exp = r'^.*(youtu.be/|v/|u/\w/|embed/|watch\?v=|&v=)([^#&?]*).*'
     match = re.match(reg_exp, url)
     if match and len(match.group(2)) == 11:
         return match.group(2)
     return None
 
-def fetch_transcript(url: str, lang: str = 'en') -> List[Dict[str, Any]]:
+def fetch_transcript(url: str, lang: str = 'en') -> list[dict[str, Any]]:
     video_id = extract_video_id(url)
     if not video_id:
         raise ValueError("Invalid YouTube URL")
