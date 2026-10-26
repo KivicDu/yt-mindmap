@@ -84,6 +84,8 @@ sequenceDiagram
 | Prompt ≤ 8k chars of transcript, ≤ 4k chars of map, ≤ 1.2k chars of summary | `ai_engine` | Bounded token cost per tick |
 | Backward seeks are ignored inside a 3s tolerance | `chunking.is_seek_backward` | Re-watching does not re-pay for the same content |
 | Sessions expire after 2h, capped at 100; cache capped at 50 videos | `main` | An unattended app cannot grow forever |
+| Node ids are generated once and never reused; merging keeps the existing id and time | `node_tree.merge_nodes` | Pin/note/comment/undo need an address that survives updates |
+| A label already present under the same parent absorbs the new children instead of duplicating the branch | `node_tree.merge_nodes` | The AI repeats concepts across chunk boundaries |
 | Auth errors are not retried, transient ones are (3 attempts, 1/2/4s) | `ai_engine._generate_with_retry` | Do not burn quota on a bad key |
 | Gemini thinking is disabled by default (`GEMINI_THINKING_BUDGET=0`) | `ai_engine._config` | Extraction is not reasoning-heavy, and updates run every ~15s |
 
@@ -95,14 +97,28 @@ session
 ├── transcript          [{start, duration, text}]
 ├── consumed_until      float   # last second already mapped
 ├── summary_so_far      str     # rolling compact memory
-├── markdown            str     # accumulated mind map
+├── nodes               [node]  # source of truth for the mind map
+├── markdown            str     # projection of `nodes`, rebuilt on every update
 ├── events              [diff]  # replay buffer for SSE
 └── last_active         float   # TTL cleanup
 
+node
+├── id                  str     # uuid, stable for the life of the node
+├── parentId            str | None
+├── label               str
+├── time                float | None   # video offset for click-to-seek
+└── children            [node]
+
 video_cache[video_id]
-├── markdown / summary_so_far / consumed_until
+├── nodes / markdown / summary_so_far / consumed_until
 └── updated_at
 ```
+
+`nodes` is the map; `markdown` is derived by `node_tree.tree_to_markdown` and
+kept only so the cache stays readable by an older client. Caches written before
+the tree existed have no `nodes`, so `main.restore_nodes` re-parses their
+Markdown with `markdown_to_tree` instead of dropping the map.
+
 
 The cache is written atomically (`.tmp` + `os.replace`) under a lock, so a crash
 mid-write cannot corrupt the JSON.
@@ -111,14 +127,19 @@ mid-write cannot corrupt the JSON.
 
 - `src/App.tsx` — player, transcript loading, update loop, session recovery,
   race-condition guards (`loadTokenRef`, `sessionIdRef`, `isUpdatingRef`).
-- `src/components/MindMap.tsx` — markmap lifecycle, new-node highlight,
-  click-to-seek interception.
-- `src/lib/mindmapTree.ts` — pure tree helpers (labels, new-node detection,
-  branch folding); unit-tested without a DOM.
+- `src/components/MindMap.tsx` — markmap lifecycle, renders the tree directly
+  (no Markdown parsing), new-node highlight, click-to-seek interception.
+- `src/lib/mindmapTree.ts` — pure tree helpers: node → markmap data (carrying
+  `data-node-id`), new-node detection by id, branch folding, cache repair.
 
-`MindMap` is lazy-loaded: markmap + d3 + katex + highlight.js are ~670 kB and
-must not block the player shell. Vendor code is split into cacheable chunks in
-`vite.config.ts`.
+`MindMap` is lazy-loaded: the map renderer must not block the player shell.
+Because the chunk can mount *after* a transcript arrives, `App` re-pushes its
+tree through the `onReady` callback.
+
+`markmap-lib` is no longer a dependency: `markmap-view` renders the tree directly,
+so the browser no longer ships a Markdown parser, transformer, katex and
+highlight.js. That cut the lazy chunk from 670 kB to 75 kB (231.7 kB → 25.4 kB
+gzipped).
 
 ## Testing
 
