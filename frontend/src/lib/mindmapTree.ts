@@ -3,8 +3,13 @@ export interface MapNode {
   parentId: string | null
   label: string
   time?: number | null
+  note?: string
+  pinned?: boolean
+  aliases?: string[]
   children?: MapNode[]
 }
+
+export const MAX_NOTE_CHARS = 2000
 
 /** Shape markmap-view accepts for `setData`. */
 export interface MarkmapNode {
@@ -36,6 +41,15 @@ export function cleanLabel(value: unknown): string {
     .trim()
 }
 
+/** Notes keep their line breaks; only the edges are trimmed. */
+export function cleanNote(value: unknown): string {
+  return String(value ?? '')
+    .replace(/\r\n/g, '\n')
+    .replace(/\r/g, '\n')
+    .trim()
+    .slice(0, MAX_NOTE_CHARS)
+}
+
 function hasTime(value: number | null | undefined): value is number {
   return typeof value === 'number' && Number.isFinite(value) && value >= 0
 }
@@ -44,18 +58,28 @@ function hasTime(value: number | null | undefined): value is number {
  * One markmap node from one map node.
  *
  * The label keeps the `#seek-` link so the existing click handler works, and
- * carries `data-node-id` so a later click can also address the node in the
- * tree (pin, rename, comment).
+ * carries `data-node-id` so a click can also address the node in the tree
+ * (rename, note, pin). A note renders as a second line under the label.
  */
 export function nodeToMarkmap(node: MapNode): MarkmapNode {
   const label = escapeHtml(cleanLabel(node.label))
   const id = escapeHtml(node.id)
-  const content = hasTime(node.time)
+  const title = hasTime(node.time)
     ? `<a href="${SEEK_PREFIX}${node.time.toFixed(1)}" data-node-id="${id}">${label}</a>`
     : `<span data-node-id="${id}">${label}</span>`
 
+  const pin = node.pinned
+    ? '<span class="mm-pin" title="Pinned" aria-hidden="true">📌</span>'
+    : ''
+  const note = cleanNote(node.note)
+  const noteHtml = note ? `<span class="mm-note">${escapeHtml(note)}</span>` : ''
+
   const children = (node.children || []).map(nodeToMarkmap)
-  return { content, children, payload: {} }
+  return {
+    content: `${pin}${title}${noteHtml}`,
+    children,
+    payload: node.pinned ? { pinned: true } : {},
+  }
 }
 
 /** Convert the tree into the data markmap renders, including the map title. */
@@ -114,10 +138,22 @@ export function collapseOlderBranches(
   const children = root?.children || []
   if (children.length <= keepLast) return
   children.forEach((child, index) => {
+    // A pinned branch is the user saying "keep this in view".
+    if (child.payload?.pinned) return
     if (index < children.length - keepLast) {
       child.payload = { ...(child.payload || {}), fold: 1 }
     }
   })
+}
+
+/** Depth-first lookup, used by the editor panel. */
+export function findNodeById(nodes: MapNode[], id: string): MapNode | null {
+  for (const node of nodes || []) {
+    if (node.id === id) return node
+    const found = findNodeById(node.children || [], id)
+    if (found) return found
+  }
+  return null
 }
 
 /** Guard against a malformed tree from an older cache or a bad payload. */
@@ -125,12 +161,21 @@ export function normalizeTree(raw: unknown): MapNode[] {
   if (!Array.isArray(raw)) return []
   return raw
     .filter((entry): entry is MapNode => Boolean(entry) && typeof entry === 'object')
-    .map((entry) => ({
-      id: typeof entry.id === 'string' && entry.id ? entry.id : crypto.randomUUID(),
-      parentId: typeof entry.parentId === 'string' ? entry.parentId : null,
-      label: cleanLabel(entry.label),
-      time: hasTime(entry.time) ? entry.time : null,
-      children: normalizeTree(entry.children),
-    }))
+    .map((entry) => {
+      const aliases = Array.isArray(entry.aliases)
+        ? entry.aliases.filter((alias): alias is string => typeof alias === 'string')
+        : []
+      const node: MapNode = {
+        id: typeof entry.id === 'string' && entry.id ? entry.id : crypto.randomUUID(),
+        parentId: typeof entry.parentId === 'string' ? entry.parentId : null,
+        label: cleanLabel(entry.label),
+        time: hasTime(entry.time) ? entry.time : null,
+        note: typeof entry.note === 'string' ? cleanNote(entry.note) : '',
+        pinned: entry.pinned === true,
+        children: normalizeTree(entry.children),
+      }
+      if (aliases.length > 0) node.aliases = aliases
+      return node
+    })
     .filter((entry) => entry.label.length > 0)
 }

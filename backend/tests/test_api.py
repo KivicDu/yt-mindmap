@@ -1,3 +1,5 @@
+import json
+
 from fastapi.testclient import TestClient
 
 import main as main_module
@@ -251,3 +253,151 @@ def test_transcript_response_includes_the_restored_tree():
     body = response.json()
     assert body["nodes"][0]["id"] == "a"
     assert body["markdown"] == "- [Cached](#seek-3.0)"
+
+
+def _session_with_nodes(nodes):
+    session_id, _ = main_module.create_session("vid", TRANSCRIPT, initial_nodes=nodes)
+    return session_id, main_module.sessions[session_id]
+
+
+def _node(**overrides):
+    node = {
+        "id": "node-1",
+        "parentId": None,
+        "label": "Recursion",
+        "time": 6.0,
+        "note": "",
+        "pinned": False,
+        "children": [],
+    }
+    node.update(overrides)
+    return node
+
+
+def test_patch_node_renames_and_keeps_identity():
+    session_id, session = _session_with_nodes([_node()])
+
+    body = client.patch(
+        "/node", json={"session_id": session_id, "node_id": "node-1", "label": " Đệ quy "}
+    ).json()
+
+    assert body["node"]["label"] == "Đệ quy"
+    assert body["node"]["id"] == "node-1"
+    assert body["node"]["time"] == 6.0
+    assert body["nodes"][0]["label"] == "Đệ quy"
+    assert body["markdown"] == "- [Đệ quy](#seek-6.0)"
+    assert session["markdown"] == "- [Đệ quy](#seek-6.0)"
+
+
+def test_patch_node_stores_a_note_and_pin():
+    session_id, _ = _session_with_nodes([_node()])
+
+    client.patch(
+        "/node",
+        json={"session_id": session_id, "node_id": "node-1", "note": "watch again", "pinned": True},
+    )
+
+    node = main_module.sessions[session_id]["nodes"][0]
+    assert node["note"] == "watch again"
+    assert node["pinned"] is True
+
+
+def test_patch_node_can_clear_a_note_and_unpin():
+    session_id, _ = _session_with_nodes([_node(note="old", pinned=True)])
+
+    client.patch(
+        "/node", json={"session_id": session_id, "node_id": "node-1", "note": "", "pinned": False}
+    )
+
+    node = main_module.sessions[session_id]["nodes"][0]
+    assert node["note"] == ""
+    assert node["pinned"] is False
+
+
+def test_patch_node_only_applies_fields_that_were_sent():
+    session_id, _ = _session_with_nodes([_node(note="keep me")])
+
+    client.patch("/node", json={"session_id": session_id, "node_id": "node-1", "pinned": True})
+
+    node = main_module.sessions[session_id]["nodes"][0]
+    assert node["label"] == "Recursion"
+    assert node["note"] == "keep me"
+    assert node["pinned"] is True
+
+
+def test_patch_node_rejects_an_empty_label():
+    session_id, _ = _session_with_nodes([_node()])
+    response = client.patch(
+        "/node", json={"session_id": session_id, "node_id": "node-1", "label": "   "}
+    )
+    assert response.status_code == 400
+    assert "label" in response.json()["detail"]
+
+
+def test_patch_node_rejects_an_empty_body():
+    session_id, _ = _session_with_nodes([_node()])
+    response = client.patch("/node", json={"session_id": session_id, "node_id": "node-1"})
+    assert response.status_code == 400
+
+
+def test_patch_node_reports_a_missing_node():
+    session_id, _ = _session_with_nodes([_node()])
+    response = client.patch(
+        "/node", json={"session_id": session_id, "node_id": "gone", "note": "x"}
+    )
+    assert response.status_code == 404
+    assert response.json()["detail"] == "node_not_found"
+
+
+def test_patch_node_reports_a_lost_session():
+    response = client.patch(
+        "/node", json={"session_id": "nope", "node_id": "node-1", "note": "x"}
+    )
+    assert response.status_code == 404
+    assert response.json()["detail"] == "session_lost"
+
+
+def test_patch_node_persists_to_the_cache():
+    session_id, _ = _session_with_nodes([_node()])
+    client.patch(
+        "/node", json={"session_id": session_id, "node_id": "node-1", "note": "cached"}
+    )
+
+    stored = main_module.video_cache["vid"]
+    assert stored["nodes"][0]["note"] == "cached"
+    on_disk = json.loads(main_module.CACHE_PATH.read_text())
+    assert on_disk["vid"]["nodes"][0]["note"] == "cached"
+
+
+def test_patch_node_emits_an_event_for_other_tabs():
+    session_id, session = _session_with_nodes([_node()])
+    client.patch("/node", json={"session_id": session_id, "node_id": "node-1", "pinned": True})
+
+    event = session["events"][-1]
+    assert event["type"] == "node_edit"
+    assert event["data"]["type"] == "node_edit"
+    assert event["data"]["nodes"][0]["pinned"] is True
+
+
+def test_edits_survive_the_next_ai_update(monkeypatch):
+    session_id, _ = _session_with_nodes([_node()])
+    client.patch(
+        "/node",
+        json={"session_id": session_id, "node_id": "node-1", "label": "Đệ quy", "note": "n", "pinned": True},
+    )
+
+    monkeypatch.setattr(
+        main_module.ai_engine,
+        "generate_incremental_update",
+        _fake_ai([{"name": "Recursion", "children": [{"name": "Base case", "time": 30}]}]),
+    )
+    body = client.post(
+        "/update-map", json={"video_id": "vid", "last_time": 40, "session_id": session_id}
+    ).json()
+
+    parent = body["diff"]["nodes"][0]
+    assert len(body["diff"]["nodes"]) == 1
+    assert parent["label"] == "Đệ quy"
+    assert parent["note"] == "n"
+    assert parent["pinned"] is True
+    assert [c["label"] for c in parent["children"]] == ["Base case"]

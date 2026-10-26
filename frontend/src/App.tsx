@@ -4,7 +4,7 @@ import YouTube from 'react-youtube'
 import type { YouTubeProps } from 'react-youtube'
 import './App.css'
 import type { MindMapHandle } from './components/MindMap'
-import { normalizeTree, type MapNode } from './lib/mindmapTree'
+import { findNodeById, normalizeTree, type MapNode } from './lib/mindmapTree'
 
 // markmap + d3 are heavy; load them after the player shell is interactive.
 const MindMap = lazy(() => import('./components/MindMap'))
@@ -13,6 +13,14 @@ interface TranscriptEntry {
   start: number
   duration: number
   text: string
+}
+
+/** Draft of the node being edited; separate from the tree until saved. */
+interface NodeDraft {
+  id: string
+  label: string
+  note: string
+  pinned: boolean
 }
 
 const API_BASE = import.meta.env.VITE_API_BASE || 'http://localhost:8001'
@@ -32,6 +40,8 @@ function App() {
   const [sessionId, setSessionId] = useState('')
   const [isUpdating, setIsUpdating] = useState(false)
   const [isLoading, setIsLoading] = useState(false)
+  const [editor, setEditor] = useState<NodeDraft | null>(null)
+  const [isSaving, setIsSaving] = useState(false)
 
   const mindmapRef = useRef<MindMapHandle>(null)
   const eventSourceRef = useRef<EventSource | null>(null)
@@ -244,6 +254,90 @@ function App() {
     mindmapRef.current?.updateTree(titleRef.current, nodesRef.current, { focusNew: false })
   }, [])
 
+  const handleSelectNode = useCallback((nodeId: string) => {
+    const node = findNodeById(nodesRef.current, nodeId)
+    if (!node) return
+    setEditor({
+      id: node.id,
+      label: node.label,
+      note: node.note || '',
+      pinned: Boolean(node.pinned),
+    })
+  }, [])
+
+  /**
+   * Send an edit and adopt the tree the server returns. The server owns the
+   * merge rules (aliases, trimming), so replacing the local copy is simpler
+   * and safer than patching it by hand.
+   */
+  const patchNode = useCallback(async (patch: Record<string, unknown>) => {
+    const session = sessionIdRef.current
+    if (!session) {
+      setStatus('Load a video before editing nodes')
+      return null
+    }
+    try {
+      const response = await fetch(`${API_BASE}/node`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ session_id: session, ...patch }),
+      })
+      const data = await response.json().catch(() => ({}))
+      if (!response.ok) {
+        if (data.detail === 'session_lost') {
+          setStatus('Session expired — restoring...')
+          await recreateSession()
+        } else {
+          setStatus(`Edit failed: ${data.detail || 'error'}`)
+        }
+        return null
+      }
+      if (sessionIdRef.current !== session) return null
+
+      nodesRef.current = normalizeTree(data.nodes)
+      mindmapRef.current?.updateTree(titleRef.current, nodesRef.current, { focusNew: false })
+      return data
+    } catch (e: any) {
+      setStatus(`Edit error: ${e.message}`)
+      return null
+    }
+  }, [recreateSession])
+
+  const saveEditor = useCallback(async () => {
+    if (!editor) return
+    const label = editor.label.trim()
+    if (!label) {
+      setStatus('A node needs a label')
+      return
+    }
+    setIsSaving(true)
+    try {
+      const data = await patchNode({ node_id: editor.id, label, note: editor.note })
+      if (data?.node) {
+        setEditor({
+          id: data.node.id,
+          label: data.node.label,
+          note: data.node.note || '',
+          pinned: Boolean(data.node.pinned),
+        })
+        setStatus('Node saved')
+      }
+    } finally {
+      setIsSaving(false)
+    }
+  }, [editor, patchNode])
+
+  const togglePin = useCallback(async () => {
+    if (!editor) return
+    const next = !editor.pinned
+    setEditor({ ...editor, pinned: next })
+    const data = await patchNode({ node_id: editor.id, pinned: next })
+    if (data?.node) {
+      setEditor((prev) => (prev ? { ...prev, pinned: Boolean(data.node.pinned) } : prev))
+      setStatus(data.node.pinned ? 'Node pinned' : 'Node unpinned')
+    }
+  }, [editor, patchNode])
+
   const onPlayerStateChange: YouTubeProps['onStateChange'] = (event: any) => {
     const YT = (window as any).YT
     if (event.data === YT.PlayerState.PLAYING) {
@@ -387,10 +481,67 @@ function App() {
             </span>
           </div>
           <div className="mindmap-container">
+            {editor && (
+              <div className="node-editor" role="group" aria-label="Edit node">
+                <div className="node-editor-head">
+                  <strong>Edit node</strong>
+                  <button
+                    type="button"
+                    className="node-editor-close"
+                    aria-label="Close editor"
+                    onClick={() => setEditor(null)}
+                  >
+                    ×
+                  </button>
+                </div>
+                <label>
+                  Label
+                  <input
+                    type="text"
+                    value={editor.label}
+                    onChange={(e) => setEditor({ ...editor, label: e.target.value })}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter') {
+                        e.preventDefault()
+                        saveEditor()
+                      }
+                    }}
+                  />
+                </label>
+                <label>
+                  Note
+                  <textarea
+                    rows={2}
+                    placeholder="What do you want to remember about this?"
+                    value={editor.note}
+                    onChange={(e) => setEditor({ ...editor, note: e.target.value })}
+                  />
+                </label>
+                <div className="node-editor-actions">
+                  <label className="node-editor-pin">
+                    <input type="checkbox" checked={editor.pinned} onChange={togglePin} />
+                    Pin
+                  </label>
+                  <button type="button" onClick={saveEditor} disabled={isSaving}>
+                    {isSaving ? 'Saving...' : 'Save'}
+                  </button>
+                  <button
+                    type="button"
+                    className="secondary"
+                    onClick={() => setEditor(null)}
+                  >
+                    Close
+                  </button>
+                </div>
+                <span className="node-editor-hint">Click any node in the map to edit it.</span>
+              </div>
+            )}
             <Suspense fallback={<div className="mindmap-loading">Loading mind map...</div>}>
               <MindMap
                 ref={mindmapRef}
                 onSeek={handleSeek}
+                onSelect={handleSelectNode}
+                selectedId={editor?.id ?? null}
                 collapseOld={focusRecent}
                 onReady={handleMindMapReady}
               />

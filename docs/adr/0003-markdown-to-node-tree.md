@@ -34,9 +34,10 @@ node
   Markdown, which removed `markmap-lib` and its transformer/katex/highlight.js
   payload.
 
-Fields for editing (`note`, `pinned`, `createdBy`, `updatedAt`) are deliberately
-left out until there is an endpoint that writes them; adding them later is
-additive.
+User state was added on top of the same ids once there was an endpoint to
+write it: `PATCH /node` stores `note`, `pinned` and the previous labels
+(`aliases`), and the AI merge preserves them. `createdBy` is still absent
+because there are no accounts yet; it becomes meaningful with collaboration.
 
 ## Consequences
 - Pin/note/rename, undo, comments and presence cursors now have an address

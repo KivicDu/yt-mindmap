@@ -39,6 +39,8 @@ This project creates a dual-view setup: alongside the YouTube video, there's a d
 - [x] Highlight new nodes and auto-pan to them
 - [x] Focus recent mode (collapse older branches)
 - [x] Node tree with stable ids as the source of truth (Markdown is generated)
+- [x] Edit any node: rename it, attach a note, pin it (edits survive AI updates and reloads)
+- [x] Pinned branches stay open in "focus recent" mode
 - [x] Click a topic to seek the video to its timestamp
 - [x] Retry with exponential backoff and request timeout for AI calls
 - [x] Rolling context (truncated map + compact summary) to control token cost
@@ -153,7 +155,8 @@ yt-mindmap/
 
 - Sessions are stored in memory (with TTL cleanup); the mind map cache is persisted to `backend/data/video_cache.json`.
 - One backend worker only (in-memory session store); use Redis/DB to scale horizontally.
-- Editing/deleting/pinning individual nodes is not implemented yet, but nodes now carry stable ids, so these are additive features (see ADR 0003).
+- Deleting nodes is not implemented: the AI owns structure, so a wrong branch is fixed by renaming it or by improving the prompt.
+- Notes and pins are personal state stored with the video cache; they are not shared between users yet.
 - Collaboration, accounts and a database are planned but not built yet (see ADR 0004).
 - Captions are fetched in English; Vietnamese and other languages are on the roadmap.
 - AI usage costs and rate limits apply.

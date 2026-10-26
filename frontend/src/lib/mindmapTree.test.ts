@@ -1,11 +1,14 @@
 import { describe, expect, it } from 'vitest'
 import {
+  MAX_NOTE_CHARS,
   buildMapData,
   cleanLabel,
+  cleanNote,
   collapseOlderBranches,
   collectIds,
   escapeHtml,
   findFirstNew,
+  findNodeById,
   nodeToMarkmap,
   normalizeTree,
   type MapNode,
@@ -171,7 +174,7 @@ describe('normalizeTree', () => {
   it('keeps valid nodes and their ids', () => {
     const tree = normalizeTree([{ id: 'a', parentId: null, label: ' A ', time: 1.5, children: [] }])
     expect(tree).toEqual([
-      { id: 'a', parentId: null, label: 'A', time: 1.5, children: [] },
+      { id: 'a', parentId: null, label: 'A', time: 1.5, note: '', pinned: false, children: [] },
     ])
   })
 
@@ -202,5 +205,112 @@ describe('normalizeTree', () => {
     const tree = normalizeTree([{ label: 'A', children: [{ label: 'B', children: 'x' }] }])
     expect(tree[0].children?.[0].label).toBe('B')
     expect(tree[0].children?.[0].children).toEqual([])
+  })
+})
+
+describe('cleanNote', () => {
+  it('keeps line breaks and trims the edges', () => {
+    expect(cleanNote('  first line\nsecond  \n')).toBe('first line\nsecond')
+  })
+
+  it('normalises CRLF', () => {
+    expect(cleanNote('a\r\nb')).toBe('a\nb')
+  })
+
+  it('caps the length and tolerates null', () => {
+    expect(cleanNote(null)).toBe('')
+    expect(cleanNote('x'.repeat(MAX_NOTE_CHARS + 50))).toHaveLength(MAX_NOTE_CHARS)
+  })
+})
+
+describe('nodeToMarkmap user state', () => {
+  it('renders a note as a second element after the label', () => {
+    const data = nodeToMarkmap(node('a', 'Recursion', { time: 3, note: 'see 12:30' }))
+    expect(data.content).toContain('>Recursion</a>')
+    expect(data.content).toContain('<span class="mm-note">see 12:30</span>')
+  })
+
+  it('escapes a note so it cannot inject markup', () => {
+    const data = nodeToMarkmap(node('a', 'A', { note: '<img src=x>' }))
+    expect(data.content).not.toContain('<img')
+    expect(data.content).toContain('&lt;img')
+  })
+
+  it('marks a pinned node with a pin glyph and a payload flag', () => {
+    const data = nodeToMarkmap(node('a', 'A', { pinned: true }))
+    expect(data.content).toContain('class="mm-pin"')
+    expect(data.payload.pinned).toBe(true)
+  })
+
+  it('keeps note and pin on children', () => {
+    const parent = node('p', 'Parent', {
+      children: [node('c', 'Child', { note: 'child note', pinned: true })],
+    })
+    const child = nodeToMarkmap(parent).children[0]
+    expect(child.content).toContain('mm-note')
+    expect(child.content).toContain('mm-pin')
+  })
+})
+
+describe('collapseOlderBranches with pins', () => {
+  const rootWith = (nodes: MapNode[]) => buildMapData({ title: 'T', nodes })
+
+  it('never folds a pinned branch', () => {
+    const root = rootWith([
+      node('a', 'A', { pinned: true }),
+      node('b', 'B'),
+      node('c', 'C'),
+      node('d', 'D'),
+    ])
+    collapseOlderBranches(root, 2)
+    expect(root.children.map((child) => child.payload.fold)).toEqual([undefined, 1, undefined, undefined])
+  })
+
+  it('folds unpinned branches of the same batch', () => {
+    const root = rootWith([node('a', 'A'), node('b', 'B'), node('c', 'C')])
+    collapseOlderBranches(root, 1)
+    expect(root.children.map((child) => child.payload.fold)).toEqual([1, 1, undefined])
+  })
+})
+
+describe('findNodeById', () => {
+  const tree = [
+    node('a', 'A', {
+      children: [node('a1', 'A1', { children: [node('a1x', 'A1X')] })],
+    }),
+    node('b', 'B'),
+  ]
+
+  it('finds a root, a child and a grandchild', () => {
+    expect(findNodeById(tree, 'a')?.label).toBe('A')
+    expect(findNodeById(tree, 'a1')?.label).toBe('A1')
+    expect(findNodeById(tree, 'a1x')?.label).toBe('A1X')
+  })
+
+  it('returns null for an unknown id or empty tree', () => {
+    expect(findNodeById(tree, 'nope')).toBeNull()
+    expect(findNodeById([], 'a')).toBeNull()
+  })
+})
+
+describe('normalizeTree user state', () => {
+  it('keeps notes, pins and aliases from the server', () => {
+    const tree = normalizeTree([
+      { id: 'a', label: 'Đệ quy', note: 'ghi chú', pinned: true, aliases: ['recursion'] },
+    ])
+    expect(tree[0].note).toBe('ghi chú')
+    expect(tree[0].pinned).toBe(true)
+    expect(tree[0].aliases).toEqual(['recursion'])
+  })
+
+  it('defaults missing state and drops bad aliases', () => {
+    const tree = normalizeTree([{ id: 'a', label: 'A', pinned: 'yes', aliases: [1, 'x'] }])
+    expect(tree[0].note).toBe('')
+    expect(tree[0].pinned).toBe(false)
+    expect(tree[0].aliases).toEqual(['x'])
+  })
+
+  it('omits the alias key when there are none', () => {
+    expect('aliases' in normalizeTree([{ id: 'a', label: 'A' }])[0]).toBe(false)
   })
 })

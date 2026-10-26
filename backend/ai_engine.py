@@ -22,6 +22,8 @@ MAX_RETRIES = 3
 RETRY_BASE_DELAY = 1.0
 REQUEST_TIMEOUT = 60
 DEFAULT_MODEL = "gemini-2.5-flash"
+# Long provider messages are useful once, not 800 times.
+MAX_LOGGED_ERROR_CHARS = 300
 
 # Server-side statuses that will fail again no matter how often we retry.
 NON_RETRYABLE_STATUSES = frozenset(
@@ -61,6 +63,19 @@ def is_retryable(error: BaseException) -> bool:
 
     message = str(error).lower()
     return not any(marker in message for marker in AUTH_MARKERS)
+
+
+def describe_error(error: BaseException) -> str:
+    """`ClientError: 429 RESOURCE_EXHAUSTED ...` — enough to diagnose.
+
+    Logging only the class name (the previous behaviour) hides the one detail
+    that matters: *why* the call failed. Provider messages can be very long, so
+    the text is collapsed to one line and capped.
+    """
+    detail = " ".join(str(error).split())[:MAX_LOGGED_ERROR_CHARS]
+    name = type(error).__name__
+    return f"{name}: {detail}" if detail else name
+
 
 
 def parse_ai_payload(
@@ -145,16 +160,23 @@ class MindMapAI:
     def __init__(self):
         self.api_key = os.getenv("GEMINI_API_KEY", "").strip()
         self.model_name = os.getenv("GEMINI_MODEL", DEFAULT_MODEL).strip() or DEFAULT_MODEL
+        # Optional override so the AI path can be pointed at a mock or a proxy
+        # (tests, offline demos, a gateway in front of the real API).
+        self.base_url = os.getenv("GEMINI_BASE_URL", "").strip()
         self.client = None
         # Running token totals for this process, surfaced by /healthz.
         self.usage_totals = {"prompt": 0, "output": 0, "total": 0, "calls": 0}
         if self.api_key and genai is not None:
             try:
                 # The new SDK takes the timeout once, in milliseconds.
-                http_options = genai_types.HttpOptions(timeout=REQUEST_TIMEOUT * 1000)
-                self.client = genai.Client(api_key=self.api_key, http_options=http_options)
+                options: dict[str, Any] = {"timeout": REQUEST_TIMEOUT * 1000}
+                if self.base_url:
+                    options["base_url"] = self.base_url
+                self.client = genai.Client(
+                    api_key=self.api_key, http_options=genai_types.HttpOptions(**options)
+                )
             except Exception as exc:  # pragma: no cover - defensive
-                logger.warning("Gemini client could not be created: %s", exc)
+                logger.warning("Gemini client could not be created: %s", describe_error(exc))
                 self.client = None
 
     @property
@@ -199,7 +221,11 @@ class MindMapAI:
                     raise
                 delay = RETRY_BASE_DELAY * (2**attempt)
                 logger.warning(
-                    "Gemini call failed (%s), retrying in %.0fs", type(exc).__name__, delay
+                    "Gemini call failed (attempt %d/%d, retrying in %.0fs): %s",
+                    attempt + 1,
+                    MAX_RETRIES,
+                    delay,
+                    describe_error(exc),
                 )
                 time.sleep(delay)
         raise RuntimeError("unreachable")  # pragma: no cover
@@ -277,6 +303,8 @@ Return ONLY this JSON object (no markdown fences, no extra text):
                 default_time=float(time_range[0]),
             )
         except Exception as e:
+            # The UI only sees "AI busy"; the actual cause belongs in the log.
+            logger.warning("Mind map update failed: %s", describe_error(e))
             return {
                 "markdown_diff": "",
                 "new_nodes": [],
