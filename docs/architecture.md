@@ -119,7 +119,6 @@ kept only so the cache stays readable by an older client. Caches written before
 the tree existed have no `nodes`, so `main.restore_nodes` re-parses their
 Markdown with `markdown_to_tree` instead of dropping the map.
 
-
 The cache is written atomically (`.tmp` + `os.replace`) under a lock, so a crash
 mid-write cannot corrupt the JSON.
 
