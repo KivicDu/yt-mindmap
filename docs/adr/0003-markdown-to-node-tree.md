@@ -1,7 +1,7 @@
-# ADR 0003 — Markdown is the map today, a node tree is next
+# ADR 0003 — The mind map is a node tree, Markdown is a projection
 
 ## Status
-Accepted (revisit before collaboration)
+Accepted — implemented
 
 ## Context
 markmap natively renders Markdown, so the app stores the map as a Markdown
@@ -10,29 +10,46 @@ but node identity is the label text, which means: no stable IDs, no per-node
 notes or pins, no reliable undo, and no way for two users to edit the same map.
 
 ## Decision
-Keep Markdown as the source of truth for now, and isolate the logic that depends
-on node identity into pure helpers (`src/lib/mindmapTree.ts`).
+Make the node tree the source of truth, in the backend, and generate Markdown
+from it:
 
-Before real-time collaboration, migrate to:
-
-```ts
-type MapNode = {
-  id: string          // uuid, generated when AI or a user creates the node
-  parentId: string | null
-  label: string
-  time?: number       // video offset for click-to-seek
-  note?: string
-  pinned?: boolean
-  createdBy?: string
-  updatedAt?: number
-}
+```text
+node
+├── id         str        # uuid, stable for the life of the node
+├── parentId   str | None
+├── label      str
+├── time       float|None # video offset for click-to-seek
+└── children   [node]
 ```
 
-Markdown becomes a **projection** of the tree, generated at render time.
+- `backend/node_tree.py` owns the format: `normalize_nodes` gives AI output ids
+  and parent links, `merge_nodes` folds duplicates, `tree_to_markdown` renders
+  the projection, `markdown_to_tree` reads maps cached by older versions.
+- Sessions and the video cache store `nodes`; `markdown` is kept beside them
+  only for compatibility.
+- `/update-map` and the SSE event return the **whole tree**, so a client that
+  missed an event still converges on the next one.
+- The frontend renders the tree directly (`src/lib/mindmapTree.ts` builds
+  markmap data with `data-node-id` on every label) and no longer parses
+  Markdown, which removed `markmap-lib` and its transformer/katex/highlight.js
+  payload.
+
+User state was added on top of the same ids once there was an endpoint to
+write it: `PATCH /node` stores `note`, `pinned` and the previous labels
+(`aliases`), and the AI merge preserves them. `createdBy` is still absent
+because there are no accounts yet; it becomes meaningful with collaboration.
 
 ## Consequences
-- Current features stay simple and cheap.
-- Editing, undo, comments and CRDT-based co-editing are all blocked until the
-  migration happens; doing it earlier avoids paying for a rewrite later.
-- Stable IDs also make AI inserts merge-friendly: new nodes are additions, not
-  text edits, so conflicts are rare.
+- Pin/note/rename, undo, comments and presence cursors now have an address
+  (`node.id`) to attach to, without another rewrite.
+- AI output merges as *additions*: a repeated label under the same parent keeps
+  the existing id and time and absorbs the new children, so the map does not
+  grow duplicates and a user's edits on that node survive later chunks.
+- The map is ~75 kB of lazy JS instead of ~670 kB, because rendering no longer
+  needs a Markdown pipeline.
+- Costs: every update ships the full tree (fine at lecture scale, hundreds of
+  nodes) and the client must tolerate a server that sends older shapes — hence
+  `normalizeTree` on the client and `normalize_cached_nodes` on the server.
+- Dedupe is by case-insensitive label *within the same parent*. Two genuinely
+  distinct concepts with the same name under one parent collapse into one; a
+  future node-level "keep both" affordance would need an explicit flag.

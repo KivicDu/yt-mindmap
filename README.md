@@ -18,7 +18,7 @@ This project creates a dual-view setup: alongside the YouTube video, there's a d
 ### Backend
 - FastAPI (Python)
 - youtube-transcript-api
-- Google Gemini API
+- Google Gemini API (`google-genai` SDK)
 - Server-Sent Events (SSE) for real-time updates
 
 ## Features
@@ -38,6 +38,9 @@ This project creates a dual-view setup: alongside the YouTube video, there's a d
 - [x] Session TTL + limits (stale sessions are cleaned up automatically)
 - [x] Highlight new nodes and auto-pan to them
 - [x] Focus recent mode (collapse older branches)
+- [x] Node tree with stable ids as the source of truth (Markdown is generated)
+- [x] Edit any node: rename it, attach a note, pin it (edits survive AI updates and reloads)
+- [x] Pinned branches stay open in "focus recent" mode
 - [x] Click a topic to seek the video to its timestamp
 - [x] Retry with exponential backoff and request timeout for AI calls
 - [x] Rolling context (truncated map + compact summary) to control token cost
@@ -104,7 +107,8 @@ npm run build
 ```
 
 `.github/workflows/ci.yml` runs the same commands on every push and pull
-request to `main` and `develop`.
+request to `main` and `develop`, plus a Docker job that builds both images,
+smoke-tests the backend `/healthz` endpoint and checks the nginx-served bundle.
 
 ## Project Structure
 
@@ -113,6 +117,7 @@ yt-mindmap/
 ├── backend/
 │   ├── main.py            # FastAPI app: transcript, SSE, update-map, health
 │   ├── ai_engine.py       # Gemini calls, retries, payload normalisation
+│   ├── node_tree.py       # Node ids, merge/dedupe, Markdown projection
 │   ├── chunking.py        # Pure chunk/seek rules (unit-tested)
 │   ├── subtitles.py       # .srt / .vtt parser (unit-tested)
 │   ├── transcript.py      # YouTube captions fetcher
@@ -134,7 +139,7 @@ yt-mindmap/
 - [Architecture](docs/architecture.md) — component and sequence diagrams, invariants
 - [ADR 0001](docs/adr/0001-incremental-budgeted-ai.md) — incremental, budgeted AI calls
 - [ADR 0002](docs/adr/0002-sessions-sse-disk-cache.md) — sessions, SSE, disk cache
-- [ADR 0003](docs/adr/0003-markdown-to-node-tree.md) — Markdown today, node tree next
+- [ADR 0003](docs/adr/0003-markdown-to-node-tree.md) — node tree as the source of truth
 - [ADR 0004](docs/adr/0004-collaboration-scope.md) — collaboration scope
 - [Contributing workflow](CONTRIBUTING.md) — branch model and commit conventions
 
@@ -143,14 +148,15 @@ yt-mindmap/
 1. The frontend loads the transcript and opens an SSE connection to the backend.
 2. While the video plays, the frontend asks the backend every ~15 seconds to process newly watched content.
 3. The backend sends only the new transcript slice to Gemini, which returns new mind map nodes as JSON.
-4. Nodes are converted to Markdown, appended to the accumulated map, and pushed to the browser over SSE.
-5. markmap transforms the Markdown into a tree and renders it as the mind map.
+4. Each node gets a stable id; new branches are merged into the tree, folding repeated labels into the node that already exists.
+5. The whole tree is pushed to the browser over SSE, which renders it with `markmap-view` (node ids are kept on every label, and Markdown is only a generated projection).
 
 ## Known Limitations
 
 - Sessions are stored in memory (with TTL cleanup); the mind map cache is persisted to `backend/data/video_cache.json`.
 - One backend worker only (in-memory session store); use Redis/DB to scale horizontally.
-- Editing/deleting/pinning individual nodes is not implemented yet (blocked on the node-tree migration, see ADR 0003).
+- Deleting nodes is not implemented: the AI owns structure, so a wrong branch is fixed by renaming it or by improving the prompt.
+- Notes and pins are personal state stored with the video cache; they are not shared between users yet.
 - Collaboration, accounts and a database are planned but not built yet (see ADR 0004).
 - Captions are fetched in English; Vietnamese and other languages are on the roadmap.
 - AI usage costs and rate limits apply.

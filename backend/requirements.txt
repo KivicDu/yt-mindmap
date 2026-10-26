@@ -6,6 +6,6 @@ youtube-transcript-api==1.2.4
 httpx==0.28.1
 python-dotenv==1.2.4
 sse-starlette==3.5.0
-google-generativeai==0.8.6
+google-genai==2.33.0
 # Reserved for the planned multi-provider AI abstraction.
 openai==3.26.1
