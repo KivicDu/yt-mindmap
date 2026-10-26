@@ -37,6 +37,7 @@ API docs: http://127.0.0.1:8001/docs
 | POST | `/transcript` | Fetch captions from a URL, or parse an uploaded `.srt`/`.vtt` |
 | GET | `/stream/{session_id}` | SSE stream of mind map updates |
 | POST | `/update-map` | Process newly watched content, merge new nodes into the tree, return the full tree |
+| PATCH | `/node` | Rename, note or pin one node; returns the full tree and emits a `node_edit` SSE event |
 
 ## Tests
 
@@ -54,8 +55,8 @@ this folder without installing the package.
 | File | Responsibility |
 |------|----------------|
 | `main.py` | App wiring, sessions, cache, endpoints |
-| `ai_engine.py` | Gemini client (`google-genai`), retry policy, prompt, payload parsing, token accounting |
-| `node_tree.py` | Node ids, normalisation, merge/dedupe, Markdown projection + legacy parse |
+| `ai_engine.py` | Gemini client (`google-genai`), retry policy, prompt, payload parsing, token accounting, error logging |
+| `node_tree.py` | Node ids, normalisation, merge/dedupe, note/label edits, Markdown projection + legacy parse |
 | `chunking.py` | Pure seek/chunk rules (no FastAPI import) |
 | `subtitles.py` | `.srt` / `.vtt` parser |
 | `transcript.py` | YouTube captions fetcher |
@@ -68,6 +69,10 @@ this folder without installing the package.
 - A session stores the map as a node tree (`nodes`); `markdown` is generated from
   it with `node_tree.tree_to_markdown`. Caches written before the tree existed
   have no `nodes` and are re-parsed from Markdown on restore.
+- User state (`note`, `pinned`, `aliases`) lives on the node, is written to the
+  cache by `PATCH /node`, and is preserved when the AI merges new children in.
+- `GEMINI_BASE_URL` can point the AI client at a mock or proxy, which is how
+  tests exercise the AI path without calling Google.
 - `.env` is loaded before `ai_engine` is imported so the API key is available at startup.
 - Gemini calls use the `google-genai` SDK (the older `google-generativeai` package is
   end-of-life). `response_mime_type="application/json"` makes the model return JSON
