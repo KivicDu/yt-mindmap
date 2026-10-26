@@ -1,54 +1,68 @@
 from pathlib import Path
+
 from dotenv import load_dotenv
 
 load_dotenv(Path(__file__).resolve().parent / ".env")
 
-from fastapi import FastAPI, HTTPException
-from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel
-from typing import Optional, List, Dict, Any
-from transcript import fetch_transcript, extract_video_id
-from sse_starlette.sse import EventSourceResponse
-from ai_engine import ai_engine
 import asyncio
 import json
+import os
 import threading
 import time
 import uuid
+from typing import Any
+
+from fastapi import FastAPI, HTTPException
+from fastapi.middleware.cors import CORSMiddleware
+from pydantic import BaseModel
+from sse_starlette.sse import EventSourceResponse
+
+from ai_engine import ai_engine
+from chunking import chunk_time_range, is_seek_backward, select_chunk
+from subtitles import parse_vtt_or_srt
+from transcript import extract_video_id, fetch_transcript
+
+DEFAULT_ALLOWED_ORIGINS = [
+    "http://localhost:5173",
+    "http://127.0.0.1:5173",
+    "http://localhost:3000",
+    "http://127.0.0.1:3000",
+    "http://localhost:8080",
+    "http://127.0.0.1:8080",
+    "http://localhost:4173",
+    "http://127.0.0.1:4173",
+]
+ALLOWED_ORIGINS = [
+    origin.strip()
+    for origin in os.getenv("ALLOWED_ORIGINS", "").split(",")
+    if origin.strip()
+] or DEFAULT_ALLOWED_ORIGINS
 
 app = FastAPI(title="YouTube Mind Map API", version="0.1.0")
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[
-        "http://localhost:5173",
-        "http://127.0.0.1:5173",
-        "http://localhost:3000",
-        "http://127.0.0.1:3000",
-    ],
+    allow_origins=ALLOWED_ORIGINS,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
 class TranscriptRequest(BaseModel):
-    url: Optional[str] = None
-    file_content: Optional[str] = None
-    initial_markdown: Optional[str] = None
-    resume_at: Optional[float] = None
+    url: str | None = None
+    file_content: str | None = None
+    initial_markdown: str | None = None
+    resume_at: float | None = None
 
 class UpdateMapRequest(BaseModel):
     video_id: str
     last_time: float
-    current_map: Dict[str, Any] = {}
-    session_id: Optional[str] = None
+    current_map: dict[str, Any] = {}
+    session_id: str | None = None
 
-sessions: Dict[str, Dict[str, Any]] = {}
-video_cache: Dict[str, Dict[str, Any]] = {}
+sessions: dict[str, dict[str, Any]] = {}
+video_cache: dict[str, dict[str, Any]] = {}
 
-MAX_CHUNK_SECONDS = 180.0
-LOOKAHEAD_SECONDS = 2.0
-MAX_CHUNK_ENTRIES = 300
 MAX_CACHED_VIDEOS = 50
 SESSION_TTL_SECONDS = 2 * 60 * 60
 MAX_SESSIONS = 100
@@ -98,7 +112,7 @@ def cleanup_sessions() -> None:
             sessions.pop(sid, None)
 
 
-def touch_session(session_id: Optional[str]) -> None:
+def touch_session(session_id: str | None) -> None:
     session = sessions.get(session_id) if session_id else None
     if session:
         session["last_active"] = time.time()
@@ -106,47 +120,7 @@ def touch_session(session_id: Optional[str]) -> None:
 
 load_video_cache()
 
-def parse_vtt_or_srt(content: str) -> List[Dict[str, Any]]:
-    lines = content.splitlines()
-    entries = []
-    i = 0
-    while i < len(lines):
-        line = lines[i].strip()
-        if '-->' in line:
-            try:
-                parts = line.split('-->')
-                start = parts[0].strip().replace(',', '.')
-                end = parts[1].strip().split()[0].replace(',', '.') if len(parts) > 1 else start
-                def to_seconds(ts: str) -> float:
-                    components = ts.split(':')
-                    if len(components) == 3:
-                        h, m, s = components
-                    elif len(components) == 2:
-                        h, m, s = 0, components[0], components[1]
-                    else:
-                        try:
-                            return float(ts)
-                        except:
-                            return 0
-                    return float(h)*3600 + float(m)*60 + float(s)
-                i += 1
-                text_parts = []
-                while i < len(lines) and lines[i].strip():
-                    text_parts.append(lines[i].strip())
-                    i += 1
-                text = ' '.join(text_parts)
-                if text:
-                    entries.append({
-                        'start': to_seconds(start),
-                        'duration': max(0, to_seconds(end) - to_seconds(start)),
-                        'text': text
-                    })
-            except Exception:
-                pass
-        i += 1
-    return entries
-
-def cache_video_map(video_id: Optional[str], session: Dict[str, Any]) -> None:
+def cache_video_map(video_id: str | None, session: dict[str, Any]) -> None:
     if not video_id:
         return
     video_cache[video_id] = {
@@ -162,10 +136,10 @@ def cache_video_map(video_id: Optional[str], session: Dict[str, Any]) -> None:
 
 
 def create_session(
-    video_id: Optional[str],
-    transcript: List[Dict[str, Any]],
-    initial_markdown: Optional[str] = None,
-    resume_at: Optional[float] = None,
+    video_id: str | None,
+    transcript: list[dict[str, Any]],
+    initial_markdown: str | None = None,
+    resume_at: float | None = None,
 ) -> tuple:
     cached = video_cache.get(video_id) if video_id else None
 
@@ -197,7 +171,7 @@ def create_session(
     return session_id, bool(cached)
 
 
-def session_payload(session_id: str) -> Dict[str, Any]:
+def session_payload(session_id: str) -> dict[str, Any]:
     session = sessions[session_id]
     return {
         "session_id": session_id,
@@ -208,6 +182,15 @@ def session_payload(session_id: str) -> Dict[str, Any]:
 @app.get("/")
 async def root():
     return {"message": "YouTube Mind Map API is running"}
+
+@app.get("/healthz")
+async def healthz():
+    return {
+        "status": "ok",
+        "sessions": len(sessions),
+        "cached_videos": len(video_cache),
+        "ai_configured": bool(ai_engine.client),
+    }
 
 @app.post("/transcript")
 async def get_transcript(request: TranscriptRequest):
@@ -231,9 +214,11 @@ async def get_transcript(request: TranscriptRequest):
                 **session_payload(session_id),
             }
         except ValueError as e:
-            raise HTTPException(status_code=400, detail=str(e))
+            raise HTTPException(status_code=400, detail=str(e)) from e
         except Exception as e:
-            raise HTTPException(status_code=400, detail=f"Failed to parse transcript: {str(e)}")
+            raise HTTPException(
+                status_code=400, detail=f"Failed to parse transcript: {str(e)}"
+            ) from e
     
     if request.url:
         try:
@@ -252,9 +237,11 @@ async def get_transcript(request: TranscriptRequest):
                 **session_payload(session_id),
             }
         except ValueError as e:
-            raise HTTPException(status_code=400, detail=str(e))
+            raise HTTPException(status_code=400, detail=str(e)) from e
         except Exception as e:
-            raise HTTPException(status_code=500, detail=f"Failed to fetch transcript: {str(e)}")
+            raise HTTPException(
+                status_code=500, detail=f"Failed to fetch transcript: {str(e)}"
+            ) from e
     
     raise HTTPException(status_code=400, detail="Either url or file_content must be provided")
 
@@ -313,7 +300,7 @@ async def update_map(request: UpdateMapRequest):
         }
 
     # Seeking backward past processed content: ignore, it is already mapped.
-    if last_time + LOOKAHEAD_SECONDS + 1.0 < consumed_until:
+    if is_seek_backward(last_time, consumed_until):
         return {
             "diff": {},
             "should_update": False,
@@ -324,18 +311,7 @@ async def update_map(request: UpdateMapRequest):
 
     # Collect unprocessed entries up to the current position (+small look-ahead),
     # capped so a large forward seek cannot create an unbounded chunk.
-    window_end = last_time + LOOKAHEAD_SECONDS
-    window_limit = consumed_until + MAX_CHUNK_SECONDS
-    chunk = []
-    for entry in transcript:
-        start = float(entry.get("start", 0) or 0)
-        if start <= consumed_until + 0.1:
-            continue
-        if start > window_end or start > window_limit:
-            break
-        chunk.append(entry)
-        if len(chunk) >= MAX_CHUNK_ENTRIES:
-            break
+    chunk = select_chunk(transcript, last_time, consumed_until)
 
     if not chunk:
         return {
@@ -346,12 +322,7 @@ async def update_map(request: UpdateMapRequest):
             "chunk_size": 0,
         }
 
-    chunk_start = min(float(c.get("start", 0) or 0) for c in chunk)
-    chunk_end = max(
-        float(c.get("start", 0) or 0) + float(c.get("duration", 0) or 0)
-        for c in chunk
-    )
-    time_range = (chunk_start, chunk_end)
+    time_range = chunk_time_range(chunk)
 
     ai_result = await asyncio.to_thread(
         ai_engine.generate_incremental_update,
@@ -374,7 +345,7 @@ async def update_map(request: UpdateMapRequest):
 
     # The chunk was processed: advance even when nothing new was found,
     # otherwise the same chunk would be sent to the AI on every tick.
-    new_consumed = max(consumed_until, chunk_end)
+    new_consumed = max(consumed_until, time_range[1])
     session["consumed_until"] = new_consumed
     if ai_result.get("summary"):
         session["summary_so_far"] = ai_result["summary"]

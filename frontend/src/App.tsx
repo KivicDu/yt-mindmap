@@ -1,9 +1,12 @@
-import { useState, useRef, useEffect, useCallback } from 'react'
+import { lazy, Suspense, useState, useRef, useEffect, useCallback } from 'react'
 import type { ChangeEvent } from 'react'
 import YouTube from 'react-youtube'
 import type { YouTubeProps } from 'react-youtube'
 import './App.css'
-import MindMap, { type MindMapHandle } from './components/MindMap'
+import type { MindMapHandle } from './components/MindMap'
+
+// markmap + d3 are heavy; load them after the player shell is interactive.
+const MindMap = lazy(() => import('./components/MindMap'))
 
 interface TranscriptEntry {
   start: number
@@ -379,7 +382,9 @@ function App() {
             </span>
           </div>
           <div className="mindmap-container">
-            <MindMap ref={mindmapRef} onSeek={handleSeek} collapseOld={focusRecent} />
+            <Suspense fallback={<div className="mindmap-loading">Loading mind map...</div>}>
+              <MindMap ref={mindmapRef} onSeek={handleSeek} collapseOld={focusRecent} />
+            </Suspense>
           </div>
         </div>
       </div>

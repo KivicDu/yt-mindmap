@@ -1,7 +1,7 @@
-import os
 import json
+import os
 import time
-from typing import List, Dict, Any
+from typing import Any
 
 try:
     import google.generativeai as genai
@@ -26,8 +26,38 @@ _AUTH_MARKERS = (
 )
 
 
+def parse_ai_payload(
+    text: str,
+    summary_so_far: str,
+    default_time: float,
+) -> dict[str, Any]:
+    """Turn a raw Gemini reply into a normalised incremental-update result.
+
+    Models sometimes wrap JSON in markdown fences or add prose around it, so
+    the payload is unwrapped before parsing. Raises on invalid JSON; callers
+    keep the previous summary and retry the same chunk later.
+    """
+    cleaned = (text or "").strip()
+    cleaned = cleaned.replace("```json", "").replace("```JSON", "").replace("```", "")
+    if "{" in cleaned and "}" in cleaned:
+        cleaned = cleaned[cleaned.find("{") : cleaned.rfind("}") + 1]
+
+    data = json.loads(cleaned)
+    nodes = data.get("new_nodes") or []
+    if not isinstance(nodes, list):
+        nodes = []
+    markdown_diff = nodes_to_markdown(nodes, default_time=default_time)
+    summary = str(data.get("summary") or summary_so_far).strip()
+    return {
+        "markdown_diff": markdown_diff,
+        "new_nodes": nodes,
+        "should_update": bool(data.get("should_update")) and bool(markdown_diff),
+        "summary": summary[:MAX_SUMMARY_CHARS],
+    }
+
+
 def nodes_to_markdown(
-    nodes: List[Dict[str, Any]],
+    nodes: list[dict[str, Any]],
     depth: int = 0,
     default_time: float | None = None,
 ) -> str:
@@ -58,7 +88,7 @@ def nodes_to_markdown(
         children = node.get("children") or []
         if children:
             lines.append(nodes_to_markdown(children, depth + 1, default_time))
-    return "\n".join([l for l in lines if l])
+    return "\n".join([line for line in lines if line])
 
 
 class MindMapAI:
@@ -95,10 +125,10 @@ class MindMapAI:
     def generate_incremental_update(
         self,
         current_markdown: str,
-        transcript_chunk: List[Dict[str, Any]],
+        transcript_chunk: list[dict[str, Any]],
         summary_so_far: str = "",
         time_range: tuple = (0, 0),
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         if not transcript_chunk:
             return {"markdown_diff": "", "new_nodes": [], "should_update": False, "summary": summary_so_far}
 
@@ -153,20 +183,11 @@ Return ONLY this JSON object (no markdown fences, no extra text):
 
         try:
             response = self._generate_with_retry(prompt)
-            text = (response.text or "").strip()
-            text = text.replace("```json", "").replace("```JSON", "").replace("```", "")
-            if "{" in text and "}" in text:
-                text = text[text.find("{"): text.rfind("}") + 1]
-            data = json.loads(text)
-            nodes = data.get("new_nodes") or []
-            markdown_diff = nodes_to_markdown(nodes, default_time=float(time_range[0]))
-            summary = str(data.get("summary") or summary_so_far).strip()
-            return {
-                "markdown_diff": markdown_diff,
-                "new_nodes": nodes,
-                "should_update": bool(data.get("should_update")) and bool(markdown_diff),
-                "summary": summary[:MAX_SUMMARY_CHARS],
-            }
+            return parse_ai_payload(
+                response.text or "",
+                summary_so_far=summary_so_far,
+                default_time=float(time_range[0]),
+            )
         except Exception as e:
             return {
                 "markdown_diff": "",
