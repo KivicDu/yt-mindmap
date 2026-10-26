@@ -1,0 +1,138 @@
+.app-container {
+  display: flex;
+  flex-direction: column;
+  height: 100vh;
+  width: 100vw;
+}
+
+.header {
+  padding: 1rem;
+  background: #1a1a1a;
+  border-bottom: 1px solid #333;
+  display: flex;
+  gap: 0.5rem;
+  align-items: center;
+}
+
+.header input {
+  flex: 1;
+  padding: 0.5rem;
+  font-size: 1rem;
+  background: #242424;
+  color: white;
+  border: 1px solid #444;
+  border-radius: 4px;
+}
+
+.header button {
+  padding: 0.5rem 1rem;
+  font-size: 0.9rem;
+  background: #646cff;
+  color: white;
+  border: none;
+  border-radius: 4px;
+  cursor: pointer;
+}
+
+.header button:hover {
+  background: #535bf2;
+}
+
+.header button:disabled {
+  background: #444;
+  cursor: not-allowed;
+}
+
+.main-content {
+  display: flex;
+  flex: 1;
+  overflow: hidden;
+}
+
+.video-section {
+  flex: 1;
+  min-width: 0;
+  padding: 1rem;
+  background: #0f0f0f;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+}
+
+.video-wrapper {
+  width: 100%;
+  max-width: 900px;
+}
+
+.mindmap-section {
+  flex: 1;
+  min-width: 0;
+  padding: 1rem;
+  background: #ffffff;
+  overflow: hidden;
+  position: relative;
+}
+
+.controls {
+  padding: 0.5rem 0;
+  display: flex;
+  gap: 0.5rem;
+  align-items: center;
+  flex-wrap: wrap;
+}
+
+.controls button {
+  padding: 0.4rem 0.8rem;
+  font-size: 0.85rem;
+  background: #646cff;
+  color: white;
+  border: none;
+  border-radius: 4px;
+  cursor: pointer;
+}
+
+.controls button:hover {
+  background: #535bf2;
+}
+
+.controls button:disabled {
+  background: #ccc;
+  cursor: not-allowed;
+}
+
+.status {
+  font-size: 0.85rem;
+  color: #333;
+  margin-left: auto;
+}
+
+.status-busy::before {
+  content: '';
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  margin-right: 6px;
+  border-radius: 50%;
+  background: #646cff;
+  animation: status-pulse 1s ease-in-out infinite;
+}
+
+@keyframes status-pulse {
+  0%, 100% { opacity: 0.25; }
+  50% { opacity: 1; }
+}
+
+.mindmap-container {
+  width: 100%;
+  height: calc(100% - 60px);
+  border: 1px solid #ddd;
+  border-radius: 4px;
+}
+
+.mindmap-container a {
+  color: inherit;
+  text-decoration: underline dotted;
+  text-underline-offset: 2px;
+  cursor: pointer;
+}
