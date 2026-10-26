@@ -4,6 +4,7 @@ import YouTube from 'react-youtube'
 import type { YouTubeProps } from 'react-youtube'
 import './App.css'
 import type { MindMapHandle } from './components/MindMap'
+import { normalizeTree, type MapNode } from './lib/mindmapTree'
 
 // markmap + d3 are heavy; load them after the player shell is interactive.
 const MindMap = lazy(() => import('./components/MindMap'))
@@ -15,7 +16,7 @@ interface TranscriptEntry {
 }
 
 const API_BASE = import.meta.env.VITE_API_BASE || 'http://localhost:8001'
-const INITIAL_MD = '# Lecture Mind Map\n## Waiting for video...'
+const DEFAULT_TITLE = 'Lecture Mind Map'
 const AUTO_UPDATE_SECONDS = 15
 
 function App() {
@@ -34,7 +35,8 @@ function App() {
 
   const mindmapRef = useRef<MindMapHandle>(null)
   const eventSourceRef = useRef<EventSource | null>(null)
-  const markdownRef = useRef(INITIAL_MD)
+  const nodesRef = useRef<MapNode[]>([])
+  const titleRef = useRef(DEFAULT_TITLE)
   const fileInputRef = useRef<HTMLInputElement>(null)
   const lastTriggerRef = useRef(0)
   const isUpdatingRef = useRef(false)
@@ -83,13 +85,10 @@ function App() {
 
     lastTriggerRef.current = Number(data.consumed_until || 0)
 
-    const cachedMarkdown = typeof data.markdown === 'string' ? data.markdown.trim() : ''
     const title = vid || 'Transcript'
-    const initialMd = cachedMarkdown
-      ? (cachedMarkdown.startsWith('#') ? cachedMarkdown : `# ${title}\n${cachedMarkdown}`)
-      : `# ${title}\n## Mind map will build as video plays...`
-    markdownRef.current = initialMd
-    mindmapRef.current?.updateMarkdown(initialMd, { focusNew: false })
+    titleRef.current = title
+    nodesRef.current = normalizeTree(data.nodes)
+    mindmapRef.current?.updateTree(titleRef.current, nodesRef.current, { focusNew: false })
 
     const suffix = data.cached ? ' — restored from cache' : ''
     setStatus(`${label}${suffix} (${data.transcript?.length || 0} entries)`)
@@ -157,7 +156,7 @@ function App() {
     try {
       const data = await fetchTranscript({
         url: currentUrl,
-        initial_markdown: markdownRef.current,
+        initial_nodes: nodesRef.current,
         resume_at: currentTimeRef.current
       })
       setTranscript(data.transcript || [])
@@ -240,6 +239,11 @@ function App() {
     setStatus(`Jumped to ${Math.floor(seconds)}s`)
   }, [player])
 
+  // The map is lazy-loaded, so a transcript can arrive before it exists.
+  const handleMindMapReady = useCallback(() => {
+    mindmapRef.current?.updateTree(titleRef.current, nodesRef.current, { focusNew: false })
+  }, [])
+
   const onPlayerStateChange: YouTubeProps['onStateChange'] = (event: any) => {
     const YT = (window as any).YT
     if (event.data === YT.PlayerState.PLAYING) {
@@ -282,10 +286,11 @@ function App() {
           recreateSession()
           return
         }
-        if (data && data.markdown_diff && mindmapRef.current) {
-          const newMd = `${markdownRef.current}\n${data.markdown_diff}`
-          markdownRef.current = newMd
-          mindmapRef.current.updateMarkdown(newMd)
+        if (data && Array.isArray(data.nodes) && mindmapRef.current) {
+          // The server sends the whole tree, so a missed event cannot leave
+          // the client with a partially applied map.
+          nodesRef.current = normalizeTree(data.nodes)
+          mindmapRef.current.updateTree(titleRef.current, nodesRef.current)
           setStatus('Mind map updated')
         }
       } catch (e) {
@@ -383,7 +388,12 @@ function App() {
           </div>
           <div className="mindmap-container">
             <Suspense fallback={<div className="mindmap-loading">Loading mind map...</div>}>
-              <MindMap ref={mindmapRef} onSeek={handleSeek} collapseOld={focusRecent} />
+              <MindMap
+                ref={mindmapRef}
+                onSeek={handleSeek}
+                collapseOld={focusRecent}
+                onReady={handleMindMapReady}
+              />
             </Suspense>
           </div>
         </div>
