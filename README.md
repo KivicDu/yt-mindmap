@@ -1,5 +1,7 @@
 # YouTube Mind Map Generator
 
+[![CI](https://github.com/KivicDu/yt-mindmap/actions/workflows/ci.yml/badge.svg)](https://github.com/KivicDu/yt-mindmap/actions/workflows/ci.yml)
+
 An AI-powered real-time mind map generator that builds a mind map in parallel as a YouTube lecture video plays.
 
 ## Project Overview
