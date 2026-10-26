@@ -18,7 +18,7 @@ This project creates a dual-view setup: alongside the YouTube video, there's a d
 ### Backend
 - FastAPI (Python)
 - youtube-transcript-api
-- Google Gemini API
+- Google Gemini API (`google-genai` SDK)
 - Server-Sent Events (SSE) for real-time updates
 
 ## Features

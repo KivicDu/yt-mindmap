@@ -189,7 +189,9 @@ async def healthz():
         "status": "ok",
         "sessions": len(sessions),
         "cached_videos": len(video_cache),
-        "ai_configured": bool(ai_engine.client),
+        "ai_configured": ai_engine.configured,
+        "ai_model": ai_engine.model_name,
+        "ai_tokens": dict(ai_engine.usage_totals),
     }
 
 @app.post("/transcript")

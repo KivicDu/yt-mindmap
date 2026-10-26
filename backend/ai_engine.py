@@ -1,12 +1,19 @@
 import json
+import logging
 import os
 import time
 from typing import Any
 
 try:
-    import google.generativeai as genai
-except Exception:
+    from google import genai
+    from google.genai import errors as genai_errors
+    from google.genai import types as genai_types
+except Exception:  # pragma: no cover - the SDK is optional at runtime
     genai = None
+    genai_errors = None
+    genai_types = None
+
+logger = logging.getLogger(__name__)
 
 MAX_MARKDOWN_CHARS = 4000
 MAX_CHUNK_CHARS = 8000
@@ -14,8 +21,22 @@ MAX_SUMMARY_CHARS = 1200
 MAX_RETRIES = 3
 RETRY_BASE_DELAY = 1.0
 REQUEST_TIMEOUT = 60
+DEFAULT_MODEL = "gemini-2.5-flash"
 
-_AUTH_MARKERS = (
+# Server-side statuses that will fail again no matter how often we retry.
+NON_RETRYABLE_STATUSES = frozenset(
+    {
+        "INVALID_ARGUMENT",
+        "UNAUTHENTICATED",
+        "PERMISSION_DENIED",
+        "NOT_FOUND",
+        "FAILED_PRECONDITION",
+    }
+)
+NON_RETRYABLE_CODES = frozenset({400, 401, 403, 404})
+
+# Fallback for errors that are not genai APIErrors (older SDKs, wrappers).
+AUTH_MARKERS = (
     "api key",
     "api_key",
     "permission",
@@ -24,6 +45,22 @@ _AUTH_MARKERS = (
     "401",
     "403",
 )
+
+
+def is_retryable(error: BaseException) -> bool:
+    """Return True when calling Gemini again has a realistic chance of working.
+
+    Bad credentials, missing permissions and malformed requests are permanent
+    failures; retrying them only burns quota. Rate limits, 5xx responses and
+    network timeouts are transient and worth retrying.
+    """
+    if genai_errors is not None and isinstance(error, genai_errors.APIError):
+        if error.status in NON_RETRYABLE_STATUSES:
+            return False
+        return error.code not in NON_RETRYABLE_CODES
+
+    message = str(error).lower()
+    return not any(marker in message for marker in AUTH_MARKERS)
 
 
 def parse_ai_payload(
@@ -91,36 +128,81 @@ def nodes_to_markdown(
     return "\n".join([line for line in lines if line])
 
 
+def _thinking_budget() -> int:
+    """Thinking tokens for Gemini 2.5 models; 0 keeps updates fast and cheap.
+
+    Extracting concepts from a transcript chunk is not a reasoning-heavy task,
+    and this runs every ~15 seconds while a video plays, so latency matters.
+    """
+    raw = os.getenv("GEMINI_THINKING_BUDGET", "0").strip()
+    try:
+        return max(0, int(raw))
+    except ValueError:
+        return 0
+
+
 class MindMapAI:
     def __init__(self):
         self.api_key = os.getenv("GEMINI_API_KEY", "").strip()
-        self.model_name = os.getenv("GEMINI_MODEL", "gemini-2.5-flash")
+        self.model_name = os.getenv("GEMINI_MODEL", DEFAULT_MODEL).strip() or DEFAULT_MODEL
         self.client = None
-        if self.api_key and genai:
+        # Running token totals for this process, surfaced by /healthz.
+        self.usage_totals = {"prompt": 0, "output": 0, "total": 0, "calls": 0}
+        if self.api_key and genai is not None:
             try:
-                genai.configure(api_key=self.api_key)
-                self.client = genai.GenerativeModel(self.model_name)
-            except Exception:
+                # The new SDK takes the timeout once, in milliseconds.
+                http_options = genai_types.HttpOptions(timeout=REQUEST_TIMEOUT * 1000)
+                self.client = genai.Client(api_key=self.api_key, http_options=http_options)
+            except Exception as exc:  # pragma: no cover - defensive
+                logger.warning("Gemini client could not be created: %s", exc)
                 self.client = None
+
+    @property
+    def configured(self) -> bool:
+        return self.client is not None
+
+    def _record_usage(self, response) -> None:
+        """Accumulate token usage so callers can watch cost per session."""
+        usage = getattr(response, "usage_metadata", None)
+        if usage is None:
+            return
+        prompt_tokens = int(getattr(usage, "prompt_token_count", 0) or 0)
+        output_tokens = int(getattr(usage, "candidates_token_count", 0) or 0)
+        total_tokens = int(getattr(usage, "total_token_count", 0) or 0)
+        self.usage_totals["prompt"] += prompt_tokens
+        self.usage_totals["output"] += output_tokens
+        self.usage_totals["total"] += total_tokens or prompt_tokens + output_tokens
+        self.usage_totals["calls"] += 1
+
+    def _config(self):
+        options: dict[str, Any] = {
+            "response_mime_type": "application/json",
+            "temperature": 0.4,
+        }
+        if genai_types is not None and hasattr(genai_types, "ThinkingConfig"):
+            options["thinking_config"] = genai_types.ThinkingConfig(
+                thinking_budget=_thinking_budget()
+            )
+        return genai_types.GenerateContentConfig(**options)
 
     def _generate_with_retry(self, prompt: str):
         """Call Gemini with exponential backoff for transient failures."""
-        last_error: Exception | None = None
         for attempt in range(MAX_RETRIES):
             try:
-                return self.client.generate_content(
-                    prompt,
-                    request_options={"timeout": REQUEST_TIMEOUT},
+                return self.client.models.generate_content(
+                    model=self.model_name,
+                    contents=prompt,
+                    config=self._config(),
                 )
-            except Exception as e:
-                last_error = e
-                message = str(e).lower()
-                if any(marker in message for marker in _AUTH_MARKERS):
+            except Exception as exc:
+                if not is_retryable(exc) or attempt == MAX_RETRIES - 1:
                     raise
-                if attempt == MAX_RETRIES - 1:
-                    raise
-                time.sleep(RETRY_BASE_DELAY * (2 ** attempt))
-        raise last_error  # pragma: no cover
+                delay = RETRY_BASE_DELAY * (2**attempt)
+                logger.warning(
+                    "Gemini call failed (%s), retrying in %.0fs", type(exc).__name__, delay
+                )
+                time.sleep(delay)
+        raise RuntimeError("unreachable")  # pragma: no cover
 
     def generate_incremental_update(
         self,
@@ -130,7 +212,12 @@ class MindMapAI:
         time_range: tuple = (0, 0),
     ) -> dict[str, Any]:
         if not transcript_chunk:
-            return {"markdown_diff": "", "new_nodes": [], "should_update": False, "summary": summary_so_far}
+            return {
+                "markdown_diff": "",
+                "new_nodes": [],
+                "should_update": False,
+                "summary": summary_so_far,
+            }
 
         chunk_text = "\n".join([f"[{e['start']:.1f}s] {e['text']}" for e in transcript_chunk])
         if len(chunk_text) > MAX_CHUNK_CHARS:
@@ -183,6 +270,7 @@ Return ONLY this JSON object (no markdown fences, no extra text):
 
         try:
             response = self._generate_with_retry(prompt)
+            self._record_usage(response)
             return parse_ai_payload(
                 response.text or "",
                 summary_so_far=summary_so_far,

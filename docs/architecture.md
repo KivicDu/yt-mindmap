@@ -85,6 +85,7 @@ sequenceDiagram
 | Backward seeks are ignored inside a 3s tolerance | `chunking.is_seek_backward` | Re-watching does not re-pay for the same content |
 | Sessions expire after 2h, capped at 100; cache capped at 50 videos | `main` | An unattended app cannot grow forever |
 | Auth errors are not retried, transient ones are (3 attempts, 1/2/4s) | `ai_engine._generate_with_retry` | Do not burn quota on a bad key |
+| Gemini thinking is disabled by default (`GEMINI_THINKING_BUDGET=0`) | `ai_engine._config` | Extraction is not reasoning-heavy, and updates run every ~15s |
 
 ## Data model
 
@@ -129,8 +130,8 @@ must not block the player shell. Vendor code is split into cacheable chunks in
 
 ## Operations
 
-- `GET /healthz` reports session count, cached videos and whether the AI key is
-  configured (used by Docker's healthcheck).
+- `GET /healthz` reports session count, cached videos, the configured model
+  (used by Docker's healthcheck) and cumulative token usage for the process.
 - CORS origins come from `ALLOWED_ORIGINS` (comma separated).
 - `docker compose up --build` runs nginx (port 8080) in front of FastAPI
   (port 8001) with a named volume for the cache.

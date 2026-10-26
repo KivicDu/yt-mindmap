@@ -33,7 +33,7 @@ API docs: http://127.0.0.1:8001/docs
 | Method | Path | Purpose |
 |--------|------|---------|
 | GET | `/` | Health check |
-| GET | `/healthz` | Session count, cache size, AI configuration (Docker healthcheck) |
+| GET | `/healthz` | Session count, cache size, model name, token totals (Docker healthcheck) |
 | POST | `/transcript` | Fetch captions from a URL, or parse an uploaded `.srt`/`.vtt` |
 | GET | `/stream/{session_id}` | SSE stream of mind map updates |
 | POST | `/update-map` | Process newly watched content and return a diff |
@@ -54,7 +54,7 @@ this folder without installing the package.
 | File | Responsibility |
 |------|----------------|
 | `main.py` | App wiring, sessions, cache, endpoints |
-| `ai_engine.py` | Gemini client, retries, prompt, payload parsing |
+| `ai_engine.py` | Gemini client (`google-genai`), retry policy, prompt, payload parsing, token accounting |
 | `chunking.py` | Pure seek/chunk rules (no FastAPI import) |
 | `subtitles.py` | `.srt` / `.vtt` parser |
 | `transcript.py` | YouTube captions fetcher |
@@ -65,6 +65,9 @@ this folder without installing the package.
 - Sessions are kept in memory (`sessions` dict) and are lost on restart; the
   per-video map cache is persisted to `data/video_cache.json`.
 - `.env` is loaded before `ai_engine` is imported so the API key is available at startup.
+- Gemini calls use the `google-genai` SDK (the older `google-generativeai` package is
+  end-of-life). `response_mime_type="application/json"` makes the model return JSON
+  directly, and `GEMINI_THINKING_BUDGET` (default `0`) keeps updates fast and cheap.
 - `ALLOWED_ORIGINS` accepts a comma-separated list and overrides the built-in
   localhost origins.
 - `Dockerfile` runs as a non-root user and exposes `/healthz` as a container
