@@ -1,6 +1,11 @@
+import pytest
+
 from node_tree import (
+    MAX_ALIASES,
     MAX_LABEL_CHARS,
+    MAX_NOTE_CHARS,
     clean_label,
+    clean_note,
     count_nodes,
     find_node,
     iter_nodes,
@@ -12,6 +17,7 @@ from node_tree import (
     normalize_nodes,
     resolve_time,
     tree_to_markdown,
+    update_node,
 )
 
 
@@ -236,3 +242,151 @@ class TestCachedNodes:
     def test_garbage_is_dropped(self):
         assert normalize_cached_nodes(None) == []
         assert normalize_cached_nodes([1, "x", {"label": ""}]) == []
+
+
+class TestCleanNote:
+    def test_keeps_line_breaks_but_drops_trailing_spaces(self):
+        assert clean_note("  first   \n second\t \n") == "first\n second"
+
+    def test_collapses_runs_of_blank_lines(self):
+        assert clean_note("a\n\n\n\nb") == "a\n\nb"
+
+    def test_normalises_crlf(self):
+        assert clean_note("a\r\nb\rc") == "a\nb\nc"
+
+    def test_handles_none_and_caps_length(self):
+        assert clean_note(None) == ""
+        assert len(clean_note("x" * 5000)) == MAX_NOTE_CHARS
+
+
+class TestUpdateNode:
+    def _tree(self):
+        return normalize_nodes(
+            [{"name": "Trees", "time": 10, "children": [{"name": "AVL", "time": 12}]}]
+        )
+
+    def test_rename_keeps_identity_and_time(self):
+        tree = self._tree()
+        node = tree[0]
+        updated = update_node(tree, node["id"], label="  Cây  ")
+        assert updated is node
+        assert updated["label"] == "Cây"
+        assert updated["time"] == 10.0
+        assert updated["id"] == node["id"]
+
+    def test_rename_records_the_old_label_as_an_alias(self):
+        tree = self._tree()
+        update_node(tree, tree[0]["id"], label="Cây")
+        assert tree[0]["aliases"] == ["trees"]
+
+    def test_renaming_again_drops_the_alias_it_now_uses(self):
+        tree = self._tree()
+        node_id = tree[0]["id"]
+        for name in ("A", "B", "A"):
+            update_node(tree, node_id, label=name)
+        # "a" is the current label again, so it must not linger as an alias.
+        assert tree[0]["aliases"] == ["trees", "b"]
+
+    def test_alias_list_is_capped(self):
+        tree = self._tree()
+        node_id = tree[0]["id"]
+        for index in range(MAX_ALIASES + 5):
+            update_node(tree, node_id, label=f"name {index}")
+        assert len(tree[0]["aliases"]) == MAX_ALIASES
+
+    def test_empty_label_is_rejected(self):
+        tree = self._tree()
+        with pytest.raises(ValueError):
+            update_node(tree, tree[0]["id"], label="   ")
+
+    def test_note_is_stored_and_cleared(self):
+        tree = self._tree()
+        node_id = tree[0]["id"]
+        update_node(tree, node_id, note=" remember this ")
+        assert tree[0]["note"] == "remember this"
+        update_node(tree, node_id, note="")
+        assert tree[0]["note"] == ""
+
+    def test_pin_can_be_toggled_both_ways(self):
+        tree = self._tree()
+        node_id = tree[0]["id"]
+        update_node(tree, node_id, pinned=True)
+        assert tree[0]["pinned"] is True
+        update_node(tree, node_id, pinned=False)
+        assert tree[0]["pinned"] is False
+
+    def test_no_fields_only_bumps_updated_at(self):
+        tree = self._tree()
+        update_node(tree, tree[0]["id"])
+        assert "updatedAt" in tree[0]
+
+    def test_unknown_id_returns_none(self):
+        assert update_node(self._tree(), "missing", note="x") is None
+
+    def test_edit_does_not_touch_siblings_or_children(self):
+        tree = self._tree()
+        update_node(tree, tree[0]["children"][0]["id"], note="child note")
+        assert tree[0]["note"] == ""
+        assert tree[0]["children"][0]["note"] == "child note"
+
+    def test_a_renamed_node_still_absorbs_the_old_label_from_the_ai(self):
+        tree = self._tree()
+        update_node(tree, tree[0]["id"], label="Cây")
+        merged = merge_nodes(tree, normalize_nodes([{"name": "Trees", "time": 99}]))
+        assert [n["label"] for n in merged] == ["Cây"]
+        assert merged[0]["time"] == 10.0
+
+    def test_rename_and_pin_survive_a_merge_that_adds_children(self):
+        tree = self._tree()
+        node_id = tree[0]["id"]
+        update_node(tree, node_id, label="Cây", note="ghi chú", pinned=True)
+        merged = merge_nodes(
+            tree,
+            normalize_nodes([{"name": "Cây", "children": [{"name": "Rotations", "time": 40}]}]),
+        )
+        parent = merged[0]
+        assert parent["id"] == node_id
+        assert parent["label"] == "Cây"
+        assert parent["note"] == "ghi chú"
+        assert parent["pinned"] is True
+        assert [c["label"] for c in parent["children"]] == ["AVL", "Rotations"]
+
+
+class TestCachedUserState:
+    def test_note_pin_and_aliases_survive_a_cache_roundtrip(self):
+        raw = [
+            {
+                "id": "a",
+                "label": "Cây",
+                "note": "ghi chú",
+                "pinned": True,
+                "aliases": ["trees"],
+                "children": [{"id": "b", "label": "AVL", "note": ""}],
+            }
+        ]
+        repaired = normalize_cached_nodes(raw)
+        assert repaired[0]["note"] == "ghi chú"
+        assert repaired[0]["pinned"] is True
+        assert repaired[0]["aliases"] == ["trees"]
+        assert repaired[0]["children"][0]["pinned"] is False
+
+    def test_malformed_user_state_is_dropped(self):
+        repaired = normalize_cached_nodes(
+            [{"id": "a", "label": "A", "note": 5, "pinned": "yes", "aliases": [1, "", "ok"]}]
+        )
+        assert repaired[0]["note"] == "5"
+        assert repaired[0]["pinned"] is False
+        assert repaired[0]["aliases"] == ["ok"]
+
+
+class TestNewNodeDefaults:
+    def test_nodes_start_unpinned_without_a_note(self):
+        node = normalize_nodes([{"name": "A"}])[0]
+        assert node["note"] == ""
+        assert node["pinned"] is False
+        assert "aliases" not in node
+
+    def test_projection_ignores_notes_and_pins(self):
+        tree = normalize_nodes([{"name": "A", "time": 1}])
+        update_node(tree, tree[0]["id"], note="long note", pinned=True)
+        assert tree_to_markdown(tree) == "- [A](#seek-1.0)"

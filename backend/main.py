@@ -25,6 +25,7 @@ from node_tree import (
     normalize_cached_nodes,
     normalize_nodes,
     tree_to_markdown,
+    update_node,
 )
 from subtitles import parse_vtt_or_srt
 from transcript import extract_video_id, fetch_transcript
@@ -68,6 +69,14 @@ class UpdateMapRequest(BaseModel):
     last_time: float
     current_map: dict[str, Any] = {}
     session_id: str | None = None
+
+class NodeEditRequest(BaseModel):
+    session_id: str
+    node_id: str
+    # `None` means "leave unchanged"; the endpoint only applies provided fields.
+    label: str | None = None
+    note: str | None = None
+    pinned: bool | None = None
 
 sessions: dict[str, dict[str, Any]] = {}
 video_cache: dict[str, dict[str, Any]] = {}
@@ -419,4 +428,54 @@ async def update_map(request: UpdateMapRequest):
         "reason": "no_new_content",
         "consumed_until": new_consumed,
         "chunk_size": len(chunk)
+    }
+
+@app.patch("/node")
+async def edit_node(request: NodeEditRequest):
+    """Rename a node, attach a note, or pin it.
+
+    Structure belongs to the AI (and to merge_nodes); this endpoint only edits
+    a node that already exists. The whole tree comes back so the caller can
+    replace its copy instead of patching it locally.
+    """
+    cleanup_sessions()
+    session = sessions.get(request.session_id)
+    if not session:
+        raise HTTPException(status_code=404, detail="session_lost")
+
+    provided = request.model_dump(exclude_unset=True)
+    if not {"label", "note", "pinned"} & provided.keys():
+        raise HTTPException(status_code=400, detail="no fields to update")
+
+    try:
+        node = update_node(
+            session.get("nodes", []),
+            request.node_id,
+            label=request.label,
+            note=request.note,
+            pinned=request.pinned,
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+
+    if node is None:
+        raise HTTPException(status_code=404, detail="node_not_found")
+
+    session["last_active"] = time.time()
+    session["markdown"] = tree_to_markdown(session.get("nodes", []))
+    cache_video_map(session.get("video_id"), session)
+
+    # Other tabs on the same session converge through the stream.
+    event_data = {
+        "type": "node_edit",
+        "node_id": node["id"],
+        "nodes": session["nodes"],
+        "markdown": session["markdown"],
+    }
+    session.setdefault("events", []).append({"type": "node_edit", "data": event_data})
+
+    return {
+        "node": node,
+        "nodes": session["nodes"],
+        "markdown": session["markdown"],
     }
