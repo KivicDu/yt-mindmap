@@ -19,6 +19,13 @@ from sse_starlette.sse import EventSourceResponse
 
 from ai_engine import ai_engine
 from chunking import chunk_time_range, is_seek_backward, select_chunk
+from node_tree import (
+    markdown_to_tree,
+    merge_nodes,
+    normalize_cached_nodes,
+    normalize_nodes,
+    tree_to_markdown,
+)
 from subtitles import parse_vtt_or_srt
 from transcript import extract_video_id, fetch_transcript
 
@@ -51,6 +58,8 @@ app.add_middleware(
 class TranscriptRequest(BaseModel):
     url: str | None = None
     file_content: str | None = None
+    # Sent when the client restores a session, so node ids survive the restart.
+    initial_nodes: list[dict[str, Any]] | None = None
     initial_markdown: str | None = None
     resume_at: float | None = None
 
@@ -124,6 +133,9 @@ def cache_video_map(video_id: str | None, session: dict[str, Any]) -> None:
     if not video_id:
         return
     video_cache[video_id] = {
+        # The tree is the source of truth; markdown is kept so an older
+        # frontend or a downgraded backend can still read the cache.
+        "nodes": session.get("nodes", []),
         "markdown": session.get("markdown", ""),
         "summary_so_far": session.get("summary_so_far", ""),
         "consumed_until": float(session.get("consumed_until", 0.0)),
@@ -135,20 +147,40 @@ def cache_video_map(video_id: str | None, session: dict[str, Any]) -> None:
     save_video_cache()
 
 
+def restore_nodes(
+    initial_nodes: list[dict[str, Any]] | None,
+    initial_markdown: str | None,
+    cached: dict[str, Any] | None,
+) -> list[dict[str, Any]]:
+    """Rebuild the map tree for a new session.
+
+    New caches store the tree directly. Older caches, and clients that only
+    send Markdown, are parsed back into a tree so a map is never lost because
+    of the format change.
+    """
+    if initial_nodes:
+        return normalize_cached_nodes(initial_nodes)
+    if initial_markdown is not None:
+        return markdown_to_tree(initial_markdown)
+    if not cached:
+        return []
+    nodes = normalize_cached_nodes(cached.get("nodes"))
+    if nodes:
+        return nodes
+    return markdown_to_tree(cached.get("markdown", ""))
+
+
 def create_session(
     video_id: str | None,
     transcript: list[dict[str, Any]],
     initial_markdown: str | None = None,
     resume_at: float | None = None,
+    initial_nodes: list[dict[str, Any]] | None = None,
 ) -> tuple:
     cached = video_cache.get(video_id) if video_id else None
 
-    if initial_markdown is not None:
-        markdown = initial_markdown.strip()
-    elif cached:
-        markdown = cached.get("markdown", "")
-    else:
-        markdown = ""
+    nodes = restore_nodes(initial_nodes, initial_markdown, cached)
+    markdown = tree_to_markdown(nodes) if nodes else ""
 
     if resume_at is not None:
         consumed_until = float(resume_at)
@@ -163,7 +195,7 @@ def create_session(
         "transcript": transcript,
         "consumed_until": consumed_until,
         "summary_so_far": cached.get("summary_so_far", "") if cached else "",
-        "current_map": {"name": "root", "children": []},
+        "nodes": nodes,
         "markdown": markdown,
         "events": [],
         "last_active": time.time(),
@@ -175,6 +207,7 @@ def session_payload(session_id: str) -> dict[str, Any]:
     session = sessions[session_id]
     return {
         "session_id": session_id,
+        "nodes": session.get("nodes", []),
         "markdown": session.get("markdown", ""),
         "consumed_until": float(session.get("consumed_until", 0.0)),
     }
@@ -189,7 +222,9 @@ async def healthz():
         "status": "ok",
         "sessions": len(sessions),
         "cached_videos": len(video_cache),
-        "ai_configured": bool(ai_engine.client),
+        "ai_configured": ai_engine.configured,
+        "ai_model": ai_engine.model_name,
+        "ai_tokens": dict(ai_engine.usage_totals),
     }
 
 @app.post("/transcript")
@@ -205,7 +240,8 @@ async def get_transcript(request: TranscriptRequest):
                 vid,
                 transcript,
                 initial_markdown=request.initial_markdown,
-                resume_at=request.resume_at
+                resume_at=request.resume_at,
+                initial_nodes=request.initial_nodes,
             )
             return {
                 "transcript": transcript,
@@ -228,7 +264,8 @@ async def get_transcript(request: TranscriptRequest):
                 vid,
                 transcript,
                 initial_markdown=request.initial_markdown,
-                resume_at=request.resume_at
+                resume_at=request.resume_at,
+                initial_nodes=request.initial_nodes,
             )
             return {
                 "transcript": transcript,
@@ -351,13 +388,21 @@ async def update_map(request: UpdateMapRequest):
         session["summary_so_far"] = ai_result["summary"]
 
     if ai_result.get("should_update") and ai_result.get("markdown_diff"):
-        session["markdown"] = (current_markdown + "\n" + ai_result["markdown_diff"]).strip()
+        new_nodes = normalize_nodes(
+            ai_result.get("new_nodes") or [],
+            default_time=float(time_range[0]),
+        )
+        session["nodes"] = merge_nodes(session.get("nodes", []), new_nodes)
+        session["markdown"] = tree_to_markdown(session["nodes"])
         cache_video_map(session.get("video_id"), session)
         event_data = {
             "type": "diff",
             "markdown_diff": ai_result["markdown_diff"],
             "chunk_range": time_range,
-            "new_nodes": ai_result.get("new_nodes", [])
+            "new_nodes": new_nodes,
+            # Full state, so a client that missed an event can resync.
+            "nodes": session["nodes"],
+            "markdown": session["markdown"],
         }
         session.setdefault("events", []).append({"type": "diff", "data": event_data})
 

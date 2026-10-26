@@ -133,3 +133,121 @@ def test_update_map_keeps_pointer_on_ai_failure(monkeypatch):
     # Retrying the same chunk later must be possible.
     assert body["consumed_until"] == 0.0
     assert main_module.sessions[session_id]["markdown"] == ""
+
+
+LONG_TRANSCRIPT = [
+    {"start": float(second), "duration": 4.0, "text": f"line at {second}s"}
+    for second in range(0, 200, 5)
+]
+
+
+def _fake_ai(nodes, summary="compact"):
+    return lambda **kwargs: {
+        "markdown_diff": "x",
+        "new_nodes": nodes,
+        "should_update": True,
+        "summary": summary,
+    }
+
+
+def test_update_map_returns_nodes_with_ids_and_parent_links(monkeypatch):
+    monkeypatch.setattr(
+        main_module.ai_engine,
+        "generate_incremental_update",
+        _fake_ai(
+            [
+                {
+                    "name": "Trees",
+                    "time": 6,
+                    "children": [{"name": "AVL", "time": 9, "children": [{"name": "Rotations"}]}],
+                }
+            ]
+        ),
+    )
+    session_id, _ = main_module.create_session("vid", TRANSCRIPT)
+
+    body = client.post(
+        "/update-map",
+        json={"video_id": "vid", "last_time": 20, "session_id": session_id},
+    ).json()
+
+    trees = body["diff"]["nodes"]
+    parent = trees[0]
+    child = parent["children"][0]
+    grandchild = child["children"][0]
+
+    assert parent["parentId"] is None
+    assert child["parentId"] == parent["id"]
+    assert grandchild["parentId"] == child["id"]
+    assert grandchild["label"] == "Rotations"
+    # Nodes without a time fall back to the chunk start.
+    assert grandchild["time"] == 5.0
+    assert body["diff"]["markdown"] == (
+        "- [Trees](#seek-6.0)\n  - [AVL](#seek-9.0)\n    - [Rotations](#seek-5.0)"
+    )
+
+
+def test_repeated_concepts_are_folded_across_updates(monkeypatch):
+    monkeypatch.setattr(
+        main_module.ai_engine,
+        "generate_incremental_update",
+        _fake_ai([{"name": "Recursion", "time": 6}]),
+    )
+    session_id, _ = main_module.create_session("vid", LONG_TRANSCRIPT)
+
+    first = client.post(
+        "/update-map", json={"video_id": "vid", "last_time": 20, "session_id": session_id}
+    ).json()
+    first_id = first["diff"]["nodes"][0]["id"]
+
+    second = client.post(
+        "/update-map", json={"video_id": "vid", "last_time": 40, "session_id": session_id}
+    ).json()
+
+    nodes = second["diff"]["nodes"]
+    assert [n["label"] for n in nodes] == ["Recursion"]
+    assert nodes[0]["id"] == first_id
+    assert second["diff"]["markdown"] == "- [Recursion](#seek-6.0)"
+
+
+def test_new_children_are_merged_into_an_existing_branch(monkeypatch):
+    session_id, _ = main_module.create_session("vid", LONG_TRANSCRIPT)
+
+    monkeypatch.setattr(
+        main_module.ai_engine,
+        "generate_incremental_update",
+        _fake_ai([{"name": "Trees", "time": 6}]),
+    )
+    client.post("/update-map", json={"video_id": "vid", "last_time": 20, "session_id": session_id})
+
+    monkeypatch.setattr(
+        main_module.ai_engine,
+        "generate_incremental_update",
+        _fake_ai([{"name": "trees", "children": [{"name": "Balancing", "time": 30}]}]),
+    )
+    body = client.post(
+        "/update-map", json={"video_id": "vid", "last_time": 40, "session_id": session_id}
+    ).json()
+
+    parent = body["diff"]["nodes"][0]
+    assert parent["label"] == "Trees"
+    assert [c["label"] for c in parent["children"]] == ["Balancing"]
+    assert parent["children"][0]["parentId"] == parent["id"]
+
+
+def test_transcript_response_includes_the_restored_tree():
+    main_module.video_cache["abcdefghijk"] = {
+        "nodes": [
+            {"id": "a", "parentId": None, "label": "Cached", "time": 3.0, "children": []}
+        ],
+        "markdown": "- [Cached](#seek-3.0)",
+        "summary_so_far": "",
+        "consumed_until": 4.0,
+    }
+    response = client.post(
+        "/transcript",
+        json={"url": "https://youtu.be/abcdefghijk", "file_content": SRT},
+    )
+    body = response.json()
+    assert body["nodes"][0]["id"] == "a"
+    assert body["markdown"] == "- [Cached](#seek-3.0)"
