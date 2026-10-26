@@ -134,6 +134,9 @@ must not block the player shell. Vendor code is split into cacheable chunks in
 - CORS origins come from `ALLOWED_ORIGINS` (comma separated).
 - `docker compose up --build` runs nginx (port 8080) in front of FastAPI
   (port 8001) with a named volume for the cache.
+- CI validates the images on every push: compose config is parsed, both images
+  are built, the backend container must answer `/healthz`, and nginx must serve
+  the SPA shell and its JS chunk.
 
 ## Known scaling limits
 

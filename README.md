@@ -104,7 +104,8 @@ npm run build
 ```
 
 `.github/workflows/ci.yml` runs the same commands on every push and pull
-request to `main` and `develop`.
+request to `main` and `develop`, plus a Docker job that builds both images,
+smoke-tests the backend `/healthz` endpoint and checks the nginx-served bundle.
 
 ## Project Structure
 
