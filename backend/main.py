@@ -46,7 +46,7 @@ ALLOWED_ORIGINS = [
     if origin.strip()
 ] or DEFAULT_ALLOWED_ORIGINS
 
-app = FastAPI(title="YouTube Mind Map API", version="0.1.0")
+app = FastAPI(title="YouTube Mind Map API", version="0.2.0")
 
 app.add_middleware(
     CORSMiddleware,
