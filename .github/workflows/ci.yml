@@ -11,6 +11,9 @@ concurrency:
   group: ci-${{ github.ref }}
   cancel-in-progress: true
 
+permissions:
+  contents: read
+
 jobs:
   backend:
     name: Backend (pytest + ruff)
@@ -62,3 +65,78 @@ jobs:
 
       - name: Build (includes typecheck)
         run: npm run build
+
+  docker:
+    name: Docker images
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Validate compose file
+        run: docker compose config -q
+
+      - name: Build backend image
+        uses: docker/build-push-action@v6
+        with:
+          context: ./backend
+          push: false
+          load: true
+          tags: yt-mindmap-backend:ci
+          cache-from: type=gha,scope=backend
+          cache-to: type=gha,mode=max,scope=backend
+
+      - name: Smoke test backend container
+        run: |
+          docker run -d --name backend-ci -p 8001:8001 yt-mindmap-backend:ci
+          for attempt in $(seq 1 30); do
+            if curl -fsS http://127.0.0.1:8001/healthz; then
+              exit 0
+            fi
+            sleep 2
+          done
+          echo "::error::backend did not become healthy"
+          docker logs backend-ci
+          exit 1
+
+      - name: Show backend logs
+        if: always()
+        run: docker logs backend-ci || true
+
+      - name: Stop backend container
+        if: always()
+        run: docker rm -f backend-ci || true
+
+      - name: Build frontend image
+        uses: docker/build-push-action@v6
+        with:
+          context: ./frontend
+          push: false
+          load: true
+          tags: yt-mindmap-frontend:ci
+          build-args: VITE_API_BASE=http://localhost:8001
+          cache-from: type=gha,scope=frontend
+          cache-to: type=gha,mode=max,scope=frontend
+
+      - name: Validate nginx config and served bundle
+        run: |
+          docker run --rm yt-mindmap-frontend:ci nginx -t
+          docker run -d --name frontend-ci -p 8080:80 yt-mindmap-frontend:ci
+          for attempt in $(seq 1 15); do
+            curl -fsS http://127.0.0.1:8080/ -o /tmp/index.html && break
+            sleep 1
+          done
+          grep -q '<div id="root">' /tmp/index.html
+          asset="$(grep -o '/assets/[^"]*\.js' /tmp/index.html | head -n1)"
+          test -n "$asset"
+          curl -fsS "http://127.0.0.1:8080$asset" -o /dev/null
+
+      - name: Show frontend logs
+        if: always()
+        run: docker logs frontend-ci || true
+
+      - name: Stop frontend container
+        if: always()
+        run: docker rm -f frontend-ci || true
