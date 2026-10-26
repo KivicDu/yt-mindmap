@@ -1,13 +1,17 @@
 import json
+import logging
 
 import pytest
 from google.genai import errors as genai_errors
 
 import ai_engine as ai_module
 from ai_engine import (
+    MAX_LOGGED_ERROR_CHARS,
     MAX_RETRIES,
+    REQUEST_TIMEOUT,
     MindMapAI,
     _thinking_budget,
+    describe_error,
     is_retryable,
 )
 
@@ -259,3 +263,105 @@ class TestTokenUsage:
             time_range=(1.0, 2.0),
         )
         assert engine.usage_totals["calls"] == 0
+
+
+class TestDescribeError:
+    def test_keeps_the_class_name_and_the_provider_message(self):
+        text = describe_error(api_error(429, "RESOURCE_EXHAUSTED"))
+        assert text.startswith("APIError: ")
+        assert "429" in text or "RESOURCE_EXHAUSTED" in text
+
+    def test_collapses_multiline_messages_to_one_line(self):
+        text = describe_error(ValueError("first line\n\n  second line\t"))
+        assert text == "ValueError: first line second line"
+
+    def test_caps_long_messages(self):
+        text = describe_error(RuntimeError("x" * 5000))
+        assert len(text) == len("RuntimeError: ") + MAX_LOGGED_ERROR_CHARS
+
+    def test_handles_an_error_without_a_message(self):
+        assert describe_error(RuntimeError()) == "RuntimeError"
+
+
+class TestBaseUrl:
+    def test_unset_by_default(self, monkeypatch):
+        monkeypatch.setenv("GEMINI_API_KEY", "")
+        monkeypatch.delenv("GEMINI_BASE_URL", raising=False)
+        assert MindMapAI().base_url == ""
+
+    def test_is_passed_to_the_client_when_set(self, monkeypatch):
+        captured = {}
+
+        def fake_client(**kwargs):
+            captured.update(kwargs)
+            return object()
+
+        monkeypatch.setenv("GEMINI_API_KEY", "test-key")
+        monkeypatch.setenv("GEMINI_BASE_URL", "http://127.0.0.1:9090")
+        monkeypatch.setattr(ai_module.genai, "Client", fake_client)
+
+        instance = MindMapAI()
+
+        assert instance.base_url == "http://127.0.0.1:9090"
+        assert instance.configured is True
+        assert captured["api_key"] == "test-key"
+        assert captured["http_options"].base_url == "http://127.0.0.1:9090"
+        assert captured["http_options"].timeout == REQUEST_TIMEOUT * 1000
+
+    def test_blank_value_falls_back_to_the_sdk_default(self, monkeypatch):
+        captured = {}
+
+        def fake_client(**kwargs):
+            captured.update(kwargs)
+            return object()
+
+        monkeypatch.setenv("GEMINI_API_KEY", "test-key")
+        monkeypatch.setenv("GEMINI_BASE_URL", "   ")
+        monkeypatch.setattr(ai_module.genai, "Client", fake_client)
+
+        instance = MindMapAI()
+
+        assert instance.base_url == ""
+        assert captured["http_options"].base_url is None
+
+
+class TestErrorLogging:
+    def test_retry_warning_names_the_actual_cause(self, engine, monkeypatch, caplog):
+        monkeypatch.setattr(ai_module.time, "sleep", lambda _seconds: None)
+        engine.client = FakeClient(
+            [api_error(429, "RESOURCE_EXHAUSTED"), FakeResponse('{"new_nodes": []}')]
+        )
+
+        with caplog.at_level(logging.WARNING, logger="ai_engine"):
+            engine.generate_incremental_update(
+                current_markdown="",
+                transcript_chunk=[{"start": 1.0, "text": "hello"}],
+                time_range=(1.0, 2.0),
+            )
+
+        messages = [record.getMessage() for record in caplog.records]
+        assert any("RESOURCE_EXHAUSTED" in m and "retrying" in m for m in messages)
+
+    def test_final_failure_is_logged_with_the_cause(self, engine, caplog):
+        engine.client = FakeClient([api_error(401, "UNAUTHENTICATED")])
+
+        with caplog.at_level(logging.WARNING, logger="ai_engine"):
+            result = engine.generate_incremental_update(
+                current_markdown="",
+                transcript_chunk=[{"start": 1.0, "text": "hello"}],
+                time_range=(1.0, 2.0),
+            )
+
+        assert result["should_update"] is False
+        assert "error" in result
+        messages = [record.getMessage() for record in caplog.records]
+        assert any("Mind map update failed" in m and "UNAUTHENTICATED" in m for m in messages)
+
+    def test_a_successful_call_logs_nothing(self, engine, caplog):
+        with caplog.at_level(logging.WARNING, logger="ai_engine"):
+            engine.generate_incremental_update(
+                current_markdown="",
+                transcript_chunk=[{"start": 1.0, "text": "hello"}],
+                time_range=(1.0, 2.0),
+            )
+        assert [record for record in caplog.records if record.levelno >= logging.WARNING] == []

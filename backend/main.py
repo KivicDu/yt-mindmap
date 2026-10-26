@@ -233,6 +233,8 @@ async def healthz():
         "cached_videos": len(video_cache),
         "ai_configured": ai_engine.configured,
         "ai_model": ai_engine.model_name,
+        # Empty unless GEMINI_BASE_URL points at a mock or proxy.
+        "ai_base_url": ai_engine.base_url,
         "ai_tokens": dict(ai_engine.usage_totals),
     }
 
