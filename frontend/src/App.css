@@ -136,3 +136,12 @@
   text-underline-offset: 2px;
   cursor: pointer;
 }
+
+.mindmap-loading {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 100%;
+  color: #888;
+  font-size: 0.9rem;
+}
