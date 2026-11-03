@@ -12,6 +12,7 @@ import time
 import uuid
 from typing import Any
 
+import httpx
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
@@ -63,6 +64,7 @@ class TranscriptRequest(BaseModel):
     initial_nodes: list[dict[str, Any]] | None = None
     initial_markdown: str | None = None
     resume_at: float | None = None
+    title: str | None = None
 
 class UpdateMapRequest(BaseModel):
     video_id: str
@@ -185,6 +187,7 @@ def create_session(
     initial_markdown: str | None = None,
     resume_at: float | None = None,
     initial_nodes: list[dict[str, Any]] | None = None,
+    title: str | None = None,
 ) -> tuple:
     cached = video_cache.get(video_id) if video_id else None
 
@@ -201,6 +204,7 @@ def create_session(
     session_id = str(uuid.uuid4())
     sessions[session_id] = {
         "video_id": video_id,
+        "title": title,
         "transcript": transcript,
         "consumed_until": consumed_until,
         "summary_so_far": cached.get("summary_so_far", "") if cached else "",
@@ -219,6 +223,7 @@ def session_payload(session_id: str) -> dict[str, Any]:
         "nodes": session.get("nodes", []),
         "markdown": session.get("markdown", ""),
         "consumed_until": float(session.get("consumed_until", 0.0)),
+        "title": session.get("title"),
     }
 
 @app.get("/")
@@ -238,6 +243,22 @@ async def healthz():
         "ai_tokens": dict(ai_engine.usage_totals),
     }
 
+async def _fetch_youtube_title(url: str) -> str | None:
+    try:
+        async with httpx.AsyncClient(timeout=5.0) as client:
+            resp = await client.get(
+                "https://www.youtube.com/oembed",
+                params={"url": url, "format": "json"},
+            )
+            if resp.status_code == 200:
+                data = resp.json()
+                if isinstance(data, dict) and data.get("title"):
+                    return str(data["title"])
+    except Exception:
+        pass
+    return None
+
+
 @app.post("/transcript")
 async def get_transcript(request: TranscriptRequest):
     cleanup_sessions()
@@ -247,16 +268,21 @@ async def get_transcript(request: TranscriptRequest):
             if not transcript:
                 raise ValueError("No subtitle entries found in the uploaded file")
             vid = extract_video_id(request.url) if request.url else None
+            title = request.title
+            if not title and request.url:
+                title = await _fetch_youtube_title(request.url)
             session_id, cached = create_session(
                 vid,
                 transcript,
                 initial_markdown=request.initial_markdown,
                 resume_at=request.resume_at,
                 initial_nodes=request.initial_nodes,
+                title=title,
             )
             return {
                 "transcript": transcript,
                 "video_id": vid,
+                "title": title,
                 "cached": cached,
                 **session_payload(session_id),
             }
@@ -271,16 +297,19 @@ async def get_transcript(request: TranscriptRequest):
         try:
             transcript = fetch_transcript(request.url)
             vid = extract_video_id(request.url)
+            title = request.title or await _fetch_youtube_title(request.url)
             session_id, cached = create_session(
                 vid,
                 transcript,
                 initial_markdown=request.initial_markdown,
                 resume_at=request.resume_at,
                 initial_nodes=request.initial_nodes,
+                title=title,
             )
             return {
                 "transcript": transcript,
                 "video_id": vid,
+                "title": title,
                 "cached": cached,
                 **session_payload(session_id),
             }
