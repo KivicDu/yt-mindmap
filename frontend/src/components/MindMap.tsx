@@ -11,6 +11,9 @@ import {
 
 interface MindMapHandle {
   updateTree: (title: string, nodes: MapNode[], options?: { focusNew?: boolean }) => void
+  zoom: (delta: number) => void
+  fit: () => void
+  center: () => void
 }
 
 interface MindMapProps {
@@ -209,7 +212,39 @@ const MindMap = forwardRef<MindMapHandle, MindMapProps>(
     render(title, nodes, options?.focusNew !== false)
   }
 
-  useImperativeHandle(ref, () => ({ updateTree }))
+  const zoom = (delta: number) => {
+    const instance: any = mm.current
+    if (!instance) return
+    try {
+      if (typeof instance.rescale === 'function') {
+        instance.rescale(delta)
+      } else if (typeof instance.scale === 'function') {
+        instance.scale(delta)
+      }
+    } catch {
+      // ignore
+    }
+  }
+
+  const fit = () => {
+    const instance: any = mm.current
+    if (!instance) return
+    instance.fit?.()
+  }
+
+  const center = () => {
+    const instance: any = mm.current
+    if (!instance) return
+    try {
+      if (typeof instance.fit === 'function') {
+        instance.fit()
+      }
+    } catch {
+      // ignore
+    }
+  }
+
+  useImperativeHandle(ref, () => ({ updateTree, zoom, fit, center }))
 
   return <svg ref={refSvg} style={{ width: '100%', height: '100%' }} />
 })
