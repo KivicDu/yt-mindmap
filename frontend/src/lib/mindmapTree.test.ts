@@ -45,13 +45,21 @@ describe('cleanLabel', () => {
 describe('nodeToMarkmap', () => {
   it('turns a timestamped node into a seek link that carries the node id', () => {
     const data = nodeToMarkmap(node('abc', 'Recursion', { time: 12.34 }))
-    expect(data.content).toBe('<a href="#seek-12.3" data-node-id="abc">Recursion</a>')
+    expect(data.content).toContain(
+      '<a href="#seek-12.3" data-node-id="abc" title="Recursion">Recursion</a>',
+    )
+    expect(data.content).toContain('<span class="mm-time" title="Nhảy đến 0:12">[0:12]</span>')
     expect(data.children).toEqual([])
+  })
+
+  it('formats a timestamp badge as h:mm:ss past one hour', () => {
+    const data = nodeToMarkmap(node('abc', 'Long', { time: 3725 }))
+    expect(data.content).toContain('[1:02:05]')
   })
 
   it('renders a plain span when the node has no time', () => {
     expect(nodeToMarkmap(node('abc', 'Overview')).content).toBe(
-      '<span data-node-id="abc">Overview</span>',
+      '<span data-node-id="abc" title="Overview">Overview</span>',
     )
   })
 
@@ -227,7 +235,7 @@ describe('nodeToMarkmap user state', () => {
   it('renders a note as a second element after the label', () => {
     const data = nodeToMarkmap(node('a', 'Recursion', { time: 3, note: 'see 12:30' }))
     expect(data.content).toContain('>Recursion</a>')
-    expect(data.content).toContain('<span class="mm-note">see 12:30</span>')
+    expect(data.content).toContain('<span class="mm-note" title="see 12:30">see 12:30</span>')
   })
 
   it('escapes a note so it cannot inject markup', () => {

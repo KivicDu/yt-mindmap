@@ -1,0 +1,48 @@
+:root {
+  /* Nền */
+  --bg: #fcfcfd;
+  --bg-alt: #f8f9fc;
+  --bg-pastel: #f8faff;
+  --surface: #ffffff;
+  --surface-subtle: #f8f9fb;
+  --surface-tint: #f7f8ff;
+
+  /* Viền */
+  --border: #e5e7eb;
+  --border-light: #eef0f4;
+
+  /* Chữ */
+  --text-primary: #1f1f23;
+  --text-secondary: #4f4f56;
+  --text-tertiary: #6b6b76;
+
+  /* Màu nhấn */
+  --accent-bg: #eef2ff;
+  --accent-border: #c7d2fe;
+  --accent-text: #4338ca;
+  --accent-hover-bg: #e0e7ff;
+  --accent-hover-border: #a5b4fc;
+  --accent-soft: #f8faff;
+
+  /* Tương tác */
+  --hover-bg: #f6f7fa;
+  --focus-ring: rgba(99, 102, 241, 0.35);
+
+  /* Bo góc & bóng */
+  --radius-sm: 8px;
+  --radius-md: 10px;
+  --radius-lg: 14px;
+  --shadow-soft: 0 1px 1px rgba(15, 15, 20, 0.01),
+                 0 10px 40px -20px rgba(31, 31, 35, 0.4);
+  --shadow-card: 0 1px 2px rgba(15, 15, 20, 0.01),
+                  0 12px 60px -30px rgba(67, 56, 202, 0.18);
+
+  /* Font */
+  --sans: "Noto Sans", system-ui, -apple-system, BlinkMacSystemFont,
+         "Segoe UI", Roboto, Helvetica, Arial,
+         "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei",
+         "Apple SD Gothic Neo", "Malgun Gothic",
+         "Hiragino Kaku Gothic ProN", "Yu Gothic UI", "Yu Gothic", "Meiryo",
+         "Noto Sans CJK SC", "Noto Sans CJK JP", "Noto Sans CJK KR",
+         sans-serif;
+}

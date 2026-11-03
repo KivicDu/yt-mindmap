@@ -54,6 +54,17 @@ function hasTime(value: number | null | undefined): value is number {
   return typeof value === 'number' && Number.isFinite(value) && value >= 0
 }
 
+function formatTime(seconds: number): string {
+  const total = Math.floor(seconds)
+  const h = Math.floor(total / 3600)
+  const m = Math.floor((total % 3600) / 60)
+  const s = total % 60
+  if (h > 0) {
+    return `${h}:${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}`
+  }
+  return `${m}:${String(s).padStart(2, '0')}`
+}
+
 /**
  * One markmap node from one map node.
  *
@@ -64,19 +75,22 @@ function hasTime(value: number | null | undefined): value is number {
 export function nodeToMarkmap(node: MapNode): MarkmapNode {
   const label = escapeHtml(cleanLabel(node.label))
   const id = escapeHtml(node.id)
+  const timeBadge = hasTime(node.time)
+    ? `<span class="mm-time" title="Nhảy đến ${formatTime(node.time)}">[${escapeHtml(formatTime(node.time))}]</span>`
+    : ''
   const title = hasTime(node.time)
-    ? `<a href="${SEEK_PREFIX}${node.time.toFixed(1)}" data-node-id="${id}">${label}</a>`
-    : `<span data-node-id="${id}">${label}</span>`
+    ? `<a href="${SEEK_PREFIX}${node.time.toFixed(1)}" data-node-id="${id}" title="${escapeHtml(label)}">${label}</a>`
+    : `<span data-node-id="${id}" title="${escapeHtml(label)}">${label}</span>`
 
   const pin = node.pinned
-    ? '<span class="mm-pin" title="Pinned" aria-hidden="true">📌</span>'
+    ? '<span class="mm-pin" title="Đã ghim" aria-hidden="true">📌</span>'
     : ''
   const note = cleanNote(node.note)
-  const noteHtml = note ? `<span class="mm-note">${escapeHtml(note)}</span>` : ''
+  const noteHtml = note ? `<span class="mm-note" title="${escapeHtml(note)}">${escapeHtml(note)}</span>` : ''
 
   const children = (node.children || []).map(nodeToMarkmap)
   return {
-    content: `${pin}${title}${noteHtml}`,
+    content: `${pin}${timeBadge}${title}${noteHtml}`,
     children,
     payload: node.pinned ? { pinned: true } : {},
   }
