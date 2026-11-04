@@ -6,6 +6,7 @@ import {
   cleanNote,
   collapseOlderBranches,
   collectIds,
+  countNodes,
   escapeHtml,
   findFirstNew,
   findNodeById,
@@ -59,8 +60,27 @@ describe('nodeToMarkmap', () => {
 
   it('renders a plain span when the node has no time', () => {
     expect(nodeToMarkmap(node('abc', 'Overview')).content).toBe(
-      '<span data-node-id="abc" title="Overview">Overview</span>',
+      '<span class="mm-row mm-d1"><span data-node-id="abc" title="Overview">Overview</span></span>',
     )
+  })
+
+  it('tags each level with its own type-scale class', () => {
+    const data = nodeToMarkmap(
+      node('a', 'A', { children: [node('b', 'B', { children: [node('c', 'C')] })] }),
+    )
+    expect(data.content).toContain('mm-d1')
+    expect(data.children[0].content).toContain('mm-d2')
+    expect(data.children[0].children[0].content).toContain('mm-d3')
+  })
+
+  it('clamps very deep branches to the last styled level', () => {
+    let leaf = node('leaf', 'Leaf')
+    for (let depth = 0; depth < 8; depth += 1) {
+      leaf = node(`n${depth}`, `N${depth}`, { children: [leaf] })
+    }
+    let data = nodeToMarkmap(leaf)
+    while (data.children.length > 0) data = data.children[0]
+    expect(data.content).toContain('mm-d4')
   })
 
   it('escapes html in labels so text cannot inject markup', () => {
@@ -83,7 +103,7 @@ describe('nodeToMarkmap', () => {
 describe('buildMapData', () => {
   it('puts the title at the root and branches under it', () => {
     const data = buildMapData({ title: 'My lecture', nodes: [node('a', 'Topic')] })
-    expect(data.content).toBe('My lecture')
+    expect(data.content).toBe('<span class="mm-row mm-d0">My lecture</span>')
     expect(data.children).toHaveLength(1)
     expect(data.children[0].content).toContain('Topic')
   })
@@ -95,7 +115,9 @@ describe('buildMapData', () => {
   })
 
   it('escapes the title', () => {
-    expect(buildMapData({ title: '<x>', nodes: [] }).content).toBe('&lt;x&gt;')
+    expect(buildMapData({ title: '<x>', nodes: [] }).content).toBe(
+      '<span class="mm-row mm-d0">&lt;x&gt;</span>',
+    )
   })
 })
 
@@ -298,6 +320,22 @@ describe('findNodeById', () => {
   it('returns null for an unknown id or empty tree', () => {
     expect(findNodeById(tree, 'nope')).toBeNull()
     expect(findNodeById([], 'a')).toBeNull()
+  })
+})
+
+describe('countNodes', () => {
+  it('counts every node, not only the top level', () => {
+    const tree = [
+      node('a', 'A', { children: [node('a1', 'A1'), node('a2', 'A2', { children: [node('a2x', 'A2X')] })] }),
+      node('b', 'B'),
+    ]
+    expect(countNodes(tree)).toBe(5)
+  })
+
+  it('handles empty and malformed input', () => {
+    expect(countNodes([])).toBe(0)
+    expect(countNodes(null)).toBe(0)
+    expect(countNodes(undefined)).toBe(0)
   })
 })
 

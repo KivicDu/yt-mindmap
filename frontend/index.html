@@ -1,13 +1,47 @@
 <!doctype html>
-<html lang="en">
+<html lang="vi">
   <head>
-    <link rel="preconnect" href="https://fonts.googleapis.com">
-    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-    <link href="https://fonts.googleapis.com/css2?family=Noto+Sans:wght@400;500;600&display=swap" rel="stylesheet">
     <meta charset="UTF-8" />
-    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>frontend</title>
+    <link rel="icon" type="image/png" href="/yt-mindmap-icon.png" />
+    <link rel="apple-touch-icon" href="/yt-mindmap-icon.png" />
+    <meta name="theme-color" content="#faf9f6" />
+
+    <title>yt-mindmap — biến video YouTube thành sơ đồ tư duy để ôn tập</title>
+    <meta
+      name="description"
+      content="Dán link YouTube, nhận sơ đồ tư duy được xây dựng theo trình tự bài giảng. Click vào từng nhánh để tua thẳng tới đúng đoạn cần xem lại."
+    />
+    <meta name="color-scheme" content="light dark" />
+
+    <meta property="og:type" content="website" />
+    <meta property="og:locale" content="vi_VN" />
+    <meta property="og:site_name" content="yt-mindmap" />
+    <meta property="og:title" content="yt-mindmap — video YouTube thành sơ đồ tư duy" />
+    <meta
+      property="og:description"
+      content="Học từ video nhanh hơn: sơ đồ tư duy tự hình thành theo bài giảng, mỗi nhánh gắn với đúng thời điểm trong video."
+    />
+
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Noto+Sans:wght@400;500;600&display=swap"
+      rel="stylesheet"
+    />
+
+    <script>
+      // Set theme before first paint so there is no flash of the wrong palette.
+      (function () {
+        try {
+          var stored = localStorage.getItem("ytmm:theme");
+          var dark = stored === "dark";
+          document.documentElement.dataset.theme = dark ? "dark" : "light";
+        } catch (error) {
+          document.documentElement.dataset.theme = "light";
+        }
+      })();
+    </script>
   </head>
   <body>
     <div id="root"></div>

@@ -54,7 +54,7 @@ function hasTime(value: number | null | undefined): value is number {
   return typeof value === 'number' && Number.isFinite(value) && value >= 0
 }
 
-function formatTime(seconds: number): string {
+export function formatTime(seconds: number): string {
   const total = Math.floor(seconds)
   const h = Math.floor(total / 3600)
   const m = Math.floor((total % 3600) / 60)
@@ -65,14 +65,26 @@ function formatTime(seconds: number): string {
   return `${m}:${String(s).padStart(2, '0')}`
 }
 
+/** Deepest level that gets its own type style; deeper nodes reuse `mm-d4`. */
+export const MAX_STYLED_DEPTH = 4
+
+/** Class wrapper that lets CSS give each level of the map its own weight. */
+function row(content: string, depth: number): string {
+  const level = Math.min(Math.max(depth, 0), MAX_STYLED_DEPTH)
+  return `<span class="mm-row mm-d${level}">${content}</span>`
+}
+
 /**
  * One markmap node from one map node.
  *
  * The label keeps the `#seek-` link so the existing click handler works, and
  * carries `data-node-id` so a click can also address the node in the tree
  * (rename, note, pin). A note renders as a second line under the label.
+ *
+ * `depth` (1 = top-level topic) drives the type scale: a lecture reads better
+ * when the shape of the tree is visible without reading every word.
  */
-export function nodeToMarkmap(node: MapNode): MarkmapNode {
+export function nodeToMarkmap(node: MapNode, depth = 1): MarkmapNode {
   const label = escapeHtml(cleanLabel(node.label))
   const id = escapeHtml(node.id)
   const timeBadge = hasTime(node.time)
@@ -88,9 +100,9 @@ export function nodeToMarkmap(node: MapNode): MarkmapNode {
   const note = cleanNote(node.note)
   const noteHtml = note ? `<span class="mm-note" title="${escapeHtml(note)}">${escapeHtml(note)}</span>` : ''
 
-  const children = (node.children || []).map(nodeToMarkmap)
+  const children = (node.children || []).map((child) => nodeToMarkmap(child, depth + 1))
   return {
-    content: `${pin}${timeBadge}${title}${noteHtml}`,
+    content: row(`${pin}${timeBadge}${title}${noteHtml}`, depth),
     children,
     payload: node.pinned ? { pinned: true } : {},
   }
@@ -98,11 +110,17 @@ export function nodeToMarkmap(node: MapNode): MarkmapNode {
 
 /** Convert the tree into the data markmap renders, including the map title. */
 export function buildMapData(tree: MapTree): MarkmapNode {
-  const children = tree.nodes.map(nodeToMarkmap)
+  const children = tree.nodes.map((node) => nodeToMarkmap(node, 1))
   if (children.length === 0) {
     children.push({ content: EMPTY_HINT, children: [], payload: {} })
   }
-  return { content: escapeHtml(tree.title || 'Mind map'), children, payload: {} }
+  return { content: row(escapeHtml(tree.title || 'Mind map'), 0), children, payload: {} }
+}
+
+/** Total number of topics, used for the "N ý" counter in the UI. */
+export function countNodes(nodes: MapNode[] | null | undefined): number {
+  if (!Array.isArray(nodes)) return 0
+  return nodes.reduce((total, node) => total + 1 + countNodes(node.children), 0)
 }
 
 /** Every node id in the rendered data, used to detect freshly added nodes. */

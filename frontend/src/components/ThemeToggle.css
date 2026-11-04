@@ -1,0 +1,40 @@
+.theme-toggle {
+  position: relative;
+  overflow: hidden;
+}
+
+.theme-toggle__icons {
+  position: relative;
+  width: 18px;
+  height: 18px;
+}
+
+.theme-toggle svg {
+  position: absolute;
+  inset: 0;
+  width: 18px;
+  height: 18px;
+  transition:
+    opacity var(--t) var(--ease),
+    transform var(--t) var(--ease);
+}
+
+html[data-theme="light"] .theme-toggle__sun {
+  opacity: 0;
+  transform: scale(0.5) rotate(-40deg);
+}
+
+html[data-theme="light"] .theme-toggle__moon {
+  opacity: 1;
+  transform: none;
+}
+
+html[data-theme="dark"] .theme-toggle__sun {
+  opacity: 1;
+  transform: none;
+}
+
+html[data-theme="dark"] .theme-toggle__moon {
+  opacity: 0;
+  transform: scale(0.5) rotate(40deg);
+}
