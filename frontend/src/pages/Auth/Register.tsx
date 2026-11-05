@@ -1,11 +1,25 @@
 import { useState } from 'react'
 import { Link, Navigate, useNavigate } from 'react-router-dom'
 import { useAuth } from '../../context/AuthContext'
+import type { AuthMascotMood } from './AuthMascot'
 import { authErrorMessage } from './messages'
+import PasswordInput from './PasswordInput'
 
 const MIN_PASSWORD = 8
 
-export function RegisterForm({ active }: { active: boolean }) {
+interface RegisterFormProps {
+  active: boolean
+  onMoodChange: (mood: AuthMascotMood) => void
+  onCaretChange: (value: string, caret: number | null) => void
+  onFocusTarget: (element: HTMLElement | null) => void
+}
+
+export function RegisterForm({
+  active,
+  onMoodChange,
+  onCaretChange,
+  onFocusTarget,
+}: RegisterFormProps) {
   const { status, register } = useAuth()
   const navigate = useNavigate()
 
@@ -15,32 +29,44 @@ export function RegisterForm({ active }: { active: boolean }) {
   const [confirm, setConfirm] = useState('')
   const [error, setError] = useState('')
   const [pending, setPending] = useState(false)
+  const [successful, setSuccessful] = useState(false)
 
-  if (active && status === 'authenticated') return <Navigate to="/dashboard" replace />
+  if (active && status === 'authenticated' && !successful) {
+    return <Navigate to="/dashboard" replace />
+  }
 
   const handleSubmit = async (event: React.FormEvent) => {
     event.preventDefault()
     setError('')
+    onMoodChange('idle')
 
     if (displayName.trim().length === 0) {
       setError('Hãy nhập tên hiển thị để mình biết gọi bạn là gì.')
+      onMoodChange('error')
       return
     }
     if (password.length < MIN_PASSWORD) {
       setError(`Mật khẩu cần ít nhất ${MIN_PASSWORD} ký tự.`)
+      onMoodChange('error')
       return
     }
     if (password !== confirm) {
       setError('Hai lần nhập mật khẩu chưa khớp nhau.')
+      onMoodChange('error')
       return
     }
 
     setPending(true)
     try {
       await register(displayName.trim(), email.trim(), password)
+      setSuccessful(true)
+      onMoodChange('success')
+      const feedbackDuration = window.matchMedia('(prefers-reduced-motion: reduce)').matches ? 0 : 650
+      await new Promise((resolve) => window.setTimeout(resolve, feedbackDuration))
       navigate('/dashboard', { replace: true })
     } catch (caught) {
       setError(authErrorMessage(caught, 'register'))
+      onMoodChange('error')
     } finally {
       setPending(false)
     }
@@ -51,6 +77,11 @@ export function RegisterForm({ active }: { active: boolean }) {
       className="auth-panel auth-panel--register"
       aria-hidden={!active}
       inert={!active}
+      onBlur={(event) => {
+        if (event.relatedTarget instanceof Node && event.currentTarget.contains(event.relatedTarget)) return
+        onMoodChange('idle')
+        onFocusTarget(null)
+      }}
     >
       <span className="auth-eyebrow">Tạo tài khoản</span>
       <h2 className="auth-title">Bắt đầu lưu lại quá trình học</h2>
@@ -69,7 +100,19 @@ export function RegisterForm({ active }: { active: boolean }) {
             required
             maxLength={80}
             value={displayName}
-            onChange={(event) => setDisplayName(event.target.value)}
+            onFocus={(event) => {
+              onMoodChange('typing')
+              onCaretChange(event.currentTarget.value, event.currentTarget.selectionStart)
+              onFocusTarget(event.currentTarget)
+            }}
+            onSelect={(event) =>
+              onCaretChange(event.currentTarget.value, event.currentTarget.selectionStart)
+            }
+            onChange={(event) => {
+              setDisplayName(event.target.value)
+              setError('')
+              onCaretChange(event.currentTarget.value, event.currentTarget.selectionStart)
+            }}
             placeholder="Kivic"
           />
         </div>
@@ -82,36 +125,56 @@ export function RegisterForm({ active }: { active: boolean }) {
             autoComplete="email"
             required
             value={email}
-            onChange={(event) => setEmail(event.target.value)}
+            onFocus={(event) => {
+              onMoodChange('typing')
+              onCaretChange(event.currentTarget.value, event.currentTarget.selectionStart)
+              onFocusTarget(event.currentTarget)
+            }}
+            onSelect={(event) =>
+              onCaretChange(event.currentTarget.value, event.currentTarget.selectionStart)
+            }
+            onChange={(event) => {
+              setEmail(event.target.value)
+              setError('')
+              onCaretChange(event.currentTarget.value, event.currentTarget.selectionStart)
+            }}
             placeholder="ban@example.com"
           />
         </div>
 
         <div className="auth-field">
           <label htmlFor="register-password">Mật khẩu</label>
-          <input
+          <PasswordInput
             id="register-password"
-            type="password"
             autoComplete="new-password"
             required
             minLength={MIN_PASSWORD}
             value={password}
-            onChange={(event) => setPassword(event.target.value)}
             placeholder="Ít nhất 8 ký tự"
+            onFocusTarget={onFocusTarget}
+            onChange={(value) => {
+              setPassword(value)
+              setError('')
+            }}
+            onMoodChange={onMoodChange}
           />
           <span className="auth-hint">Tối thiểu {MIN_PASSWORD} ký tự, tối đa 72 bytes.</span>
         </div>
 
         <div className="auth-field">
           <label htmlFor="register-confirm">Nhập lại mật khẩu</label>
-          <input
+          <PasswordInput
             id="register-confirm"
-            type="password"
             autoComplete="new-password"
             required
             value={confirm}
-            onChange={(event) => setConfirm(event.target.value)}
             placeholder="••••••••"
+            onFocusTarget={onFocusTarget}
+            onChange={(value) => {
+              setConfirm(value)
+              setError('')
+            }}
+            onMoodChange={onMoodChange}
           />
         </div>
 

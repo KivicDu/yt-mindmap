@@ -443,24 +443,32 @@ function Home() {
       </section>
 
       <section className="home-sources">
-        <div className="home-section-header" data-reveal>
+        <div className="home-section-header home-section-header--sources" data-reveal>
           <span className="home-eyebrow">Bắt đầu từ tài liệu bạn có</span>
           <h2>Học từ YouTube hoặc mang theo phụ đề của riêng bạn.</h2>
           <p>Chọn nguồn phù hợp với bài giảng. yt-mindmap đưa video và nội dung học vào cùng một phiên làm việc.</p>
         </div>
         <div className="home-source-grid">
           <article className="home-source-card" data-reveal>
-            <span className="home-source-label">NGUỒN 01</span>
-            <div className="home-source-symbol home-source-symbol--video" aria-hidden="true">▶</div>
-            <h3>Link video YouTube</h3>
-            <p>Dán link bài giảng để mở video trong workspace và bắt đầu theo dõi nội dung.</p>
+            <div className="home-source-card-head">
+              <span className="home-source-label">NGUỒN 01 · VIDEO</span>
+              <div className="home-source-symbol home-source-symbol--video" aria-hidden="true">▶</div>
+            </div>
+            <div className="home-source-card-content">
+              <h3>Link video YouTube</h3>
+              <p>Dán link bài giảng để mở video trong workspace và bắt đầu theo dõi nội dung.</p>
+            </div>
             <span className="home-source-example">youtube.com/watch?v=…</span>
           </article>
           <article className="home-source-card" data-reveal>
-            <span className="home-source-label">NGUỒN 02</span>
-            <div className="home-source-symbol home-source-symbol--file" aria-hidden="true">SRT</div>
-            <h3>Tệp phụ đề .srt hoặc .vtt</h3>
-            <p>Tải phụ đề của bạn khi cần dùng bản chép lời riêng hoặc video không có phụ đề sẵn.</p>
+            <div className="home-source-card-head">
+              <span className="home-source-label">NGUỒN 02 · PHỤ ĐỀ</span>
+              <div className="home-source-symbol home-source-symbol--file" aria-hidden="true">SRT</div>
+            </div>
+            <div className="home-source-card-content">
+              <h3>Tệp phụ đề .srt hoặc .vtt</h3>
+              <p>Tải phụ đề của bạn khi cần dùng bản chép lời riêng hoặc video không có phụ đề sẵn.</p>
+            </div>
             <span className="home-source-example">.srt &nbsp; / &nbsp; .vtt</span>
           </article>
         </div>
