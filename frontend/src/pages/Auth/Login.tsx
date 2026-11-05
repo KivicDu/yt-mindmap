@@ -2,7 +2,8 @@ import { useEffect, useState } from 'react'
 import { Link, Navigate, useLocation, useNavigate } from 'react-router-dom'
 import { useAuth } from '../../context/AuthContext'
 import type { AuthMascotMood } from './AuthMascot'
-import { authErrorMessage } from './messages'
+import { authErrorMessage, oauthErrorMessage } from './messages'
+import OAuthButtons from './OAuthButtons'
 import PasswordInput from './PasswordInput'
 
 interface LocationState {
@@ -27,6 +28,11 @@ export function LoginForm({ active, onMoodChange, onCaretChange, onFocusTarget }
   const [error, setError] = useState('')
   const [pending, setPending] = useState(false)
   const [successful, setSuccessful] = useState(false)
+
+  // OAuth failures come back as /login?oauth=google&error=...
+  const params = new URLSearchParams(location.search)
+  const oauthMessage = oauthErrorMessage(params.get('error'), params.get('oauth'))
+  const shownError = error || oauthMessage
 
   useEffect(() => {
     if (active && status === 'authenticated' && !successful) navigate(from, { replace: true })
@@ -71,7 +77,7 @@ export function LoginForm({ active, onMoodChange, onCaretChange, onFocusTarget }
         Đăng nhập để mở dashboard, lưu dự án và tiếp tục những sơ đồ đang làm dở.
       </p>
       <form className="auth-form" onSubmit={handleSubmit} noValidate>
-        {error && <p className="auth-error">{error}</p>}
+        {shownError && <p className="auth-error">{shownError}</p>}
 
         <div className="auth-field">
           <label htmlFor="login-email">Email</label>
@@ -121,14 +127,7 @@ export function LoginForm({ active, onMoodChange, onCaretChange, onFocusTarget }
       </form>
 
       <div className="auth-divider">hoặc</div>
-      <div className="auth-oauth">
-        <button type="button" disabled title="Cần cấu hình Google OAuth (giai đoạn sau)">
-          Tiếp tục với Google — sắp có
-        </button>
-        <button type="button" disabled title="Cần cấu hình GitHub OAuth (giai đoạn sau)">
-          Tiếp tục với GitHub — sắp có
-        </button>
-      </div>
+      <OAuthButtons />
       <div className="auth-footer">
         Chưa có tài khoản? <Link to="/register">Đăng ký miễn phí</Link>
       </div>

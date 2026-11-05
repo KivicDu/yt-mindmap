@@ -19,7 +19,9 @@ class User(Base, TimestampMixin):
     display_name: Mapped[str] = mapped_column(String(80), nullable=False)
     password_hash: Mapped[str | None] = mapped_column(String(255), nullable=True)
     provider: Mapped[str] = mapped_column(String(20), default="local", nullable=False)
-    provider_id: Mapped[str | None] = mapped_column(String(191), index=True, nullable=True)
+    provider_id: Mapped[str | None] = mapped_column(
+        String(191), unique=True, index=True, nullable=True
+    )
     avatar_url: Mapped[str | None] = mapped_column(String(500), nullable=True)
     email_verified: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     last_login_at: Mapped[datetime | None] = mapped_column(

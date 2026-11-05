@@ -1,18 +1,49 @@
 name: yt-mindmap
 
 services:
+  db:
+    image: postgres:18-alpine
+    environment:
+      POSTGRES_USER: ytmindmap
+      POSTGRES_PASSWORD: ytmindmap
+      POSTGRES_DB: ytmindmap
+    volumes:
+      - mindmap-db:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ytmindmap -d ytmindmap"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    restart: unless-stopped
+
   backend:
     build:
       context: ./backend
+    # Run pending migrations before serving; a fresh volume has no tables.
+    command:
+      - sh
+      - -c
+      - alembic upgrade head && uvicorn main:app --host 0.0.0.0 --port 8001
     environment:
       GEMINI_API_KEY: ${GEMINI_API_KEY:-}
       GEMINI_MODEL: ${GEMINI_MODEL:-gemini-2.5-flash}
       # The browser talks to the backend directly, so allow the nginx origin.
       ALLOWED_ORIGINS: ${ALLOWED_ORIGINS:-http://localhost:8080}
+      DATABASE_URL: postgresql+psycopg://ytmindmap:ytmindmap@db:5432/ytmindmap
+      JWT_SECRET_KEY: ${JWT_SECRET_KEY:-dev-only-change-me-in-production}
+      FRONTEND_URL: ${FRONTEND_URL:-http://localhost:8080}
+      OAUTH_CALLBACK_BASE: ${OAUTH_CALLBACK_BASE:-http://localhost:8001}
+      GOOGLE_CLIENT_ID: ${GOOGLE_CLIENT_ID:-}
+      GOOGLE_CLIENT_SECRET: ${GOOGLE_CLIENT_SECRET:-}
+      GITHUB_CLIENT_ID: ${GITHUB_CLIENT_ID:-}
+      GITHUB_CLIENT_SECRET: ${GITHUB_CLIENT_SECRET:-}
     ports:
       - "8001:8001"
     volumes:
       - mindmap-data:/app/data
+    depends_on:
+      db:
+        condition: service_healthy
     restart: unless-stopped
 
   frontend:
@@ -29,3 +60,4 @@ services:
 
 volumes:
   mindmap-data:
+  mindmap-db:

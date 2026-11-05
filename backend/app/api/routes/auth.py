@@ -22,58 +22,16 @@ from app.schemas.auth import (
     RegisterRequest,
     UserOut,
 )
+from app.services.accounts import normalize_email
+from app.utils.cookies import clear_session_cookies, set_session_cookies
 from app.utils.security import create_token, decode_token, hash_password, verify_password
 
 router = APIRouter(prefix="/auth", tags=["auth"])
 
 
-def _cookie_kwargs() -> dict:
-    settings = get_settings()
-    return {
-        "key": settings.REFRESH_COOKIE_NAME,
-        "httponly": True,
-        "secure": settings.COOKIE_SECURE,
-        "samesite": settings.COOKIE_SAMESITE,
-        "domain": settings.COOKIE_DOMAIN,
-        "path": "/",
-    }
-
-
-def _set_refresh_cookie(response: Response, user_id: str) -> None:
-    settings = get_settings()
-    token, _ = create_token(user_id, "refresh")
-    response.set_cookie(
-        value=token,
-        max_age=settings.refresh_cookie_max_age,
-        **_cookie_kwargs(),
-    )
-    # Readable hint so the app can skip a doomed /auth/refresh on first visit.
-    # It carries no secret: the real session lives in the HttpOnly cookie.
-    response.set_cookie(
-        key=settings.SESSION_HINT_COOKIE_NAME,
-        value="1",
-        httponly=False,
-        secure=settings.COOKIE_SECURE,
-        samesite=settings.COOKIE_SAMESITE,
-        domain=settings.COOKIE_DOMAIN,
-        path="/",
-        max_age=settings.refresh_cookie_max_age,
-    )
-
-
-def _clear_refresh_cookie(response: Response) -> None:
-    settings = get_settings()
-    response.delete_cookie(**_cookie_kwargs())
-    response.delete_cookie(
-        key=settings.SESSION_HINT_COOKIE_NAME,
-        domain=settings.COOKIE_DOMAIN,
-        path="/",
-    )
-
-
 def _auth_response(response: Response, user: User) -> AuthResponse:
     access_token, expires_in = create_token(user.id, "access")
-    _set_refresh_cookie(response, user.id)
+    set_session_cookies(response, user.id)
     return AuthResponse(
         access_token=access_token,
         expires_in=expires_in,
@@ -81,13 +39,9 @@ def _auth_response(response: Response, user: User) -> AuthResponse:
     )
 
 
-def _normalize_email(email: str) -> str:
-    return email.strip().lower()
-
-
 @router.post("/register", status_code=status.HTTP_201_CREATED)
 def register(payload: RegisterRequest, response: Response, db: Session = Depends(get_db)) -> AuthResponse:
-    email = _normalize_email(payload.email)
+    email = normalize_email(payload.email)
     exists = db.scalar(select(User).where(User.email == email))
     if exists is not None:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="email_taken")
@@ -106,7 +60,7 @@ def register(payload: RegisterRequest, response: Response, db: Session = Depends
 
 @router.post("/login")
 def login(payload: LoginRequest, response: Response, db: Session = Depends(get_db)) -> AuthResponse:
-    email = _normalize_email(payload.email)
+    email = normalize_email(payload.email)
     user = db.scalar(select(User).where(User.email == email))
     if user is None or not verify_password(payload.password, user.password_hash):
         raise HTTPException(
@@ -130,50 +84,23 @@ def refresh(
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="missing_refresh_token")
     payload = decode_token(refresh_token, "refresh")
     if payload is None:
-        _clear_refresh_cookie(response)
+        clear_session_cookies(response)
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="invalid_refresh_token")
     user = db.get(User, payload["sub"])
     if user is None:
-        _clear_refresh_cookie(response)
+        clear_session_cookies(response)
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="invalid_refresh_token")
 
     access_token, expires_in = create_token(user.id, "access")
-    _set_refresh_cookie(response, user.id)
+    set_session_cookies(response, user.id)
     return AccessTokenResponse(access_token=access_token, expires_in=expires_in)
 
 
 @router.post("/logout", status_code=status.HTTP_204_NO_CONTENT)
 def logout(response: Response) -> None:
-    _clear_refresh_cookie(response)
+    clear_session_cookies(response)
 
 
 @router.get("/me")
 def me(user: User = Depends(get_current_user)) -> UserOut:
     return UserOut.model_validate(user)
-
-
-def _oauth_not_configured(provider: str) -> HTTPException:
-    settings = get_settings()
-    configured = {
-        "google": bool(settings.GOOGLE_CLIENT_ID and settings.GOOGLE_CLIENT_SECRET),
-        "github": bool(settings.GITHUB_CLIENT_ID and settings.GITHUB_CLIENT_SECRET),
-    }[provider]
-    detail = {
-        "error": "oauth_not_configured" if not configured else "oauth_not_implemented",
-        "provider": provider,
-        "hint": (
-            "Set GOOGLE_CLIENT_ID/SECRET or GITHUB_CLIENT_ID/SECRET in backend/.env "
-            "and follow docs/auth-oauth.md once the flow is enabled."
-        ),
-    }
-    return HTTPException(status_code=status.HTTP_501_NOT_IMPLEMENTED, detail=detail)
-
-
-@router.get("/google")
-def google_oauth() -> None:
-    raise _oauth_not_configured("google")
-
-
-@router.get("/github")
-def github_oauth() -> None:
-    raise _oauth_not_configured("github")

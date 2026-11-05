@@ -3,6 +3,7 @@ import { Link, Navigate, useNavigate } from 'react-router-dom'
 import { useAuth } from '../../context/AuthContext'
 import type { AuthMascotMood } from './AuthMascot'
 import { authErrorMessage } from './messages'
+import OAuthButtons from './OAuthButtons'
 import PasswordInput from './PasswordInput'
 
 const MIN_PASSWORD = 8
@@ -184,14 +185,7 @@ export function RegisterForm({
       </form>
 
       <div className="auth-divider">hoặc</div>
-      <div className="auth-oauth">
-        <button type="button" disabled title="Cần cấu hình Google OAuth (giai đoạn sau)">
-          Tiếp tục với Google — sắp có
-        </button>
-        <button type="button" disabled title="Cần cấu hình GitHub OAuth (giai đoạn sau)">
-          Tiếp tục với GitHub — sắp có
-        </button>
-      </div>
+      <OAuthButtons />
       <div className="auth-footer">
         Đã có tài khoản? <Link to="/login">Đăng nhập</Link>
       </div>

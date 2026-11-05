@@ -9,6 +9,31 @@
 export const API_BASE = import.meta.env.VITE_API_BASE || 'http://localhost:8001'
 export const API_ROOT = `${API_BASE}/api`
 
+/**
+ * OAuth is a full-page redirect: the API sends the browser to Google/GitHub and
+ * back, so there is no fetch to call here. The provider list comes from
+ * `/auth/providers` so disabled buttons reflect the server configuration.
+ */
+export function oauthStartUrl(provider: 'google' | 'github'): string {
+  return `${API_ROOT}/auth/${provider}`
+}
+
+export interface OAuthProviders {
+  google: boolean
+  github: boolean
+}
+
+const NO_PROVIDERS: OAuthProviders = { google: false, github: false }
+let providersRequest: Promise<OAuthProviders> | null = null
+
+/** Which OAuth buttons the server can actually handle (cached per page load). */
+export function fetchOAuthProviders(): Promise<OAuthProviders> {
+  providersRequest ??= fetch(`${API_ROOT}/auth/providers`, { credentials: 'include' })
+    .then((response) => (response.ok ? (response.json() as Promise<OAuthProviders>) : NO_PROVIDERS))
+    .catch(() => NO_PROVIDERS)
+  return providersRequest
+}
+
 /** Non-secret cookie the API sets alongside the HttpOnly refresh token. */
 export const SESSION_HINT_COOKIE = 'ytmm_session'
 

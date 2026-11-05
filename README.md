@@ -17,6 +17,8 @@ This project creates a dual-view setup: alongside the YouTube video, there's a d
 
 ### Backend
 - FastAPI (Python)
+- PostgreSQL 18 + SQLAlchemy 2 + Alembic
+- JWT access tokens, HttpOnly refresh cookie, bcrypt password hashing
 - youtube-transcript-api
 - Google Gemini API (`google-genai` SDK)
 - Server-Sent Events (SSE) for real-time updates
@@ -45,6 +47,10 @@ This project creates a dual-view setup: alongside the YouTube video, there's a d
 - [x] Retry with exponential backoff and request timeout for AI calls
 - [x] Rolling context (truncated map + compact summary) to control token cost
 - [x] Health endpoint, configurable CORS, Docker images and CI
+- [x] Accounts: email + password sign-up, login, silent session restore and logout
+- [x] Google & GitHub OAuth (code complete; needs client credentials, see [docs/auth-oauth.md](docs/auth-oauth.md))
+- [x] Protected `/dashboard` with sidebar, account settings and sign-out
+- [x] The workspace stays usable without an account — login is only needed to save projects
 
 ## Getting Started
 
@@ -52,11 +58,13 @@ This project creates a dual-view setup: alongside the YouTube video, there's a d
 
 ```bash
 export GEMINI_API_KEY=your_gemini_key_here
+export JWT_SECRET_KEY="$(python3 -c 'import secrets; print(secrets.token_urlsafe(48))')"
 docker compose up --build
 ```
 
 Open http://localhost:8080. The API runs on http://localhost:8001 (docs at
-`/docs`), and the mind map cache is kept in the `mindmap-data` volume.
+`/docs`), the mind map cache is kept in the `mindmap-data` volume, and accounts
+in the `mindmap-db` Postgres volume. Migrations run automatically on start.
 
 > `VITE_API_BASE` is baked into the frontend at build time. When deploying,
 > rebuild with `--build-arg VITE_API_BASE=https://your-api-host` and set
@@ -71,11 +79,26 @@ cd backend
 python -m venv venv
 source venv/bin/activate          # Windows: venv\Scripts\activate
 pip install -r requirements.txt
-cp .env.example .env              # then set GEMINI_API_KEY
+cp .env.example .env              # then set GEMINI_API_KEY, DATABASE_URL, JWT_SECRET_KEY
+```
+
+Accounts need PostgreSQL. With Homebrew:
+
+```bash
+brew install postgresql@18 && brew services start postgresql@18
+psql -h 127.0.0.1 -d postgres -c "create role ytmindmap with login password 'ytmindmap';"
+psql -h 127.0.0.1 -d postgres -c "create database ytmindmap owner ytmindmap;"
+./venv/bin/alembic upgrade head
+```
+
+```bash
 uvicorn main:app --port 8001 --host 127.0.0.1
 ```
 
 API docs: http://127.0.0.1:8001/docs · Health: http://127.0.0.1:8001/healthz
+
+Google/GitHub sign-in is optional and off until you add client credentials —
+see [docs/auth-oauth.md](docs/auth-oauth.md).
 
 #### 2. Frontend
 
@@ -121,14 +144,18 @@ yt-mindmap/
 │   ├── chunking.py        # Pure chunk/seek rules (unit-tested)
 │   ├── subtitles.py       # .srt / .vtt parser (unit-tested)
 │   ├── transcript.py      # YouTube captions fetcher
+│   ├── app/               # Accounts: settings, DB session, User model, auth + OAuth routes
+│   ├── alembic/           # Migrations (alembic upgrade head)
 │   └── tests/             # pytest suite
 ├── frontend/
 │   └── src/
-│       ├── App.tsx        # player + update loop + session recovery
-│       ├── components/    # markmap wrapper (lazy-loaded)
-│       └── lib/           # pure tree helpers + vitest tests
+│       ├── pages/         # Home, Auth (login/register), Dashboard, Workspace
+│       ├── context/       # Auth + MindmapConfig providers
+│       ├── lib/           # API client + pure tree helpers (+ vitest)
+│       └── components/    # markmap wrapper, route guard
 ├── docs/
 │   ├── architecture.md    # flows, invariants, data model
+│   ├── auth-oauth.md      # Google/GitHub console setup
 │   └── adr/               # architecture decision records
 ├── docker-compose.yml
 └── .github/workflows/ci.yml
@@ -137,10 +164,12 @@ yt-mindmap/
 ## Documentation
 
 - [Architecture](docs/architecture.md) — component and sequence diagrams, invariants
+- [Auth & OAuth setup](docs/auth-oauth.md) — Google/GitHub client IDs, flow, troubleshooting
 - [ADR 0001](docs/adr/0001-incremental-budgeted-ai.md) — incremental, budgeted AI calls
 - [ADR 0002](docs/adr/0002-sessions-sse-disk-cache.md) — sessions, SSE, disk cache
 - [ADR 0003](docs/adr/0003-markdown-to-node-tree.md) — node tree as the source of truth
 - [ADR 0004](docs/adr/0004-collaboration-scope.md) — collaboration scope
+- [ADR 0005](docs/adr/0005-accounts-jwt-oauth.md) — accounts, JWT and OAuth
 - [Contributing workflow](CONTRIBUTING.md) — branch model and commit conventions
 
 ## How It Works
@@ -157,6 +186,8 @@ yt-mindmap/
 - One backend worker only (in-memory session store); use Redis/DB to scale horizontally.
 - Deleting nodes is not implemented: the AI owns structure, so a wrong branch is fixed by renaming it or by improving the prompt.
 - Notes and pins are personal state stored with the video cache; they are not shared between users yet.
-- Collaboration, accounts and a database are planned but not built yet (see ADR 0004).
+- Accounts exist (email + Google/GitHub OAuth), but projects, drafts and sharing are still on the roadmap — the dashboard shows empty states for them.
+- There is no email verification yet: password accounts are usable immediately, and OAuth accounts inherit the provider's verified email.
+- Refresh tokens are stateless JWTs; logging out clears the cookie but does not revoke a token copied elsewhere (a server-side token store is the next step).
 - Captions are fetched in English; Vietnamese and other languages are on the roadmap.
 - AI usage costs and rate limits apply.

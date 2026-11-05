@@ -43,11 +43,17 @@ class Settings(BaseSettings):
     COOKIE_SAMESITE: str = "lax"  # "lax" locally, "none" + secure when cross-site
     COOKIE_DOMAIN: str | None = None
 
-    # OAuth (filled in later; routes stay behind a clear "not configured" error)
+    # OAuth. Leave the client id/secret empty to keep the buttons disabled; the
+    # routes then send the browser back to /login with an explanatory error.
     GOOGLE_CLIENT_ID: str = ""
     GOOGLE_CLIENT_SECRET: str = ""
     GITHUB_CLIENT_ID: str = ""
     GITHUB_CLIENT_SECRET: str = ""
+    # Public URL of this API. The provider callback must be registered as
+    # "<OAUTH_CALLBACK_BASE>/api/auth/<provider>/callback".
+    OAUTH_CALLBACK_BASE: str = "http://localhost:8001"
+    OAUTH_STATE_COOKIE_NAME: str = "ytmm_oauth_state"
+    OAUTH_STATE_TTL_SECONDS: int = 600
 
     @property
     def is_sqlite(self) -> bool:

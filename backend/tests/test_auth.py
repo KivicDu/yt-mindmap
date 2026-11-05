@@ -1,48 +1,10 @@
-"""Auth endpoints, exercised against an in-memory SQLite database.
+"""Auth endpoints, exercised against an in-memory SQLite database."""
 
-SQLite is only a test double: the models use portable column types and the
-app itself runs on PostgreSQL. The same trick keeps the suite fast and
-independent of a running server.
-"""
-
-from collections.abc import Iterator
-
-import pytest
 from fastapi.testclient import TestClient
-from sqlalchemy import create_engine
-from sqlalchemy.orm import Session, sessionmaker
-from sqlalchemy.pool import StaticPool
+from sqlalchemy.orm import Session
 
-import main as main_module
-from app.db.base import Base
-from app.db.session import get_db
 from app.models.user import User
 from app.utils.security import create_token
-
-engine = create_engine(
-    "sqlite://",
-    connect_args={"check_same_thread": False},
-    poolclass=StaticPool,
-)
-TestingSession = sessionmaker(bind=engine, autoflush=False, expire_on_commit=False, future=True)
-
-
-@pytest.fixture()
-def client() -> Iterator[TestClient]:
-    Base.metadata.create_all(engine)
-
-    def override_get_db() -> Iterator[Session]:
-        db = TestingSession()
-        try:
-            yield db
-        finally:
-            db.close()
-
-    main_module.app.dependency_overrides[get_db] = override_get_db
-    with TestClient(main_module.app) as test_client:
-        yield test_client
-    main_module.app.dependency_overrides.pop(get_db, None)
-    Base.metadata.drop_all(engine)
 
 
 def register(client: TestClient, email: str = "kivic@example.com", password: str = "hunter2pass"):
@@ -158,18 +120,9 @@ def test_logout_clears_the_cookie(client: TestClient):
     assert client.cookies.get("ytmm_refresh_token") in (None, "")
 
 
-def test_oauth_routes_report_not_configured(client: TestClient):
-    for provider in ("google", "github"):
-        response = client.get(f"/api/auth/{provider}")
-        assert response.status_code == 501
-        assert response.json()["detail"]["provider"] == provider
-        assert response.json()["detail"]["error"] == "oauth_not_configured"
-
-
-def test_passwords_are_hashed_not_stored_in_clear(client: TestClient):
+def test_passwords_are_hashed_not_stored_in_clear(client: TestClient, db_session: Session):
     register(client)
-    with TestingSession() as db:
-        user = db.query(User).filter_by(email="kivic@example.com").one()
+    user = db_session.query(User).filter_by(email="kivic@example.com").one()
     assert user.password_hash is not None
     assert "hunter2pass" not in user.password_hash
     assert user.password_hash.startswith("$2b$")
