@@ -19,6 +19,7 @@ from pydantic import BaseModel
 from sse_starlette.sse import EventSourceResponse
 
 from ai_engine import ai_engine
+from app.api.router import api_router
 from chunking import chunk_time_range, is_seek_backward, select_chunk
 from node_tree import (
     markdown_to_tree,
@@ -47,7 +48,7 @@ ALLOWED_ORIGINS = [
     if origin.strip()
 ] or DEFAULT_ALLOWED_ORIGINS
 
-app = FastAPI(title="YouTube Mind Map API", version="0.2.0")
+app = FastAPI(title="YouTube Mind Map API", version="0.3.0")
 
 app.add_middleware(
     CORSMiddleware,
@@ -56,6 +57,10 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# Accounts, projects and sharing live under /api so the existing mind-map
+# endpoints keep their URLs. The refresh cookie requires allow_credentials.
+app.include_router(api_router, prefix="/api")
 
 class TranscriptRequest(BaseModel):
     url: str | None = None

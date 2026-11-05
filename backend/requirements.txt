@@ -7,5 +7,13 @@ httpx==0.28.1
 python-dotenv==1.2.4
 sse-starlette==3.5.0
 google-genai==2.33.0
+# Accounts / auth
+SQLAlchemy==2.1.6
+alembic==1.20.1
+psycopg[binary]==3.3.7
+bcrypt==5.0.0
+PyJWT==2.15.1
+email-validator==2.3.0
+pydantic-settings==2.16.2
 # Reserved for the planned multi-provider AI abstraction.
 openai==3.26.1

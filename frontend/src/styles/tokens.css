@@ -1,48 +1,164 @@
+/* ============================================================
+   yt-mindmap — design tokens
+   Ngôn ngữ: "paper + canvas" — nền giấy ấm, mực đậm, 1 màu nhấn.
+   Sáng/tối dùng chung một bộ tên biến; chỉ đổi giá trị.
+   ============================================================ */
+
 :root {
-  /* Nền */
-  --bg: #fcfcfd;
-  --bg-alt: #f8f9fc;
-  --bg-pastel: #f8faff;
+  color-scheme: light;
+
+  /* --- surfaces: giấy --- */
+  --paper: #faf9f6;
+  --paper-2: #f4f2ed;
+  --paper-3: #efece4;
   --surface: #ffffff;
-  --surface-subtle: #f8f9fb;
-  --surface-tint: #f7f8ff;
+  --surface-raised: #ffffff;
+  --surface-sunken: #f6f4ef;
 
-  /* Viền */
-  --border: #e5e7eb;
-  --border-light: #eef0f4;
+  /* --- ink --- */
+  --ink: #1c1b19;
+  --ink-2: #57544d;
+  --ink-3: #6f6b61; /* 5.05:1 trên paper */
+  --ink-inverse: #faf9f6;
 
-  /* Chữ */
-  --text-primary: #1f1f23;
-  --text-secondary: #4f4f56;
-  --text-tertiary: #6b6b76;
+  /* --- lines --- */
+  --line: #e7e2d8;
+  --line-2: #d8d2c4;
+  --line-strong: #c4bcab;
 
-  /* Màu nhấn */
-  --accent-bg: #eef2ff;
-  --accent-border: #c7d2fe;
-  --accent-text: #4338ca;
-  --accent-hover-bg: #e0e7ff;
-  --accent-hover-border: #a5b4fc;
-  --accent-soft: #f8faff;
+  /* --- accent: muted leaf green --- */
+  --accent: #536b57;
+  --accent-hover: #425846;
+  --accent-ink: #435847;
+  --accent-soft: #edf1eb;
+  --accent-soft-2: #e1e9e0;
+  --accent-line: #cbd7ca;
+  --accent-contrast: #ffffff;
 
-  /* Tương tác */
-  --hover-bg: #f6f7fa;
-  --focus-ring: rgba(99, 102, 241, 0.35);
+  /* --- chrome: thanh công cụ nổi trên giấy --- */
+  --chrome: rgba(255, 253, 249, 0.86);
 
-  /* Bo góc & bóng */
-  --radius-sm: 8px;
-  --radius-md: 10px;
-  --radius-lg: 14px;
-  --shadow-soft: 0 1px 1px rgba(15, 15, 20, 0.01),
-                 0 10px 40px -20px rgba(31, 31, 35, 0.4);
-  --shadow-card: 0 1px 2px rgba(15, 15, 20, 0.01),
-                  0 12px 60px -30px rgba(67, 56, 202, 0.18);
+  /* --- trạng thái --- */
+  --live: #2f6b4f;
+  --live-soft: #e8f2ec;
+  --live-line: #c4ddcf;
+  --warn: #8a5a12;
+  --warn-soft: #fbf1dd;
+  --warn-line: #ecd9ae;
+  --danger: #9b2c2c;
+  --danger-soft: #fbeceb;
+  --danger-line: #efcfcc;
 
-  /* Font */
-  --sans: "Noto Sans", system-ui, -apple-system, BlinkMacSystemFont,
-         "Segoe UI", Roboto, Helvetica, Arial,
-         "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei",
-         "Apple SD Gothic Neo", "Malgun Gothic",
-         "Hiragino Kaku Gothic ProN", "Yu Gothic UI", "Yu Gothic", "Meiryo",
-         "Noto Sans CJK SC", "Noto Sans CJK JP", "Noto Sans CJK KR",
-         sans-serif;
+  /* --- interaction --- */
+  --hover: rgba(28, 27, 25, 0.045);
+  --hover-strong: rgba(28, 27, 25, 0.075);
+  --focus-ring: rgba(83, 107, 87, 0.32);
+
+  /* --- type --- */
+  --mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas,
+    "Liberation Mono", monospace;
+
+  --sans: Inter, "SF Pro Display", -apple-system, "Noto Sans", system-ui, BlinkMacSystemFont,
+    "Segoe UI", Roboto, Helvetica, Arial, "PingFang SC", "Hiragino Sans GB",
+    "Microsoft YaHei", "Apple SD Gothic Neo", "Malgun Gothic",
+    "Hiragino Kaku Gothic ProN", "Yu Gothic UI", "Yu Gothic", "Meiryo",
+    "Noto Sans CJK SC", "Noto Sans CJK JP", "Noto Sans CJK KR", sans-serif;
+
+  --fs-2xs: 11px;
+  --fs-xs: 12px;
+  --fs-sm: 13px;
+  --fs-base: 14px;
+  --fs-md: 16px;
+  --fs-lg: 17px;
+  --fs-xl: 20px;
+  --fs-2xl: 28px;
+  --fs-3xl: 40px;
+  --fs-display: clamp(38px, 4.8vw, 60px);
+  --fs-display-xl: clamp(40px, 5.6vw, 64px);
+  --fs-display-lg: clamp(32px, 4.2vw, 56px);
+  --fs-display-md: clamp(28px, 3.2vw, 40px);
+  --fs-card-title: 22px;
+  --fs-body-lg: 18px;
+
+  /* --- space (thang 4) --- */
+  --sp-1: 4px;
+  --sp-2: 8px;
+  --sp-3: 12px;
+  --sp-4: 16px;
+  --sp-5: 20px;
+  --sp-6: 24px;
+  --sp-7: 32px;
+  --sp-8: 40px;
+  --sp-9: 56px;
+  --sp-10: 72px;
+  --sp-section: 96px;
+
+  /* --- radius --- */
+  --r-xs: 4px;
+  --r-sm: 6px;
+  --r-md: 8px;
+  --r-lg: 12px;
+  --r-xl: 16px;
+  --r-pill: 999px;
+
+  /* --- elevation: giấy, gần như phẳng --- */
+  --shadow-1: 0 1px 2px rgba(28, 27, 25, 0.04), 0 1px 1px rgba(28, 27, 25, 0.03);
+  --shadow-2: 0 10px 28px -22px rgba(28, 27, 25, 0.34);
+  --shadow-3: 0 26px 64px -44px rgba(28, 27, 25, 0.42);
+  --shadow-float: 0 6px 20px -12px rgba(28, 27, 25, 0.28);
+
+  /* --- motion --- */
+  --ease: cubic-bezier(0.2, 0, 0, 1);
+  --t-fast: 120ms;
+  --t: 180ms;
+  --t-slow: 280ms;
+}
+
+[data-theme='dark'] {
+  color-scheme: dark;
+
+  --paper: #16150f;
+  --paper-2: #1d1b15;
+  --paper-3: #232018;
+  --surface: #1e1c16;
+  --surface-raised: #24221a;
+  --surface-sunken: #14130e;
+
+  --ink: #f3f0e8;
+  --ink-2: #bdb7a9;
+  --ink-3: #938d7f;
+  --ink-inverse: #16150f;
+
+  --line: #302d24;
+  --line-2: #3b372c;
+  --line-strong: #4b4638;
+
+  --accent: #7f9b82;
+  --accent-hover: #9ab59d;
+  --accent-ink: #aec4ae;
+  --accent-soft: #222a23;
+  --accent-soft-2: #2b362c;
+  --accent-line: #3d4c3e;
+  --accent-contrast: #ffffff;
+
+  --live: #7fbfa0;
+  --live-soft: #1b2a22;
+  --live-line: #2f4a3c;
+  --warn: #e0b062;
+  --warn-soft: #2a2418;
+  --warn-line: #443a25;
+  --danger: #e8918b;
+  --danger-soft: #2c1d1c;
+  --danger-line: #4a2f2d;
+
+  --chrome: rgba(24, 23, 17, 0.86);
+
+  --hover: rgba(255, 250, 240, 0.055);
+  --hover-strong: rgba(255, 250, 240, 0.09);
+  --focus-ring: rgba(127, 155, 130, 0.45);
+
+  --shadow-1: 0 1px 2px rgba(0, 0, 0, 0.4);
+  --shadow-2: 0 12px 30px -22px rgba(0, 0, 0, 0.9);
+  --shadow-3: 0 28px 70px -44px rgba(0, 0, 0, 0.95);
+  --shadow-float: 0 8px 24px -14px rgba(0, 0, 0, 0.8);
 }
