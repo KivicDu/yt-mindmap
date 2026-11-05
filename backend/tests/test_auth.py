@@ -106,6 +106,11 @@ def test_refresh_without_cookie_fails(client: TestClient):
 def test_refresh_with_access_token_cookie_fails(client: TestClient):
     user_id = register(client).json()["user"]["id"]
     access_token, _ = create_token(user_id, "access")
+    # register() already stored a real refresh cookie. Clear the jar first:
+    # httpx keeps both cookies when the domain differs and then sends
+    # "ytmm_refresh_token=real; ytmm_refresh_token=<access>", so the request
+    # would carry a valid refresh token and the test would prove nothing.
+    client.cookies.clear()
     client.cookies.set("ytmm_refresh_token", access_token)
     response = client.post("/api/auth/refresh")
     assert response.status_code == 401
