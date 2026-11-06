@@ -51,6 +51,11 @@ This project creates a dual-view setup: alongside the YouTube video, there's a d
 - [x] Google & GitHub OAuth (code complete; needs client credentials, see [docs/auth-oauth.md](docs/auth-oauth.md))
 - [x] Protected `/dashboard` with sidebar, account settings and sign-out
 - [x] The workspace stays usable without an account — login is only needed to save projects
+- [x] Saved projects: the whole map (nodes, notes, pins, transcript, AI pointer) is stored per account
+- [x] Autosave while signed in, plus a `localStorage` draft for guests so a reload keeps the work
+- [x] Dashboard CRUD: overview stats, recent projects, separate drafts, search, rename, duplicate, delete, promote
+- [x] Reopen a project without calling YouTube again
+- [x] `visibility` + `share_slug` columns are ready for phase 3 (no sharing UI yet)
 
 ## Getting Started
 
@@ -170,6 +175,7 @@ yt-mindmap/
 - [ADR 0003](docs/adr/0003-markdown-to-node-tree.md) — node tree as the source of truth
 - [ADR 0004](docs/adr/0004-collaboration-scope.md) — collaboration scope
 - [ADR 0005](docs/adr/0005-accounts-jwt-oauth.md) — accounts, JWT and OAuth
+- [ADR 0006](docs/adr/0006-saved-projects.md) — saved projects, autosave and per-user notes
 - [Contributing workflow](CONTRIBUTING.md) — branch model and commit conventions
 
 ## How It Works
@@ -185,8 +191,10 @@ yt-mindmap/
 - Sessions are stored in memory (with TTL cleanup); the mind map cache is persisted to `backend/data/video_cache.json`.
 - One backend worker only (in-memory session store); use Redis/DB to scale horizontally.
 - Deleting nodes is not implemented: the AI owns structure, so a wrong branch is fixed by renaming it or by improving the prompt.
-- Notes and pins are personal state stored with the video cache; they are not shared between users yet.
-- Accounts exist (email + Google/GitHub OAuth), but projects, drafts and sharing are still on the roadmap — the dashboard shows empty states for them.
+- Projects, drafts and their notes/pins live in PostgreSQL per account. Guests still use the shared video cache, so a guest's notes on a video are visible to the next guest who opens it.
+- Sharing is prepared at the schema level (`visibility`, `share_slug`) but has no UI or public route yet ("Tham gia dự án" is a phase 3 placeholder).
+- A project stores a copy of its transcript, so the same lecture saved twice uses roughly twice the space. Deleting a project is permanent (no trash/undo).
+- Project lists are paginated by the API (50 by default) but the dashboard does not render pagination controls yet.
 - There is no email verification yet: password accounts are usable immediately, and OAuth accounts inherit the provider's verified email.
 - Refresh tokens are stateless JWTs; logging out clears the cookie but does not revoke a token copied elsewhere (a server-side token store is the next step).
 - Captions use the video's available original-language track. The server-side

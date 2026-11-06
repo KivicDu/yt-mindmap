@@ -27,6 +27,7 @@ flowchart LR
     CAPTIONS[(YouTube captions)]
     OEMBED[(YouTube oEmbed)]
     CACHE[(backend/data/video_cache.json)]
+    DB[(PostgreSQL: users, projects)]
 
     UI -->|POST /transcript| API
     API --> TR --> CAPTIONS
@@ -36,6 +37,7 @@ flowchart LR
     API --> CH
     API --> AI --> GEMINI
     API --> CACHE
+    API --> DB
     UI -->|POST /update-map| API
     API -->|SSE /stream/:id| UI
     UI --> MM
@@ -107,6 +109,8 @@ sequenceDiagram
 | A pinned branch is never folded by "focus recent" | `mindmapTree.collapseOlderBranches` | Pinning is the user saying "keep this in view" |
 | Auth errors are not retried, transient ones are (3 attempts, 1/2/4s) | `ai_engine._generate_with_retry` | Do not burn quota on a bad key |
 | Gemini thinking is disabled by default (`GEMINI_THINKING_BUDGET=0`) | `ai_engine._config` | Extraction is not reasoning-heavy, and updates run every ~15s |
+| A signed-in session never writes the shared video cache | `main.cache_video_map` | Notes and pins must stay private per account |
+| A saved project is never demoted to a draft, and a draft keeps its id | `services/projects.autosave` | Autosave must not undo an explicit save |
 
 ## Data model
 
@@ -135,6 +139,18 @@ node
 video_cache[video_id]
 ├── nodes / markdown / summary_so_far / consumed_until
 └── updated_at
+
+projects                          # one row = one video (or subtitle file) + one map
+├── id / user_id                  # user_id is in every query, so ids never leak
+├── video_id                      # null when built from an uploaded file
+├── title
+├── nodes / transcript            # the row is authoritative on reopen
+├── transcript_language
+├── summary_so_far / consumed_until
+├── is_draft                      # true = autosave, false = explicitly saved
+├── visibility / share_slug       # reserved for phase 3 sharing
+├── last_opened_at
+└── created_at / updated_at
 ```
 
 `nodes` is the map; `markdown` is derived by `node_tree.tree_to_markdown` and
@@ -229,24 +245,84 @@ report verified addresses.
 
 Routes that need a user depend on `app/api/deps.get_current_user`, which decodes
 the access token and loads the row from the database, so a deleted account
-immediately loses access.
+immediately loses access. `get_optional_user` is the guest-friendly variant used
+by `/transcript`; a request carrying a `project_id` still has to be the owner.
+
+## Saved projects and drafts
+
+A project is one video (or one uploaded `.srt`/`.vtt`) plus its map. The row
+holds the transcript, nodes, summary and pointer, so reopening it rebuilds the
+session without touching YouTube:
+
+```text
+POST /transcript {project_id}
+  → owner check → create_session(nodes=row.nodes, transcript=row.transcript,
+                                 resume_at=row.consumed_until,
+                                 initial_summary=row.summary_so_far,
+                                 use_cache=False)
+  → last_opened_at = now
+```
+
+Persistence has two speeds:
+
+- **Autosave (signed in).** After a branch is added or the pointer moves, the
+  workspace debounces for ~2.5s and posts `{session_id, project_id?}` to
+  `POST /api/projects/autosave`. The server copies the live session into a row,
+  creating `is_draft=true` the first time and reusing the newest draft for that
+  video afterwards. The explicit "Lưu dự án" dialog sends a title and
+  `PATCH {is_draft:false}`. A later autosave never demotes a saved project and
+  never rewrites its title.
+- **Guest draft.** Anonymous sessions write `ytmm:guest-draft` in
+  `localStorage` (title, nodes, pointer, language, url; no transcript). A banner
+  restores it by re-fetching captions and posting the saved `initial_nodes` and
+  `resume_at`. Signing in clears the local copy.
+
+Notes and pins are part of `nodes`, so they travel with the project and are
+private per account. `cache_video_map` returns early for sessions that have an
+`owner_id`; guests keep the shared `video_cache`. That is what closes the
+cross-account note leak without adding a second table.
+
+Ownership lives in `app/services/projects.py`: every query filters by
+`user_id`, so a foreign project id returns 404 exactly like a missing one.
+`/api/projects` exposes CRUD, `/stats` (saved, drafts, shared, recent) and
+`/{id}/duplicate`; lists never ship the transcript.
+
+```text
+/api/projects
+├── GET    ?draft=&q=&limit=&offset=   list (owned, newest first)
+├── GET    /stats                      counts + 5 recent saved projects
+├── POST   /                           create
+├── GET    /{id}                       detail (nodes + transcript)
+├── PATCH  /{id}                       title, is_draft, visibility, nodes…
+├── DELETE /{id}                       204; permanent
+├── POST   /{id}/duplicate             copy without a share slug
+└── POST   /autosave                   {session_id, project_id?, title?, is_draft?}
+```
+
+`visibility` (`private`|`unlisted`) and the unique `share_slug` exist now so
+phase 3 sharing is a route + UI change rather than another table migration.
 
 ## Frontend structure
 
 - `src/router.tsx` — `/` (landing), `/login`, `/register`, `/app` (workspace,
-  no account needed) and `/dashboard` behind `ProtectedRoute`.
+  no account needed), `/app/:projectId` (reopen a saved project, guarded) and
+  `/dashboard` behind `ProtectedRoute`.
 - `src/context/AuthContext.tsx` — session restore (`ytmm_session` hint →
   `/auth/refresh` → `/auth/me`), `login`, `register`, `logout`.
 - `src/lib/api.ts` — API base, in-memory access token, one silent refresh +
   replay on 401, `ApiError`/`errorCode` helpers.
+- `src/lib/projects.ts` — project API client/types, `formatWhen`, and the
+  `ytmm:guest-draft` localStorage helpers.
 - `src/pages/Auth/` — combined login/register page with the mascot, plus
   `OAuthButtons`, which asks `/auth/providers` and only enables providers the
   server can handle.
-- `src/pages/Dashboard/` — sidebar shell; project/draft/share sections are
-  placeholders until later phases.
+- `src/pages/Dashboard/` — real overview (stats + recent), saved projects and
+  drafts lists with search, rename, duplicate, delete and promote; the share
+  section remains a phase 3 placeholder.
 - `src/pages/Workspace/index.tsx` — player, transcript loading, update loop,
   session recovery, race-condition guards (`loadTokenRef`, `sessionIdRef`,
-  `isUpdatingRef`), node editor panel (`patchNode`, `saveEditor`, `togglePin`).
+  `isUpdatingRef`), node editor panel (`patchNode`, `saveEditor`, `togglePin`),
+  plus autosave, the save dialog and the guest draft banner.
 - `src/lib/youtube.ts` — pure YouTube helpers used by the workspace and tests:
   URL/ID parsing (`watch`, `youtu.be`, `shorts`, `embed`, `live`, bare ID),
   transcript error codes → Vietnamese copy, and player error codes
@@ -285,7 +361,11 @@ gzipped).
   (`tests/test_auth.py`, `tests/test_oauth.py`) run on an in-memory SQLite
   database injected via `app.dependency_overrides[get_db]`; the OAuth tests stub
   the provider HTTP calls, so no credentials or network are needed.
-- Frontend: `vitest` covers the pure tree helpers.
+  `tests/test_projects.py` covers CRUD, ownership isolation, draft/saved
+  separation, search, autosave reuse, cache isolation and reopening without
+  YouTube.
+- Frontend: `vitest` covers the pure tree helpers, YouTube URL/error helpers and
+  `formatWhen`.
 - CI runs lint + tests + production build on every push/PR to `main`/`develop`.
 
 ## Operations
@@ -307,6 +387,8 @@ gzipped).
 
 ## Known scaling limits
 
-Single-process session store ⇒ one uvicorn worker. Horizontal scaling needs
-Redis for sessions/pub-sub and a database for saved maps; that work is planned
-together with accounts and collaboration.
+Single-process session store ⇒ one uvicorn worker. Accounts and saved projects
+live in PostgreSQL, but the live session, SSE buffer and guest cache are still
+per process; horizontal scaling needs Redis for sessions/pub-sub. Sharing
+(phase 3) will add public read routes on top of the existing `visibility` and
+`share_slug` columns.

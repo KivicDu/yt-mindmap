@@ -13,6 +13,14 @@ export const router = createBrowserRouter([
     children: [
       { index: true, element: <Home /> },
       { path: 'app', element: <Workspace /> },
+      {
+        path: 'app/:projectId',
+        element: (
+          <ProtectedRoute>
+            <Workspace />
+          </ProtectedRoute>
+        ),
+      },
       { path: 'login', element: <AuthPage /> },
       { path: 'register', element: <AuthPage /> },
       {

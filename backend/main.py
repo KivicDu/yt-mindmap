@@ -13,14 +13,21 @@ import uuid
 from typing import Any
 
 import httpx
-from fastapi import FastAPI, HTTPException
+from fastapi import Depends, FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
+from sqlalchemy.orm import Session
 from sse_starlette.sse import EventSourceResponse
 from starlette.concurrency import run_in_threadpool
 
 from ai_engine import ai_engine
+from app.api.deps import get_current_user, get_optional_user
 from app.api.router import api_router
+from app.db.base import utcnow
+from app.db.session import get_db
+from app.models.user import User
+from app.schemas.project import AutosaveRequest
+from app.services import projects as project_service
 from chunking import chunk_time_range, is_seek_backward, select_chunk
 from node_tree import (
     markdown_to_tree,
@@ -71,6 +78,8 @@ class TranscriptRequest(BaseModel):
     initial_markdown: str | None = None
     resume_at: float | None = None
     title: str | None = None
+    # Reopen a saved project: captions and nodes come from the database.
+    project_id: str | None = None
 
 class UpdateMapRequest(BaseModel):
     video_id: str
@@ -149,6 +158,10 @@ load_video_cache()
 def cache_video_map(video_id: str | None, session: dict[str, Any]) -> None:
     if not video_id:
         return
+    # Signed-in maps live in the database, per user. Writing them to the shared
+    # cache would leak one account's notes and pins into another account's map.
+    if session.get("owner_id"):
+        return
     video_cache[video_id] = {
         # The tree is the source of truth; markdown is kept so an older
         # frontend or a downgraded backend can still read the cache.
@@ -194,8 +207,13 @@ def create_session(
     resume_at: float | None = None,
     initial_nodes: list[dict[str, Any]] | None = None,
     title: str | None = None,
+    language: str | None = None,
+    initial_summary: str | None = None,
+    owner_id: str | None = None,
+    project_id: str | None = None,
+    use_cache: bool = True,
 ) -> tuple:
-    cached = video_cache.get(video_id) if video_id else None
+    cached = video_cache.get(video_id) if (video_id and use_cache) else None
 
     nodes = restore_nodes(initial_nodes, initial_markdown, cached)
     markdown = tree_to_markdown(nodes) if nodes else ""
@@ -207,17 +225,28 @@ def create_session(
     else:
         consumed_until = 0.0
 
+    if initial_summary is not None:
+        summary_so_far = initial_summary
+    elif cached:
+        summary_so_far = cached.get("summary_so_far", "")
+    else:
+        summary_so_far = ""
+
     session_id = str(uuid.uuid4())
     sessions[session_id] = {
         "video_id": video_id,
         "title": title,
+        "language": language,
         "transcript": transcript,
         "consumed_until": consumed_until,
-        "summary_so_far": cached.get("summary_so_far", "") if cached else "",
+        "summary_so_far": summary_so_far,
         "nodes": nodes,
         "markdown": markdown,
         "events": [],
         "last_active": time.time(),
+        # Present only for signed-in sessions; autosave and resume use them.
+        "owner_id": owner_id,
+        "project_id": project_id,
     }
     return session_id, bool(cached)
 
@@ -333,8 +362,75 @@ async def get_video_info(url: str):
 
 
 @app.post("/transcript")
-async def get_transcript(request: TranscriptRequest):
+async def get_transcript(
+    request: TranscriptRequest,
+    user: User | None = Depends(get_optional_user),
+    db: Session = Depends(get_db),
+):
     cleanup_sessions()
+
+    if request.project_id:
+        # Reopening a saved map: the row is authoritative for captions, nodes,
+        # notes and the AI pointer, so nothing is re-fetched from YouTube unless
+        # the stored transcript is empty.
+        if user is None:
+            raise HTTPException(
+                status_code=401,
+                detail={
+                    "code": "not_authenticated",
+                    "message": "Sign in to open a saved project.",
+                },
+            )
+        project = project_service.get_owned(db, user.id, request.project_id)
+        if project is None:
+            raise HTTPException(
+                status_code=404,
+                detail={
+                    "code": "project_not_found",
+                    "message": "That project does not exist.",
+                },
+            )
+
+        transcript = project.transcript or []
+        language = project.transcript_language
+        vid = project.video_id
+        title = project.title
+
+        if not transcript and vid:
+            try:
+                transcript, language = await run_in_threadpool(
+                    fetch_transcript, f"https://www.youtube.com/watch?v={vid}"
+                )
+            except TranscriptError as e:
+                raise HTTPException(
+                    status_code=e.status_code,
+                    detail={"code": e.code, "message": e.message},
+                ) from e
+
+        session_id, cached = create_session(
+            vid,
+            transcript,
+            initial_nodes=project.nodes or [],
+            resume_at=project.consumed_until,
+            title=title,
+            language=language,
+            initial_summary=project.summary_so_far,
+            owner_id=user.id,
+            project_id=project.id,
+            use_cache=False,
+        )
+        project.last_opened_at = utcnow()
+        db.commit()
+
+        return {
+            "transcript": transcript,
+            "video_id": vid,
+            "title": title,
+            "language": language,
+            "cached": cached,
+            **session_payload(session_id),
+        }
+
     if request.file_content:
         try:
             transcript = parse_vtt_or_srt(request.file_content)
@@ -351,6 +447,7 @@ async def get_transcript(request: TranscriptRequest):
                 resume_at=request.resume_at,
                 initial_nodes=request.initial_nodes,
                 title=title,
+                language=None,
             )
             return {
                 "transcript": transcript,
@@ -405,6 +502,7 @@ async def get_transcript(request: TranscriptRequest):
                 resume_at=request.resume_at,
                 initial_nodes=request.initial_nodes,
                 title=title,
+                language=language,
             )
             return {
                 "transcript": transcript,
@@ -620,3 +718,44 @@ async def edit_node(request: NodeEditRequest):
         "nodes": session["nodes"],
         "markdown": session["markdown"],
     }
+
+@app.post("/api/projects/autosave")
+def autosave_project(
+    request: AutosaveRequest,
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """Persist the live session as a draft (or update an existing project).
+
+    Lives here, not in the projects router, because the in-memory session is
+    owned by this module. The browser sends only ids, never the transcript.
+    """
+
+    session = sessions.get(request.session_id)
+    if session is None:
+        raise HTTPException(
+            status_code=404,
+            detail={
+                "code": "session_lost",
+                "message": "The working session expired before it could be saved.",
+            },
+        )
+
+    owner = session.get("owner_id")
+    if owner and owner != user.id:
+        raise HTTPException(status_code=403, detail="session_owned_by_someone_else")
+
+    # A guest map becomes the signed-in user's project on the first autosave.
+    session["owner_id"] = user.id
+
+    project = project_service.autosave(
+        db,
+        user.id,
+        session,
+        project_id=request.project_id,
+        title=request.title,
+        is_draft=request.is_draft,
+    )
+    if project is None:
+        raise HTTPException(status_code=404, detail="project_not_found")
+    return project_service.summary(project)

@@ -1,23 +1,37 @@
-import { useState } from 'react'
+import { useCallback, useEffect, useState } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
 import ThemeToggle from '../../components/ThemeToggle'
 import { useAuth } from '../../context/AuthContext'
+import {
+  deleteProject,
+  duplicateProject,
+  fetchProjectStats,
+  formatWhen,
+  listProjects,
+  updateProject,
+  type ProjectStats,
+  type ProjectSummary,
+} from '../../lib/projects'
 import './Dashboard.css'
 
 type SectionID = 'overview' | 'projects' | 'drafts' | 'join' | 'settings'
 
-const sections: { id: SectionID; label: string; soon?: string }[] = [
+const sections: { id: SectionID; label: string }[] = [
   { id: 'overview', label: 'Tổng quan' },
-  { id: 'projects', label: 'Dự án của tôi', soon: 'Giai đoạn 2' },
-  { id: 'drafts', label: 'Bản nháp', soon: 'Giai đoạn 2' },
-  { id: 'join', label: 'Tham gia dự án', soon: 'Giai đoạn 3' },
+  { id: 'projects', label: 'Dự án của tôi' },
+  { id: 'drafts', label: 'Bản nháp' },
+  { id: 'join', label: 'Tham gia dự án' },
   { id: 'settings', label: 'Cài đặt' },
 ]
+
+const API_MESSAGE = 'Không tải được dữ liệu. Kiểm tra kết nối rồi thử lại.'
 
 function Dashboard() {
   const { user, logout } = useAuth()
   const navigate = useNavigate()
   const [active, setActive] = useState<SectionID>('overview')
+  // Bumped after every mutation so the active section refetches.
+  const [revision, setRevision] = useState(0)
 
   const handleLogout = async () => {
     // Leave the guarded route first: clearing the session while /dashboard is
@@ -25,6 +39,8 @@ function Dashboard() {
     navigate('/', { replace: true })
     await logout()
   }
+
+  const refresh = useCallback(() => setRevision((value) => value + 1), [])
 
   const displayName = user?.display_name || 'bạn'
   const initial = displayName.trim().charAt(0).toUpperCase()
@@ -44,7 +60,6 @@ function Dashboard() {
               onClick={() => setActive(section.id)}
             >
               <span>{section.label}</span>
-              {section.soon && <span className="dash-soon">{section.soon}</span>}
             </button>
           ))}
         </nav>
@@ -72,19 +87,14 @@ function Dashboard() {
         </header>
 
         <div className="dash-content">
-          {active === 'overview' && <Overview displayName={displayName} />}
+          {active === 'overview' && (
+            <Overview displayName={displayName} revision={revision} onOpen={setActive} />
+          )}
           {active === 'projects' && (
-            <EmptyState
-              title="Chưa có dự án nào được lưu"
-              body="Việc lưu sơ đồ vào tài khoản sẽ có ở Giai đoạn 2. Hiện tại bạn vẫn tạo và chỉnh sửa mindmap trực tiếp trong workspace."
-              cta={<Link className="dash-cta" to="/app">Mở workspace</Link>}
-            />
+            <ProjectList key="projects" draft={false} revision={revision} onChanged={refresh} />
           )}
           {active === 'drafts' && (
-            <EmptyState
-              title="Bản nháp sẽ xuất hiện ở đây"
-              body="Khi bạn rời workspace giữa chừng, sơ đồ đang làm sẽ được lưu tự động thành bản nháp — tính năng này thuộc Giai đoạn 2."
-            />
+            <ProjectList key="drafts" draft revision={revision} onChanged={refresh} />
           )}
           {active === 'join' && <JoinSection />}
           {active === 'settings' && <SettingsSection />}
@@ -94,50 +104,358 @@ function Dashboard() {
   )
 }
 
-function Overview({ displayName }: { displayName: string }) {
+/* ---------------------------------------------------------------- */
+/* Overview                                                          */
+/* ---------------------------------------------------------------- */
+
+function Overview({
+  displayName,
+  revision,
+  onOpen,
+}: {
+  displayName: string
+  revision: number
+  onOpen: (section: SectionID) => void
+}) {
+  const [stats, setStats] = useState<ProjectStats | null>(null)
+  const [error, setError] = useState('')
+
+  useEffect(() => {
+    let cancelled = false
+    fetchProjectStats()
+      .then((data) => {
+        if (cancelled) return
+        setStats(data)
+        setError('')
+      })
+      .catch(() => {
+        if (!cancelled) setError(API_MESSAGE)
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [revision])
+
   return (
     <>
       <section className="dash-intro">
         <h2>Xin chào, {displayName}</h2>
         <p>
-          Đây là nơi bạn quản lý các sơ đồ tư duy đã lưu. Ở giai đoạn này, tài khoản mới chỉ dùng để đăng nhập —
-          phần dự án và chia sẻ sẽ được bật ở các giai đoạn tiếp theo.
+          Sơ đồ được lưu tự động vào tài khoản sau khi bạn ngừng chỉnh sửa ít giây. Mở lại
+          bất kỳ dự án nào để tiếp tục đúng chỗ đang học — phụ đề, ghi chú và ghim vẫn còn nguyên.
         </p>
         <div className="dash-actions">
           <Link className="dash-cta" to="/app">Tạo mindmap mới</Link>
+          <button
+            className="dash-cta dash-cta--ghost"
+            type="button"
+            onClick={() => onOpen('projects')}
+          >
+            Xem dự án
+          </button>
         </div>
       </section>
+
+      {error && <p className="dash-error" role="alert">{error}</p>}
 
       <section className="dash-stats" aria-label="Thống kê">
         <article className="dash-stat">
           <span className="dash-stat-label">Dự án đã lưu</span>
-          <strong>0</strong>
-          <span className="dash-stat-note">Giai đoạn 2</span>
+          <strong>{stats ? stats.saved : '—'}</strong>
+          <span className="dash-stat-note">Sơ đồ bạn chủ động đặt tên</span>
         </article>
         <article className="dash-stat">
           <span className="dash-stat-label">Bản nháp</span>
-          <strong>0</strong>
-          <span className="dash-stat-note">Giai đoạn 2</span>
+          <strong>{stats ? stats.drafts : '—'}</strong>
+          <span className="dash-stat-note">Tự động lưu, chưa đặt tên</span>
         </article>
         <article className="dash-stat">
-          <span className="dash-stat-label">Dự án được chia sẻ</span>
-          <strong>0</strong>
-          <span className="dash-stat-note">Giai đoạn 3</span>
+          <span className="dash-stat-label">Được chia sẻ</span>
+          <strong>{stats ? stats.shared : '—'}</strong>
+          <span className="dash-stat-note">Chia sẻ sẽ có ở giai đoạn 3</span>
         </article>
       </section>
 
       <section className="dash-panel">
         <header className="dash-panel-header">
           <h2>Gần đây</h2>
-          <span className="dash-panel-note">Chưa có hoạt động</span>
+          {stats && stats.recent.length > 0 && (
+            <button className="dash-panel-link" type="button" onClick={() => onOpen('projects')}>
+              Xem tất cả
+            </button>
+          )}
         </header>
-        <p className="dash-empty-inline">
-          Những sơ đồ bạn mở gần nhất sẽ xuất hiện ở đây sau khi tính năng lưu dự án hoàn thành.
-        </p>
+        {stats ? (
+          stats.recent.length > 0 ? (
+            <ul className="dash-list">
+              {stats.recent.map((project) => (
+                <li key={project.id} className="dash-item">
+                  <Link className="dash-item__main" to={`/app/${project.id}`}>
+                    <span className="dash-item__title">{project.title}</span>
+                    <span className="dash-item__meta">
+                      {project.node_count} nhánh · cập nhật {formatWhen(project.updated_at)}
+                    </span>
+                  </Link>
+                </li>
+              ))}
+            </ul>
+          ) : (
+            <p className="dash-empty-inline">
+              Chưa có dự án nào. Mở workspace và bấm “Lưu dự án”, hoặc để bản nháp tự lưu.
+            </p>
+          )
+        ) : (
+          !error && <p className="dash-empty-inline">Đang tải…</p>
+        )}
       </section>
     </>
   )
 }
+
+/* ---------------------------------------------------------------- */
+/* Projects / drafts                                                 */
+/* ---------------------------------------------------------------- */
+
+function ProjectList({
+  draft,
+  revision,
+  onChanged,
+}: {
+  draft: boolean
+  revision: number
+  onChanged: () => void
+}) {
+  const [items, setItems] = useState<ProjectSummary[]>([])
+  const [query, setQuery] = useState('')
+  const [loading, setLoading] = useState(true)
+  const [error, setError] = useState('')
+  const [reload, setReload] = useState(0)
+
+  useEffect(() => {
+    let cancelled = false
+    const timer = setTimeout(() => {
+      setLoading(true)
+      listProjects({ draft, q: query })
+        .then((data) => {
+          if (cancelled) return
+          setItems(data.items)
+          setError('')
+        })
+        .catch(() => {
+          if (!cancelled) setError(API_MESSAGE)
+        })
+        .finally(() => {
+          if (!cancelled) setLoading(false)
+        })
+    }, 250)
+    return () => {
+      cancelled = true
+      clearTimeout(timer)
+    }
+  }, [draft, query, revision, reload])
+
+  const changed = () => {
+    setReload((value) => value + 1)
+    onChanged()
+  }
+
+  const handleOpen = draft ? 'Tiếp tục' : 'Mở'
+  const heading = draft ? 'Bản nháp tự động' : 'Dự án đã lưu'
+
+  return (
+    <>
+      <section className="dash-panel">
+        <header className="dash-panel-header">
+          <h2>{heading}</h2>
+          <span className="dash-panel-note">
+            {loading ? 'Đang tải…' : `${items.length} mục`}
+          </span>
+        </header>
+
+        <div className="dash-toolbar">
+          <input
+            className="dash-search"
+            type="search"
+            value={query}
+            placeholder="Tìm theo tên hoặc mã video"
+            aria-label="Tìm dự án"
+            onChange={(event) => setQuery(event.target.value)}
+          />
+          <Link className="dash-cta dash-cta--ghost" to="/app">
+            {draft ? 'Tạo bản nháp mới' : 'Tạo dự án mới'}
+          </Link>
+        </div>
+
+        {error && <p className="dash-error" role="alert">{error}</p>}
+
+        {!loading && !error && items.length === 0 ? (
+          <p className="dash-empty-inline">
+            {query
+              ? 'Không tìm thấy dự án nào khớp từ khoá.'
+              : draft
+                ? 'Chưa có bản nháp. Sơ đồ đang làm trong workspace sẽ tự lưu thành bản nháp.'
+                : 'Chưa có dự án nào. Mở workspace, tạo sơ đồ rồi bấm “Lưu dự án”.'}
+          </p>
+        ) : (
+          <ul className="dash-list">
+            {items.map((project) => (
+              <ProjectRow
+                key={project.id}
+                project={project}
+                openLabel={handleOpen}
+                onChanged={changed}
+              />
+            ))}
+          </ul>
+        )}
+      </section>
+    </>
+  )
+}
+
+function ProjectRow({
+  project,
+  openLabel,
+  onChanged,
+}: {
+  project: ProjectSummary
+  openLabel: string
+  onChanged: () => void
+}) {
+  const [editing, setEditing] = useState(false)
+  const [title, setTitle] = useState(project.title)
+  const [confirming, setConfirming] = useState(false)
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState('')
+
+  const run = async (action: () => Promise<unknown>) => {
+    setBusy(true)
+    setError('')
+    try {
+      await action()
+      onChanged()
+      return true
+    } catch {
+      setError('Thao tác thất bại')
+      return false
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  const rename = async () => {
+    const next = title.trim()
+    if (!next || next === project.title) {
+      setEditing(false)
+      return
+    }
+    if (await run(() => updateProject(project.id, { title: next }))) setEditing(false)
+  }
+
+  const promote = async () => {
+    await run(() => updateProject(project.id, { is_draft: false }))
+  }
+
+  return (
+    <li className="dash-item">
+      <div className="dash-item__main">
+        {editing ? (
+          <form
+            className="dash-item__rename"
+            onSubmit={(event) => {
+              event.preventDefault()
+              void rename()
+            }}
+          >
+            <input
+              value={title}
+              maxLength={200}
+              autoFocus
+              aria-label="Tên dự án"
+              onChange={(event) => setTitle(event.target.value)}
+            />
+            <button className="dash-mini" type="submit" disabled={busy}>Lưu</button>
+            <button
+              className="dash-mini"
+              type="button"
+              onClick={() => {
+                setTitle(project.title)
+                setEditing(false)
+              }}
+            >
+              Huỷ
+            </button>
+          </form>
+        ) : (
+          <Link className="dash-item__link" to={`/app/${project.id}`}>
+            <span className="dash-item__title">{project.title}</span>
+            <span className="dash-item__meta">
+              {project.video_id ? `${project.video_id} · ` : ''}
+              {project.node_count} nhánh · cập nhật {formatWhen(project.updated_at)}
+              {project.is_draft ? ' · bản nháp' : ''}
+            </span>
+          </Link>
+        )}
+        {error && <span className="dash-item__error">{error}</span>}
+      </div>
+
+      <div className="dash-item__actions">
+        {confirming ? (
+          <>
+            <span className="dash-item__confirm">Xoá dự án này?</span>
+            <button
+              className="dash-mini dash-mini--danger"
+              type="button"
+              disabled={busy}
+              onClick={async () => {
+                if (await run(() => deleteProject(project.id))) setConfirming(false)
+              }}
+            >
+              Xoá
+            </button>
+            <button className="dash-mini" type="button" onClick={() => setConfirming(false)}>
+              Huỷ
+            </button>
+          </>
+        ) : (
+          <>
+            <Link className="dash-mini dash-mini--link" to={`/app/${project.id}`}>
+              {openLabel}
+            </Link>
+            <button className="dash-mini" type="button" onClick={() => setEditing(true)}>
+              Đổi tên
+            </button>
+            {project.is_draft ? (
+              <button className="dash-mini" type="button" disabled={busy} onClick={() => void promote()}>
+                Lưu thành dự án
+              </button>
+            ) : (
+              <button
+                className="dash-mini"
+                type="button"
+                disabled={busy}
+                onClick={() => void run(() => duplicateProject(project.id))}
+              >
+                Nhân bản
+              </button>
+            )}
+            <button
+              className="dash-mini dash-mini--danger"
+              type="button"
+              onClick={() => setConfirming(true)}
+            >
+              Xoá
+            </button>
+          </>
+        )}
+      </div>
+    </li>
+  )
+}
+
+/* ---------------------------------------------------------------- */
+/* Placeholders and account                                          */
+/* ---------------------------------------------------------------- */
 
 function JoinSection() {
   return (
@@ -190,21 +508,15 @@ function SettingsSection() {
           <dt>Xác minh email</dt>
           <dd>{user?.email_verified ? 'Đã xác minh' : 'Chưa xác minh (sẽ bổ sung ở giai đoạn cuối)'}</dd>
         </div>
+        <div>
+          <dt>Lưu trữ</dt>
+          <dd>Dự án và bản nháp được lưu trong tài khoản, không phụ thuộc trình duyệt</dd>
+        </div>
       </dl>
 
       <button className="dash-cta dash-cta--ghost" type="button" onClick={() => void logout()}>
         Đăng xuất
       </button>
-    </section>
-  )
-}
-
-function EmptyState({ title, body, cta }: { title: string; body: string; cta?: React.ReactNode }) {
-  return (
-    <section className="dash-panel dash-panel--empty">
-      <h2>{title}</h2>
-      <p>{body}</p>
-      {cta}
     </section>
   )
 }

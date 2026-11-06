@@ -1,6 +1,6 @@
 import { lazy, Suspense, useState, useRef, useEffect, useCallback } from 'react'
 import type { ChangeEvent } from 'react'
-import { Link } from 'react-router-dom'
+import { Link, useNavigate, useParams } from 'react-router-dom'
 import YouTube from 'react-youtube'
 import type { YouTubeProps } from 'react-youtube'
 import './Workspace.css'
@@ -14,6 +14,15 @@ import {
   normalizeTree,
   type MapNode,
 } from '../../lib/mindmapTree'
+import {
+  autosaveProject,
+  clearLocalDraft,
+  readLocalDraft,
+  updateProject,
+  writeLocalDraft,
+  type LocalDraft,
+} from '../../lib/projects'
+import { getAccessToken, refreshSession } from '../../lib/api'
 import {
   extractVideoId,
   isCaptionOnlyProblem,
@@ -62,9 +71,12 @@ class TranscriptRequestError extends Error {
 const API_BASE = import.meta.env.VITE_API_BASE || 'http://localhost:8001'
 const DEFAULT_TITLE = 'Lecture Mind Map'
 const AUTO_UPDATE_SECONDS = 15
+const AUTOSAVE_SECONDS = 2.5
 
 function App() {
   const { status: authStatus } = useAuth()
+  const { projectId: routeProjectId } = useParams<{ projectId?: string }>()
+  const navigate = useNavigate()
   const [url, setUrl] = useState('')
   const [urlError, setUrlError] = useState('')
   const [videoId, setVideoId] = useState<string | null>(null)
@@ -85,6 +97,15 @@ function App() {
   const [isLoading, setIsLoading] = useState(false)
   const [editor, setEditor] = useState<NodeDraft | null>(null)
   const [isSaving, setIsSaving] = useState(false)
+  const [mapVersion, setMapVersion] = useState(0)
+  const [consumedUntil, setConsumedUntil] = useState(0)
+  const [projectId, setProjectId] = useState<string | null>(routeProjectId ?? null)
+  const [isDraft, setIsDraft] = useState(false)
+  const [saveState, setSaveState] = useState<'idle' | 'saving' | 'saved' | 'error'>('idle')
+  const [savedAt, setSavedAt] = useState<Date | null>(null)
+  const [saveDialog, setSaveDialog] = useState(false)
+  const [draftTitle, setDraftTitle] = useState('')
+  const [pendingDraft, setPendingDraft] = useState<LocalDraft | null>(null)
 
   const urlInputRef = useRef<HTMLInputElement>(null)
   const fileInputRef = useRef<HTMLInputElement>(null)
@@ -98,6 +119,8 @@ function App() {
   const requestUpdateRef = useRef<(atTime?: number) => Promise<void>>(async () => {})
   const nodesRef = useRef<MapNode[]>([])
   const titleRef = useRef<string>(DEFAULT_TITLE)
+  const projectIdRef = useRef<string | null>(routeProjectId ?? null)
+  const saveRef = useRef<() => Promise<boolean>>(async () => false)
 
   const setStatus = useCallback((text: string, kind: StatusKind = 'idle') => {
     setStatusState({ kind, text })
@@ -107,11 +130,90 @@ function App() {
     sessionIdRef.current = sessionId
   }, [sessionId])
 
+  /** Persist the live session. Returns false when the API refused the write. */
+  const saveNow = useCallback(
+    async (options?: { title?: string; promote?: boolean }): Promise<boolean> => {
+      const session = sessionIdRef.current
+      if (!session || authStatus !== 'authenticated') return false
+      setSaveState('saving')
+      try {
+        const summary = await autosaveProject({
+          session_id: session,
+          project_id: projectIdRef.current,
+        })
+        projectIdRef.current = summary.id
+        setProjectId(summary.id)
+        setIsDraft(summary.is_draft)
+
+        if (options?.promote || options?.title) {
+          const title = options.title?.trim()
+          const saved = await updateProject(summary.id, {
+            ...(title ? { title } : {}),
+            ...(options.promote ? { is_draft: false } : {}),
+          })
+          setIsDraft(saved.is_draft)
+          titleRef.current = saved.title
+          setMapTitle(saved.title)
+        }
+
+        setSavedAt(new Date())
+        setSaveState('saved')
+        return true
+      } catch (error) {
+        console.warn('[autosave]', error)
+        setSaveState('error')
+        return false
+      }
+    },
+    [authStatus],
+  )
+
+  useEffect(() => {
+    saveRef.current = saveNow
+  }, [saveNow])
+
+  // Debounced autosave after the AI adds a branch or the pointer moves.
+  useEffect(() => {
+    if (authStatus !== 'authenticated' || !sessionId) return
+    const timer = setTimeout(() => {
+      void saveRef.current()
+    }, AUTOSAVE_SECONDS * 1000)
+    return () => clearTimeout(timer)
+  }, [authStatus, sessionId, mapVersion, consumedUntil])
+
+  // Guests get a browser-only draft so a reload does not lose the map.
+  useEffect(() => {
+    if (authStatus !== 'anonymous' || !videoId || mapVersion === 0) return
+    const timer = setTimeout(() => {
+      writeLocalDraft({
+        videoId,
+        url: watchUrl(videoId),
+        title: mapTitle,
+        nodes: nodesRef.current,
+        consumedUntil,
+        language: transcriptLang,
+        savedAt: new Date().toISOString(),
+      })
+      setSavedAt(new Date())
+      setSaveState('saved')
+    }, 900)
+    return () => clearTimeout(timer)
+  }, [authStatus, videoId, mapVersion, consumedUntil, mapTitle, transcriptLang])
+
+  // Signing in moves the map to the account; the browser copy is then stale.
+  useEffect(() => {
+    if (authStatus === 'authenticated') {
+      clearLocalDraft()
+      setPendingDraft(null)
+    }
+  }, [authStatus])
+
   /** Single place that swaps the tree, so the counter can never drift. */
   const applyNodes = useCallback((nodes: MapNode[], focusNew: boolean) => {
     const normalized = normalizeTree(nodes)
     nodesRef.current = normalized
     setNodeCount(countNodes(normalized))
+    setMapVersion((version) => version + 1)
     mindmapRef.current?.updateTree(titleRef.current, normalized, { focusNew })
   }, [])
 
@@ -135,6 +237,7 @@ function App() {
     }
 
     lastTriggerRef.current = Number(data.consumed_until || 0)
+    setConsumedUntil(Number(data.consumed_until || 0))
 
     const suffix = data.cached ? ' — khôi phục từ bộ nhớ đệm' : ''
     setStatus(`${label}${suffix} · ${data.transcript?.length || 0} mục phụ đề`, 'ok')
@@ -143,7 +246,9 @@ function App() {
   const recreateSession = useCallback(async () => {
     if (!videoId) return
     try {
-      const data = await fetchTranscript({ url })
+      const data = await fetchTranscript(
+        projectIdRef.current ? { projectId: projectIdRef.current } : { url },
+      )
       applyLoadResult(data, videoId, 'Đã khôi phục phiên làm việc')
     } catch (e: any) {
       setStatus(`Không khôi phục được phiên: ${e.message}`, 'error')
@@ -151,17 +256,39 @@ function App() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [url, videoId, setStatus])
 
-  const fetchTranscript = async (payload: { url?: string; fileContent?: string }) => {
+  const fetchTranscript = async (payload: {
+    url?: string
+    fileContent?: string
+    projectId?: string
+    initialNodes?: MapNode[]
+    resumeAt?: number
+    title?: string
+  }) => {
     const body: any = {}
     if (payload.url) body.url = payload.url
     if (payload.fileContent) body.file_content = payload.fileContent
-    if (sessionIdRef.current) body.initial_session_id = sessionIdRef.current
+    if (payload.projectId) body.project_id = payload.projectId
+    if (payload.initialNodes) body.initial_nodes = payload.initialNodes
+    if (payload.resumeAt !== undefined) body.resume_at = payload.resumeAt
+    if (payload.title) body.title = payload.title
 
-    const response = await fetch(`${API_BASE}/transcript`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(body),
-    })
+    const send = () => {
+      const headers: Record<string, string> = { 'Content-Type': 'application/json' }
+      // Saved projects are owner-only, so reopening one needs the access token.
+      // Guests have none and the endpoint still works for them.
+      const token = getAccessToken()
+      if (token) headers.Authorization = `Bearer ${token}`
+      return fetch(`${API_BASE}/transcript`, {
+        method: 'POST',
+        headers,
+        body: JSON.stringify(body),
+      })
+    }
+
+    let response = await send()
+    if (response.status === 401 && getAccessToken()) {
+      if (await refreshSession()) response = await send()
+    }
 
     if (!response.ok) {
       const body = await response.json().catch(() => null)
@@ -193,6 +320,13 @@ function App() {
     setTranscriptLang(null)
     setSessionId(null)
     sessionIdRef.current = null
+    setConsumedUntil(0)
+    setProjectId(null)
+    projectIdRef.current = null
+    setIsDraft(false)
+    setSavedAt(null)
+    setSaveState('idle')
+    if (routeProjectId) navigate('/app', { replace: true })
     titleRef.current = DEFAULT_TITLE
     setMapTitle(DEFAULT_TITLE)
     applyNodes([], false)
@@ -283,6 +417,97 @@ function App() {
     }
   }
 
+  const restoreDraft = async () => {
+    const draft = pendingDraft
+    if (!draft) return
+    const token = ++loadTokenRef.current
+    setIsLoading(true)
+    setUrlError('')
+    setUrl(draft.url)
+    setStatus('Đang khôi phục bản nháp…', 'busy')
+    try {
+      const data = await fetchTranscript({
+        url: draft.url,
+        initialNodes: draft.nodes,
+        resumeAt: draft.consumedUntil,
+        title: draft.title,
+      })
+      if (token !== loadTokenRef.current) return
+      const id = draft.videoId || extractVideoId(draft.url)
+      if (id) setVideoId(id)
+      applyLoadResult(data, id || '', 'Đã khôi phục bản nháp trong trình duyệt')
+      setPendingDraft(null)
+    } catch (error: unknown) {
+      if (token === loadTokenRef.current) {
+        const code = error instanceof TranscriptRequestError ? error.code : undefined
+        setStatus(transcriptStatusText(code), 'error')
+        setUrlError(transcriptErrorMessage(code))
+      }
+    } finally {
+      if (token === loadTokenRef.current) setIsLoading(false)
+    }
+  }
+
+  const discardDraft = () => {
+    clearLocalDraft()
+    setPendingDraft(null)
+  }
+
+  const openSaveDialog = () => {
+    setDraftTitle(mapTitle)
+    setSaveDialog(true)
+  }
+
+  const confirmSave = async () => {
+    const saved = await saveNow({ title: draftTitle, promote: true })
+    if (saved) {
+      setSaveDialog(false)
+      setStatus('Đã lưu dự án vào tài khoản', 'ok')
+    } else {
+      setStatus('Chưa lưu được dự án — kiểm tra kết nối rồi thử lại', 'error')
+    }
+  }
+
+  useEffect(() => {
+    if (routeProjectId) return
+    setPendingDraft(readLocalDraft())
+  }, [routeProjectId])
+
+  // Open a saved project from /app/:id. The row already holds the captions,
+  // nodes and AI pointer, so no YouTube request is needed.
+  useEffect(() => {
+    if (!routeProjectId) return
+    const token = ++loadTokenRef.current
+    setIsLoading(true)
+    setUrlError('')
+    setStatus('Đang mở dự án…', 'busy')
+    setProjectId(routeProjectId)
+    projectIdRef.current = routeProjectId
+    setIsDraft(false)
+    fetchTranscript({ projectId: routeProjectId })
+      .then((data) => {
+        if (token !== loadTokenRef.current) return
+        applyLoadResult(data, data.video_id || '', 'Đã mở dự án')
+        setVideoId(data.video_id || null)
+        setUrl(data.video_id ? watchUrl(data.video_id) : '')
+        setSavedAt(new Date())
+      })
+      .catch((error: unknown) => {
+        if (token !== loadTokenRef.current) return
+        const code = error instanceof TranscriptRequestError ? error.code : undefined
+        setStatus('Không mở được dự án', 'error')
+        setUrlError(
+          code === 'project_not_found'
+            ? 'Dự án không tồn tại hoặc không thuộc tài khoản này.'
+            : 'Không mở được dự án đã lưu.',
+        )
+      })
+      .finally(() => {
+        if (token === loadTokenRef.current) setIsLoading(false)
+      })
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [routeProjectId])
+
   const requestUpdate = async (atTime?: number) => {
     if (!videoId || isUpdatingRef.current) return
     const time = atTime ?? currentTimeRef.current
@@ -323,6 +548,7 @@ function App() {
 
       if (typeof data.consumed_until === 'number') {
         lastTriggerRef.current = data.consumed_until
+        setConsumedUntil(data.consumed_until)
       }
     } catch (e: any) {
       setStatus(`Không cập nhật được: ${e.message}`, 'error')
@@ -571,6 +797,35 @@ function App() {
           </form>
 
           <div className="app-topbar__actions">
+            {authStatus === 'authenticated' ? (
+              sessionId && (isDraft || !projectId) ? (
+                <button
+                  className="btn btn--primary btn--sm"
+                  type="button"
+                  onClick={openSaveDialog}
+                  disabled={saveState === 'saving'}
+                >
+                  {saveState === 'saving' ? 'Đang lưu…' : 'Lưu dự án'}
+                </button>
+              ) : sessionId ? (
+                <span
+                  className={`app-save app-save--${saveState}`}
+                  title={savedAt ? `Lưu lúc ${savedAt.toLocaleTimeString('vi-VN')}` : undefined}
+                >
+                  <span className="app-save__dot" aria-hidden="true" />
+                  {saveState === 'saving'
+                    ? 'Đang lưu…'
+                    : saveState === 'error'
+                      ? 'Chưa lưu được'
+                      : 'Đã lưu'}
+                </span>
+              ) : null
+            ) : (
+              <Link className="btn btn--ghost btn--sm" to="/login">
+                Đăng nhập để lưu
+              </Link>
+            )}
+
             <button
               className="btn btn--ghost btn--sm app-topbar__upload"
               type="button"
@@ -614,6 +869,56 @@ function App() {
           <p className="app-topbar__error" id="url-error" role="alert">
             {urlError}
           </p>
+        )}
+
+        {pendingDraft && (
+          <div className="draft-banner" role="status">
+            <span className="draft-banner__text">
+              Có bản nháp trong trình duyệt: <strong>{pendingDraft.title}</strong>
+            </span>
+            <button className="btn btn--ghost btn--sm" type="button" onClick={() => void restoreDraft()}>
+              Khôi phục
+            </button>
+            <button className="btn btn--ghost btn--sm" type="button" onClick={discardDraft}>
+              Bỏ
+            </button>
+          </div>
+        )}
+
+        {saveDialog && (
+          <form
+            className="save-dialog"
+            onSubmit={(event) => {
+              event.preventDefault()
+              void confirmSave()
+            }}
+          >
+            <label className="save-dialog__label" htmlFor="project-title">
+              Tên dự án
+            </label>
+            <input
+              id="project-title"
+              className="save-dialog__input"
+              value={draftTitle}
+              maxLength={200}
+              autoFocus
+              onChange={(event) => setDraftTitle(event.target.value)}
+            />
+            <button
+              className="btn btn--primary btn--sm"
+              type="submit"
+              disabled={!draftTitle.trim() || saveState === 'saving'}
+            >
+              {saveState === 'saving' ? 'Đang lưu…' : 'Lưu'}
+            </button>
+            <button
+              className="btn btn--ghost btn--sm"
+              type="button"
+              onClick={() => setSaveDialog(false)}
+            >
+              Huỷ
+            </button>
+          </form>
         )}
 
         <div className={`app-status app-status--${status.kind}`} role="status" aria-live="polite">
