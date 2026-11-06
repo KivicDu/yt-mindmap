@@ -25,10 +25,13 @@ flowchart LR
 
     GEMINI[(Google Gemini)]
     CAPTIONS[(YouTube captions)]
+    OEMBED[(YouTube oEmbed)]
     CACHE[(backend/data/video_cache.json)]
 
     UI -->|POST /transcript| API
     API --> TR --> CAPTIONS
+    UI -->|GET /video-info| API
+    API --> OEMBED
     API --> ST
     API --> CH
     API --> AI --> GEMINI
@@ -45,6 +48,19 @@ flowchart LR
   and accumulated Markdown all live in the session, so a page reload or a
   second tab cannot corrupt the map.
 - **Gemini only sees new content**, plus a truncated map and a rolling summary.
+- **Captions follow the video's own language.** `transcript.py` asks for the
+  manually created track first and then the original auto-generated track, so a
+  Vietnamese lecture never fails because an English track is missing. An
+  explicit `lang` still takes priority when the caller sends one.
+- **Playback and caption extraction are independent.** `/video-info` probes
+  YouTube's oEmbed endpoint; a non-embeddable video still keeps its player
+  notice and an "open on YouTube" link, and a captionless video still plays.
+  YouTube's own rules (private, deleted, age/region, embedding disabled) cannot
+  be overridden by the app.
+- **Caption failures carry a stable `code`** (`no_transcript`,
+  `transcripts_disabled`, `video_unavailable`, `ip_blocked`, …) inside
+  `detail`, so the UI translates the reason instead of showing the library's
+  stack trace.
 
 ## Live update sequence
 
@@ -228,9 +244,13 @@ immediately loses access.
   server can handle.
 - `src/pages/Dashboard/` — sidebar shell; project/draft/share sections are
   placeholders until later phases.
-- `src/App.tsx` — player, transcript loading, update loop, session recovery,
-  race-condition guards (`loadTokenRef`, `sessionIdRef`, `isUpdatingRef`), node
-  editor panel (`patchNode`, `saveEditor`, `togglePin`).
+- `src/pages/Workspace/index.tsx` — player, transcript loading, update loop,
+  session recovery, race-condition guards (`loadTokenRef`, `sessionIdRef`,
+  `isUpdatingRef`), node editor panel (`patchNode`, `saveEditor`, `togglePin`).
+- `src/lib/youtube.ts` — pure YouTube helpers used by the workspace and tests:
+  URL/ID parsing (`watch`, `youtu.be`, `shorts`, `embed`, `live`, bare ID),
+  transcript error codes → Vietnamese copy, and player error codes
+  (2/5/100/101/150/153) → explanatory notice.
 - `src/components/MindMap.tsx` — markmap lifecycle, renders the tree directly
   (no Markdown parsing), new-node highlight, click-to-seek interception, and
   the selection outline.
@@ -273,6 +293,9 @@ gzipped).
 - `GET /healthz` reports session count, cached videos, the configured model
   (used by Docker's healthcheck), the optional `GEMINI_BASE_URL` and cumulative
   token usage for the process.
+- `GET /video-info?url=` returns `{video_id, title, author_name,
+  thumbnail_url, embeddable, checked, reason}` from oEmbed. `embeddable` is
+  `null` when oEmbed could not be reached (the player is still attempted).
 - `GEMINI_BASE_URL` points the AI path at a mock or proxy instead of Google,
   which is how the AI-driven UI path is tested without spending quota.
 - CORS origins come from `ALLOWED_ORIGINS` (comma separated).

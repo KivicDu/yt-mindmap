@@ -17,6 +17,7 @@ from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from sse_starlette.sse import EventSourceResponse
+from starlette.concurrency import run_in_threadpool
 
 from ai_engine import ai_engine
 from app.api.router import api_router
@@ -30,7 +31,7 @@ from node_tree import (
     update_node,
 )
 from subtitles import parse_vtt_or_srt
-from transcript import extract_video_id, fetch_transcript
+from transcript import TranscriptError, extract_video_id, fetch_transcript
 
 DEFAULT_ALLOWED_ORIGINS = [
     "http://localhost:5173",
@@ -264,6 +265,73 @@ async def _fetch_youtube_title(url: str) -> str | None:
     return None
 
 
+@app.get("/video-info")
+async def get_video_info(url: str):
+    """Check a link without touching captions.
+
+    oEmbed answers 200 for videos the owner allows to be embedded and
+    400/401/403/404 for private, deleted, age-restricted or embed-disabled
+    ones. That is the same decision the player iframe faces, so it lets the
+    page show "open on YouTube" instead of a black frame.
+    """
+
+    video_id = extract_video_id(url)
+    if not video_id:
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "code": "invalid_url",
+                "message": "That is not a YouTube video link.",
+            },
+        )
+
+    canonical = f"https://www.youtube.com/watch?v={video_id}"
+    result: dict[str, Any] = {
+        "video_id": video_id,
+        "title": None,
+        "author_name": None,
+        "thumbnail_url": None,
+        "embeddable": None,
+        "checked": False,
+        "reason": None,
+    }
+
+    try:
+        async with httpx.AsyncClient(timeout=5.0) as client:
+            resp = await client.get(
+                "https://www.youtube.com/oembed",
+                params={"url": canonical, "format": "json"},
+            )
+    except Exception:
+        # A transient network problem is not proof that embedding is blocked;
+        # leave embeddable as None so the player still gets a chance.
+        return result
+
+    result["checked"] = True
+    if resp.status_code == 200:
+        try:
+            data = resp.json()
+        except ValueError:
+            data = {}
+        if isinstance(data, dict):
+            result.update(
+                {
+                    "title": data.get("title"),
+                    "author_name": data.get("author_name"),
+                    "thumbnail_url": data.get("thumbnail_url"),
+                }
+            )
+        result["embeddable"] = True
+        return result
+
+    if resp.status_code in (400, 401, 403, 404):
+        result["embeddable"] = False
+        result["reason"] = "not_embeddable"
+        return result
+
+    return result
+
+
 @app.post("/transcript")
 async def get_transcript(request: TranscriptRequest):
     cleanup_sessions()
@@ -288,19 +356,46 @@ async def get_transcript(request: TranscriptRequest):
                 "transcript": transcript,
                 "video_id": vid,
                 "title": title,
+                "language": None,
                 "cached": cached,
                 **session_payload(session_id),
             }
         except ValueError as e:
-            raise HTTPException(status_code=400, detail=str(e)) from e
+            raise HTTPException(
+                status_code=400,
+                detail={"code": "invalid_subtitle_file", "message": str(e)},
+            ) from e
         except Exception as e:
             raise HTTPException(
-                status_code=400, detail=f"Failed to parse transcript: {str(e)}"
+                status_code=400,
+                detail={
+                    "code": "invalid_subtitle_file",
+                    "message": f"Failed to parse transcript: {str(e)}",
+                },
             ) from e
-    
+
     if request.url:
         try:
-            transcript = fetch_transcript(request.url)
+            # The YouTube client is synchronous; keeping it off the event loop
+            # means one slow video no longer freezes every other request.
+            transcript, language = await run_in_threadpool(
+                fetch_transcript, request.url
+            )
+        except TranscriptError as e:
+            raise HTTPException(
+                status_code=e.status_code,
+                detail={"code": e.code, "message": e.message},
+            ) from e
+        except Exception as e:
+            raise HTTPException(
+                status_code=502,
+                detail={
+                    "code": "youtube_unreachable",
+                    "message": f"Failed to fetch transcript: {str(e)}",
+                },
+            ) from e
+
+        try:
             vid = extract_video_id(request.url)
             title = request.title or await _fetch_youtube_title(request.url)
             session_id, cached = create_session(
@@ -315,17 +410,27 @@ async def get_transcript(request: TranscriptRequest):
                 "transcript": transcript,
                 "video_id": vid,
                 "title": title,
+                "language": language,
                 "cached": cached,
                 **session_payload(session_id),
             }
-        except ValueError as e:
-            raise HTTPException(status_code=400, detail=str(e)) from e
         except Exception as e:
             raise HTTPException(
-                status_code=500, detail=f"Failed to fetch transcript: {str(e)}"
+                status_code=500,
+                detail={
+                    "code": "session_error",
+                    "message": f"Could not create the session: {str(e)}",
+                },
             ) from e
-    
-    raise HTTPException(status_code=400, detail="Either url or file_content must be provided")
+
+    raise HTTPException(
+        status_code=400,
+        detail={
+            "code": "missing_input",
+            "message": "Either url or file_content must be provided.",
+        },
+    )
+
 
 @app.get("/stream/{session_id}")
 async def stream_updates(session_id: str):

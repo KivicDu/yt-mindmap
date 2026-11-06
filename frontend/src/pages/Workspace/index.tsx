@@ -14,6 +14,16 @@ import {
   normalizeTree,
   type MapNode,
 } from '../../lib/mindmapTree'
+import {
+  extractVideoId,
+  isCaptionOnlyProblem,
+  playerErrorMessage,
+  transcriptErrorMessage,
+  transcriptStatusText,
+  watchUrl,
+  type PlayerErrorInfo,
+  type VideoInfo,
+} from '../../lib/youtube'
 
 // markmap + d3 are heavy; load them after the player shell is interactive.
 const MindMap = lazy(() => import('../../components/MindMap'))
@@ -39,6 +49,16 @@ interface Status {
   text: string
 }
 
+class TranscriptRequestError extends Error {
+  readonly code?: string
+
+  constructor(message: string, code?: string) {
+    super(message)
+    this.name = 'TranscriptRequestError'
+    this.code = code
+  }
+}
+
 const API_BASE = import.meta.env.VITE_API_BASE || 'http://localhost:8001'
 const DEFAULT_TITLE = 'Lecture Mind Map'
 const AUTO_UPDATE_SECONDS = 15
@@ -57,6 +77,9 @@ function App() {
   const [focusRecent, setFocusRecent] = useState(false)
   const [status, setStatusState] = useState<Status>({ kind: 'idle', text: 'Sẵn sàng' })
   const [transcript, setTranscript] = useState<TranscriptEntry[]>([])
+  const [transcriptLang, setTranscriptLang] = useState<string | null>(null)
+  const [videoInfo, setVideoInfo] = useState<VideoInfo | null>(null)
+  const [playerError, setPlayerError] = useState<PlayerErrorInfo | null>(null)
   const [sessionId, setSessionId] = useState<string | null>(null)
   const [isUpdating, setIsUpdating] = useState(false)
   const [isLoading, setIsLoading] = useState(false)
@@ -84,21 +107,6 @@ function App() {
     sessionIdRef.current = sessionId
   }, [sessionId])
 
-  const extractVideoId = (input: string) => {
-    try {
-      const urlObj = new URL(input)
-      if (urlObj.hostname.includes('youtube.com')) {
-        return urlObj.searchParams.get('v')
-      }
-      if (urlObj.hostname === 'youtu.be') {
-        return urlObj.pathname.slice(1)
-      }
-    } catch {
-      return null
-    }
-    return null
-  }
-
   /** Single place that swaps the tree, so the counter can never drift. */
   const applyNodes = useCallback((nodes: MapNode[], focusNew: boolean) => {
     const normalized = normalizeTree(nodes)
@@ -116,6 +124,7 @@ function App() {
     if (Array.isArray(data.transcript)) {
       setTranscript(data.transcript)
     }
+    setTranscriptLang(typeof data.language === 'string' ? data.language : null)
 
     const resolvedTitle = data.title || vid || DEFAULT_TITLE
     titleRef.current = resolvedTitle
@@ -155,40 +164,76 @@ function App() {
     })
 
     if (!response.ok) {
-      const error = await response.json().catch(() => ({}))
-      throw new Error(error.detail || 'Không thể tải phụ đề')
+      const body = await response.json().catch(() => null)
+      const detail =
+        body && typeof body === 'object' && 'detail' in body ? body.detail : undefined
+      const code =
+        detail && typeof detail === 'object' && 'code' in detail && typeof detail.code === 'string'
+          ? detail.code
+          : undefined
+      const message =
+        detail && typeof detail === 'object' && 'message' in detail && typeof detail.message === 'string'
+          ? detail.message
+          : typeof detail === 'string'
+            ? detail
+            : 'Không thể tải phụ đề'
+      throw new TranscriptRequestError(message, code)
     }
     return response.json()
   }
 
   const loadVideo = async (id: string) => {
     const token = ++loadTokenRef.current
+    setVideoId(id)
+    setPlayer(null)
+    setIsPlaying(false)
+    setPlayerError(null)
+    setVideoInfo(null)
+    setTranscript([])
+    setTranscriptLang(null)
+    setSessionId(null)
+    sessionIdRef.current = null
+    titleRef.current = DEFAULT_TITLE
+    setMapTitle(DEFAULT_TITLE)
+    applyNodes([], false)
+    setEditor(null)
+    setCurrentTime(0)
+    currentTimeRef.current = 0
+    lastTriggerRef.current = 0
     setIsLoading(true)
     setUrlError('')
     setStatus('Đang tải phụ đề…', 'busy')
+
+    void fetch(
+      `${API_BASE}/video-info?url=${encodeURIComponent(watchUrl(id))}`,
+    )
+      .then(async (response) => (response.ok ? ((await response.json()) as VideoInfo) : null))
+      .then((info) => {
+        if (info && token === loadTokenRef.current) {
+          setVideoInfo(info)
+          if (info.title) {
+            titleRef.current = info.title
+            setMapTitle(info.title)
+          }
+        }
+      })
+      .catch((error: unknown) => {
+        console.warn('[video-info]', error)
+      })
+
     try {
-      const data = await fetchTranscript({ url })
+      const data = await fetchTranscript({ url: watchUrl(id) })
       if (token !== loadTokenRef.current) return
       applyLoadResult(data, id, 'Đã tải phụ đề')
-      setVideoId(id)
-      setEditor(null)
-      setCurrentTime(0)
-      currentTimeRef.current = 0
-      lastTriggerRef.current = 0
-    } catch (e: any) {
+    } catch (error: unknown) {
       if (token === loadTokenRef.current) {
-        // The API hands back the upstream library's stack-trace-ish text
-        // ("IP blocked", sometimes several paragraphs). Putting that in a
-        // one-line status strip is unreadable, so the strip carries the short
-        // verdict and the field-level hint stays actionable.
-        const detail = String(e?.message || '').trim()
-        if (detail) console.warn('[transcript]', detail)
-        setStatus('Không tải được phụ đề', 'error')
-        setUrlError(
-          /ip|blocked|429|too many/i.test(detail)
-            ? 'YouTube đang chặn máy chủ này. Thử lại sau, hoặc tải file .srt/.vtt bên dưới.'
-            : 'Không tải được phụ đề cho link này. Thử tải file .srt/.vtt bên dưới.',
+        const code = error instanceof TranscriptRequestError ? error.code : undefined
+        console.warn('[transcript]', code || error)
+        setStatus(
+          transcriptStatusText(code),
+          isCaptionOnlyProblem(code) ? 'idle' : 'error',
         )
+        setUrlError(transcriptErrorMessage(code))
       }
     } finally {
       if (token === loadTokenRef.current) setIsLoading(false)
@@ -224,9 +269,9 @@ function App() {
       const text = await file.text()
       const data = await fetchTranscript({ url, fileContent: text })
       if (token !== loadTokenRef.current) return
-      const id = extractVideoId(url) || 'upload'
-      applyLoadResult(data, id, 'Đã tải phụ đề từ file')
-      setVideoId(id)
+      const id = extractVideoId(url)
+      applyLoadResult(data, id || videoId || '', 'Đã tải phụ đề từ file')
+      if (id) setVideoId(id)
       setEditor(null)
     } catch (e: any) {
       if (token === loadTokenRef.current) {
@@ -298,6 +343,12 @@ function App() {
     // Deliberately silent: the player becoming ready is visible on screen, and
     // announcing it here would overwrite the more useful "đã tải phụ đề" line
     // that almost always arrives at the same moment.
+  }
+
+  const onPlayerError: YouTubeProps['onError'] = (event) => {
+    const error = playerErrorMessage(event.data)
+    setPlayerError(error)
+    setStatus(error.title, 'error')
   }
 
   const handleSeek = useCallback(
@@ -468,6 +519,7 @@ function App() {
   const lastEntry = transcript[transcript.length - 1]
   const totalSeconds = lastEntry ? lastEntry.start + (lastEntry.duration || 0) : 0
   const progress = totalSeconds > 0 ? Math.min(100, (currentTime / totalSeconds) * 100) : 0
+  const playbackError = playerError
 
   return (
     <div className="app-shell">
@@ -500,11 +552,11 @@ function App() {
               id="video-url"
               ref={urlInputRef}
               className="url-bar__input"
-              type="url"
+              type="text"
               inputMode="url"
               autoComplete="off"
               spellCheck={false}
-              placeholder="Dán link YouTube, ví dụ https://youtu.be/…"
+              placeholder="Dán link YouTube hoặc ID video"
               value={url}
               aria-invalid={Boolean(urlError)}
               aria-describedby={urlError ? 'url-error' : undefined}
@@ -583,15 +635,46 @@ function App() {
 
           <div className="player">
             {videoId ? (
-              <div className="player__frame">
-                <YouTube
-                  videoId={videoId}
-                  opts={opts}
-                  onReady={onPlayerReady}
-                  onStateChange={onPlayerStateChange}
-                  style={{ height: '100%', width: '100%' }}
-                />
-              </div>
+              videoInfo?.embeddable === false ? (
+                <div className="player__empty player__blocked" role="status">
+                  <span className="player__empty-glyph" aria-hidden="true">
+                    !
+                  </span>
+                  <h3>Không thể phát trong trang này</h3>
+                  <p>
+                    YouTube từ chối nhúng video này — có thể video để riêng tư, đã bị xoá,
+                    giới hạn độ tuổi/khu vực, hoặc chủ video đã tắt “Allow embedding”.
+                  </p>
+                  <a
+                    className="btn btn--outline btn--sm"
+                    href={watchUrl(videoId)}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                  >
+                    Mở trên YouTube
+                  </a>
+                </div>
+              ) : (
+                <div className="player__frame">
+                  <YouTube
+                    videoId={videoId}
+                    opts={opts}
+                    onReady={onPlayerReady}
+                    onStateChange={onPlayerStateChange}
+                    onError={onPlayerError}
+                    style={{ height: '100%', width: '100%' }}
+                  />
+                  {playbackError && (
+                    <div className="player__notice" role="alert">
+                      <h3>{playbackError.title}</h3>
+                      <p>{playbackError.message}</p>
+                      <a href={watchUrl(videoId)} target="_blank" rel="noopener noreferrer">
+                        Mở trên YouTube
+                      </a>
+                    </div>
+                  )}
+                </div>
+              )
             ) : (
               <div className="player__empty">
                 <span className="player__empty-glyph" aria-hidden="true">
@@ -723,7 +806,11 @@ function App() {
                   </div>
                   <div>
                     <dt>Phụ đề</dt>
-                    <dd>{transcript.length > 0 ? `${transcript.length} mục` : '—'}</dd>
+                    <dd>
+                      {transcript.length > 0
+                        ? `${transcript.length} mục${transcriptLang ? ` · ${transcriptLang}` : ''}`
+                        : '—'}
+                    </dd>
                   </div>
                   <div>
                     <dt>Ý trong sơ đồ</dt>
