@@ -32,6 +32,20 @@ def configured(monkeypatch: pytest.MonkeyPatch):
     return settings
 
 
+@pytest.fixture()
+def unconfigured(monkeypatch: pytest.MonkeyPatch):
+    """Blank every provider so the test ignores whatever `.env` holds."""
+    settings = get_settings()
+    for field in (
+        "GOOGLE_CLIENT_ID",
+        "GOOGLE_CLIENT_SECRET",
+        "GITHUB_CLIENT_ID",
+        "GITHUB_CLIENT_SECRET",
+    ):
+        monkeypatch.setattr(settings, field, "")
+    return settings
+
+
 def cookie_value(response, name: str) -> str | None:
     for header in response.headers.get_list("set-cookie"):
         if header.lower().startswith(f"{name}=".lower()):
@@ -47,7 +61,9 @@ def start_google(client: TestClient) -> str:
     return state.split(":", 1)[1]
 
 
-def test_unconfigured_provider_sends_the_browser_back_with_an_error(client: TestClient):
+def test_unconfigured_provider_sends_the_browser_back_with_an_error(
+    client: TestClient, unconfigured
+):
     response = client.get("/api/auth/google", follow_redirects=False)
     assert response.status_code == 302
     location = response.headers["location"]

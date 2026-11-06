@@ -189,5 +189,15 @@ yt-mindmap/
 - Accounts exist (email + Google/GitHub OAuth), but projects, drafts and sharing are still on the roadmap — the dashboard shows empty states for them.
 - There is no email verification yet: password accounts are usable immediately, and OAuth accounts inherit the provider's verified email.
 - Refresh tokens are stateless JWTs; logging out clears the cookie but does not revoke a token copied elsewhere (a server-side token store is the next step).
-- Captions are fetched in English; Vietnamese and other languages are on the roadmap.
+- Captions use the video's available original-language track. The server-side
+  `youtube-transcript-api` client can still be rate-limited or blocked by
+  YouTube; upload an `.srt` or `.vtt` file as a fallback.
+- Playback and caption extraction are independent: some videos cannot be
+  embedded because of owner settings, privacy, age, or region restrictions.
+  Those videos must be opened on YouTube; the app cannot override those rules.
+- The official [YouTube captions API](https://developers.google.com/youtube/data/reference/rest/v3/captions/list)
+  requires OAuth, and
+  [downloading a caption track](https://developers.google.com/youtube/data/reference/rest/v3/captions/download)
+  requires permission to edit that video. It is not a general API for fetching
+  captions from arbitrary public videos.
 - AI usage costs and rate limits apply.
