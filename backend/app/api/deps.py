@@ -30,3 +30,21 @@ def get_current_user(
     if user is None:
         raise _UNAUTHORIZED
     return user
+
+
+def get_optional_user(
+    credentials: HTTPAuthorizationCredentials | None = Depends(bearer_scheme),
+    db: Session = Depends(get_db),
+) -> User | None:
+    """Like ``get_current_user``, but anonymous callers are allowed.
+
+    Used by endpoints that work for guests *and* get extra behaviour when the
+    caller owns a saved project (resuming a map, autosaving it).
+    """
+
+    if credentials is None or credentials.scheme.lower() != "bearer":
+        return None
+    payload = decode_token(credentials.credentials, "access")
+    if payload is None:
+        return None
+    return db.get(User, payload["sub"])
