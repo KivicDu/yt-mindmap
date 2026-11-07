@@ -55,7 +55,10 @@ This project creates a dual-view setup: alongside the YouTube video, there's a d
 - [x] Autosave while signed in, plus a `localStorage` draft for guests so a reload keeps the work
 - [x] Dashboard CRUD: overview stats, recent projects, separate drafts, search, rename, duplicate, delete, promote
 - [x] Reopen a project without calling YouTube again
-- [x] `visibility` + `share_slug` columns are ready for phase 3 (no sharing UI yet)
+- [x] Share a link with view-only or edit access; anonymous visitors can read, editing needs an account
+- [x] Invite by email (including before registration) and see shared projects under “Được chia sẻ”
+- [x] Realtime collaboration: editors share one live session, node edits and AI diffs arrive over SSE
+- [x] Revoke by turning sharing off (old link dies) or rotate to a new link; only the owner can delete or change settings
 
 ## Getting Started
 
@@ -192,7 +195,11 @@ yt-mindmap/
 - One backend worker only (in-memory session store); use Redis/DB to scale horizontally.
 - Deleting nodes is not implemented: the AI owns structure, so a wrong branch is fixed by renaming it or by improving the prompt.
 - Projects, drafts and their notes/pins live in PostgreSQL per account. Guests still use the shared video cache, so a guest's notes on a video are visible to the next guest who opens it.
-- Sharing is prepared at the schema level (`visibility`, `share_slug`) but has no UI or public route yet ("Tham gia dự án" is a phase 3 placeholder).
+- Sharing has three modes: private, anyone with the link, or only invited emails. Anonymous visitors can only read; editing always needs a signed-in account.
+- A share link has its own role (`viewer`/`editor`), and invited members can be given a stronger role than the link. Turning sharing off clears the slug, so old links never come back; rotating creates a new one.
+- Realtime collaboration reuses one live session per project and the existing SSE stream. Conflicts are last-write-wins per edit; there is no presence cursor, CRDT or offline merge yet.
+- Only the owner can rename the project, change sharing, invite people or delete it. Editors can change the map; viewers cannot write.
+- Live sessions and SSE buffers are still per process, so realtime collaboration across multiple backend workers needs Redis pub/sub.
 - A project stores a copy of its transcript, so the same lecture saved twice uses roughly twice the space. Deleting a project is permanent (no trash/undo).
 - Project lists are paginated by the API (50 by default) but the dashboard does not render pagination controls yet.
 - There is no email verification yet: password accounts are usable immediately, and OAuth accounts inherit the provider's verified email.

@@ -73,6 +73,36 @@ const DEFAULT_TITLE = 'Lecture Mind Map'
 const AUTO_UPDATE_SECONDS = 15
 const AUTOSAVE_SECONDS = 2.5
 
+type SessionRole = 'owner' | 'editor' | 'viewer'
+
+/**
+ * `/node` and `/update-map` are outside `/api` because they belong to the
+ * live-session module, so they need the bearer token attached by hand. A
+ * shared editor's writes must be attributable, and a viewer must stay read-only.
+ */
+async function sessionRequest(
+  path: string,
+  method: string,
+  body: unknown,
+): Promise<Response> {
+  const send = () => {
+    const headers: Record<string, string> = { 'Content-Type': 'application/json' }
+    const token = getAccessToken()
+    if (token) headers.Authorization = `Bearer ${token}`
+    return fetch(`${API_BASE}${path}`, {
+      method,
+      headers,
+      body: JSON.stringify(body),
+    })
+  }
+
+  let response = await send()
+  if (response.status === 401 && getAccessToken()) {
+    if (await refreshSession()) response = await send()
+  }
+  return response
+}
+
 function App() {
   const { status: authStatus } = useAuth()
   const { projectId: routeProjectId } = useParams<{ projectId?: string }>()
@@ -106,6 +136,8 @@ function App() {
   const [saveDialog, setSaveDialog] = useState(false)
   const [draftTitle, setDraftTitle] = useState('')
   const [pendingDraft, setPendingDraft] = useState<LocalDraft | null>(null)
+  const [role, setRole] = useState<SessionRole | null>(null)
+  const [ownerName, setOwnerName] = useState<string | null>(null)
 
   const urlInputRef = useRef<HTMLInputElement>(null)
   const fileInputRef = useRef<HTMLInputElement>(null)
@@ -126,6 +158,9 @@ function App() {
     setStatusState({ kind, text })
   }, [])
 
+  // `null` means a fresh local session, which is editable by definition.
+  const canEdit = role !== 'viewer'
+
   useEffect(() => {
     sessionIdRef.current = sessionId
   }, [sessionId])
@@ -134,7 +169,7 @@ function App() {
   const saveNow = useCallback(
     async (options?: { title?: string; promote?: boolean }): Promise<boolean> => {
       const session = sessionIdRef.current
-      if (!session || authStatus !== 'authenticated') return false
+      if (!session || authStatus !== 'authenticated' || !canEdit) return false
       setSaveState('saving')
       try {
         const summary = await autosaveProject({
@@ -165,7 +200,7 @@ function App() {
         return false
       }
     },
-    [authStatus],
+    [authStatus, canEdit],
   )
 
   useEffect(() => {
@@ -174,12 +209,12 @@ function App() {
 
   // Debounced autosave after the AI adds a branch or the pointer moves.
   useEffect(() => {
-    if (authStatus !== 'authenticated' || !sessionId) return
+    if (authStatus !== 'authenticated' || !sessionId || !canEdit) return
     const timer = setTimeout(() => {
       void saveRef.current()
     }, AUTOSAVE_SECONDS * 1000)
     return () => clearTimeout(timer)
-  }, [authStatus, sessionId, mapVersion, consumedUntil])
+  }, [authStatus, sessionId, mapVersion, consumedUntil, canEdit])
 
   // Guests get a browser-only draft so a reload does not lose the map.
   useEffect(() => {
@@ -235,6 +270,13 @@ function App() {
     if (Array.isArray(data.nodes)) {
       applyNodes(data.nodes, false)
     }
+
+    if (data.role === 'owner' || data.role === 'editor' || data.role === 'viewer') {
+      setRole(data.role)
+    } else {
+      setRole(null)
+    }
+    setOwnerName(typeof data.owner_name === 'string' ? data.owner_name : null)
 
     lastTriggerRef.current = Number(data.consumed_until || 0)
     setConsumedUntil(Number(data.consumed_until || 0))
@@ -324,6 +366,8 @@ function App() {
     setProjectId(null)
     projectIdRef.current = null
     setIsDraft(false)
+    setRole(null)
+    setOwnerName(null)
     setSavedAt(null)
     setSaveState('idle')
     if (routeProjectId) navigate('/app', { replace: true })
@@ -498,7 +542,7 @@ function App() {
         setStatus('Không mở được dự án', 'error')
         setUrlError(
           code === 'project_not_found'
-            ? 'Dự án không tồn tại hoặc không thuộc tài khoản này.'
+            ? 'Dự án không tồn tại hoặc bạn không có quyền mở.'
             : 'Không mở được dự án đã lưu.',
         )
       })
@@ -509,7 +553,7 @@ function App() {
   }, [routeProjectId])
 
   const requestUpdate = async (atTime?: number) => {
-    if (!videoId || isUpdatingRef.current) return
+    if (!videoId || isUpdatingRef.current || !canEdit) return
     const time = atTime ?? currentTimeRef.current
     const callSession = sessionIdRef.current
     isUpdatingRef.current = true
@@ -517,22 +561,34 @@ function App() {
 
     try {
       setStatus('Đang phân tích nội dung mới…', 'busy')
-      const response = await fetch(`${API_BASE}/update-map`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          video_id: videoId,
-          last_time: time,
-          current_map: { markdown: '', nodes: nodesRef.current },
-          session_id: sessionIdRef.current,
-        }),
+      const response = await sessionRequest('/update-map', 'POST', {
+        video_id: videoId,
+        last_time: time,
+        current_map: { markdown: '', nodes: nodesRef.current },
+        session_id: sessionIdRef.current,
       })
       const data = await response.json()
       if (callSession !== sessionIdRef.current) return
 
+      if (!response.ok) {
+        const detail = data && typeof data.detail === 'object' ? data.detail : null
+        setStatus(
+          detail?.code === 'project_read_only'
+            ? 'Dự án này chỉ cho phép xem'
+            : 'Không cập nhật được sơ đồ',
+          'error',
+        )
+        return
+      }
+
       if (data.session_lost || data.reason === 'session_lost') {
         setStatus('Phiên đã hết hạn — đang khôi phục…', 'busy')
         await recreateSession()
+        return
+      }
+
+      if (data.reason === 'busy') {
+        setStatus('Người khác đang cập nhật sơ đồ…', 'idle')
         return
       }
 
@@ -606,7 +662,7 @@ function App() {
       const time = player.getCurrentTime()
       currentTimeRef.current = time
       setCurrentTime(time)
-      if (autoUpdate && videoId && transcript.length > 0 && !isUpdatingRef.current) {
+      if (autoUpdate && canEdit && videoId && transcript.length > 0 && !isUpdatingRef.current) {
         if (time - lastTriggerRef.current >= AUTO_UPDATE_SECONDS) {
           lastTriggerRef.current = time
           requestUpdateRef.current(time)
@@ -615,7 +671,7 @@ function App() {
     }, 1000)
 
     return () => clearInterval(interval)
-  }, [player, isPlaying, autoUpdate, videoId, transcript.length])
+  }, [player, isPlaying, autoUpdate, canEdit, videoId, transcript.length])
 
   useEffect(() => {
     eventSourceRef.current?.close()
@@ -653,6 +709,7 @@ function App() {
   }, [])
 
   const handleSelectNode = useCallback((nodeId: string) => {
+    if (!canEdit) return
     const node = findNodeById(nodesRef.current, nodeId)
     if (!node) return
     setEditor({
@@ -661,7 +718,7 @@ function App() {
       note: node.note || '',
       pinned: Boolean(node.pinned),
     })
-  }, [])
+  }, [canEdit])
 
   const patchNode = useCallback(
     async (patch: Record<string, unknown>) => {
@@ -670,17 +727,23 @@ function App() {
         setStatus('Hãy tải video trước khi chỉnh sửa node', 'error')
         return null
       }
+      if (!canEdit) {
+        setStatus('Dự án này chỉ cho phép xem', 'error')
+        return null
+      }
       try {
-        const response = await fetch(`${API_BASE}/node`, {
-          method: 'PATCH',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ session_id: session, ...patch }),
+        const response = await sessionRequest('/node', 'PATCH', {
+          session_id: session,
+          ...patch,
         })
         const data = await response.json().catch(() => ({}))
         if (!response.ok) {
+          const code = data?.detail?.code
           if (data.detail === 'session_lost') {
             setStatus('Phiên đã hết hạn — đang khôi phục…', 'busy')
             await recreateSession()
+          } else if (code === 'project_read_only') {
+            setStatus('Dự án này chỉ cho phép xem', 'error')
           } else {
             setStatus(`Chỉnh sửa thất bại: ${data.detail || 'lỗi không rõ'}`, 'error')
           }
@@ -695,7 +758,7 @@ function App() {
         return null
       }
     },
-    [recreateSession, applyNodes, setStatus],
+    [canEdit, recreateSession, applyNodes, setStatus],
   )
 
   const saveEditor = useCallback(async () => {
@@ -798,28 +861,40 @@ function App() {
 
           <div className="app-topbar__actions">
             {authStatus === 'authenticated' ? (
-              sessionId && (isDraft || !projectId) ? (
-                <button
-                  className="btn btn--primary btn--sm"
-                  type="button"
-                  onClick={openSaveDialog}
-                  disabled={saveState === 'saving'}
-                >
-                  {saveState === 'saving' ? 'Đang lưu…' : 'Lưu dự án'}
-                </button>
-              ) : sessionId ? (
-                <span
-                  className={`app-save app-save--${saveState}`}
-                  title={savedAt ? `Lưu lúc ${savedAt.toLocaleTimeString('vi-VN')}` : undefined}
-                >
-                  <span className="app-save__dot" aria-hidden="true" />
-                  {saveState === 'saving'
-                    ? 'Đang lưu…'
-                    : saveState === 'error'
-                      ? 'Chưa lưu được'
-                      : 'Đã lưu'}
-                </span>
-              ) : null
+              <>
+                {role && role !== 'owner' && (
+                  <span
+                    className={`app-role app-role--${role}`}
+                    title={ownerName ? `Dự án của ${ownerName}` : undefined}
+                  >
+                    {role === 'editor' ? 'Cộng tác' : 'Chỉ xem'}
+                  </span>
+                )}
+                {canEdit ? (
+                  sessionId && (isDraft || !projectId) ? (
+                    <button
+                      className="btn btn--primary btn--sm"
+                      type="button"
+                      onClick={openSaveDialog}
+                      disabled={saveState === 'saving'}
+                    >
+                      {saveState === 'saving' ? 'Đang lưu…' : 'Lưu dự án'}
+                    </button>
+                  ) : sessionId ? (
+                    <span
+                      className={`app-save app-save--${saveState}`}
+                      title={savedAt ? `Lưu lúc ${savedAt.toLocaleTimeString('vi-VN')}` : undefined}
+                    >
+                      <span className="app-save__dot" aria-hidden="true" />
+                      {saveState === 'saving'
+                        ? 'Đang lưu…'
+                        : saveState === 'error'
+                          ? 'Chưa lưu được'
+                          : 'Đã lưu'}
+                    </span>
+                  ) : null
+                ) : null}
+              </>
             ) : (
               <Link className="btn btn--ghost btn--sm" to="/login">
                 Đăng nhập để lưu
@@ -1135,6 +1210,28 @@ function App() {
                   </p>
                 </div>
 
+                {!canEdit && (
+                  <div className="session__readonly" role="status">
+                    <strong>Chế độ chỉ xem</strong>
+                    <p>
+                      {ownerName
+                        ? `${ownerName} đã chia sẻ sơ đồ này với quyền chỉ xem.`
+                        : 'Sơ đồ này được chia sẻ với quyền chỉ xem.'}{' '}
+                      Bạn vẫn tua video bằng các mốc thời gian trên sơ đồ.
+                    </p>
+                  </div>
+                )}
+
+                {role === 'editor' && (
+                  <div className="session__readonly session__readonly--edit" role="status">
+                    <strong>Đang cộng tác</strong>
+                    <p>
+                      Thay đổi của bạn được lưu tự động và hiện ngay ở những người đang mở
+                      cùng dự án.
+                    </p>
+                  </div>
+                )}
+
                 <p className="session__keys">
                   <span className="kbd">+</span>
                   <span className="kbd">−</span> thu phóng
@@ -1163,6 +1260,7 @@ function App() {
                   className="segmented__item"
                   aria-pressed={autoUpdate}
                   title={`Tự động phân tích thêm nội dung mỗi ${AUTO_UPDATE_SECONDS} giây`}
+                  disabled={!canEdit}
                   onClick={() => setAutoUpdate((value) => !value)}
                 >
                   Tự động
@@ -1182,7 +1280,7 @@ function App() {
                 type="button"
                 className="btn btn--outline btn--sm"
                 onClick={() => void requestUpdate()}
-                disabled={!videoId || isUpdating || isLoading}
+                disabled={!videoId || isUpdating || isLoading || !canEdit}
               >
                 {isUpdating && <span className="spinner" aria-hidden="true" />}
                 {isUpdating ? 'Đang phân tích…' : 'Cập nhật'}

@@ -683,3 +683,332 @@
     flex-wrap: wrap;
   }
 }
+
+/* ============================================================
+   Sharing
+   ============================================================ */
+
+.dash-join button:not(:disabled) {
+  border-color: var(--accent);
+  background: var(--accent);
+  color: var(--accent-contrast);
+  cursor: pointer;
+}
+
+.dash-join button:not(:disabled):hover {
+  border-color: var(--accent-hover);
+  background: var(--accent-hover);
+}
+
+.share-badge {
+  display: inline-flex;
+  align-items: center;
+  height: 18px;
+  margin-left: 7px;
+  padding: 0 7px;
+  border: 1px solid var(--line-2);
+  border-radius: 999px;
+  background: var(--paper-2);
+  color: var(--ink-3);
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  vertical-align: 1px;
+}
+
+.share-badge--editor {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+  color: var(--accent-ink);
+}
+
+.share-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 60;
+  display: grid;
+  place-items: center;
+  padding: 18px;
+  background: color-mix(in srgb, var(--ink) 32%, transparent);
+  backdrop-filter: blur(2px);
+}
+
+.share-dialog {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  width: min(560px, 100%);
+  max-height: min(86dvh, 760px);
+  padding: 22px;
+  overflow-y: auto;
+  border: 1px solid var(--line);
+  border-radius: var(--r-lg);
+  background: var(--surface);
+  box-shadow: 0 24px 64px color-mix(in srgb, var(--ink) 18%, transparent);
+}
+
+.share-dialog__head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 14px;
+}
+
+.share-dialog__head h2 {
+  margin: 2px 0 0;
+  font-size: 18px;
+  letter-spacing: -0.02em;
+  overflow-wrap: anywhere;
+}
+
+.share-dialog__close {
+  display: grid;
+  flex: none;
+  place-items: center;
+  width: 28px;
+  height: 28px;
+  border: 1px solid var(--line-2);
+  border-radius: var(--r-sm);
+  background: var(--surface);
+  color: var(--ink-2);
+}
+
+.share-dialog__close:hover {
+  background: var(--paper-2);
+  color: var(--ink);
+}
+
+.share-dialog__close svg {
+  width: 15px;
+  height: 15px;
+}
+
+.share-switch-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 13px 14px;
+  border: 1px solid var(--line);
+  border-radius: var(--r-md);
+  background: var(--paper-2);
+}
+
+.share-switch-row strong {
+  font-size: 13.5px;
+}
+
+.share-switch-row p {
+  margin: 2px 0 0;
+  color: var(--ink-3);
+  font-size: 12px;
+}
+
+.share-switch {
+  position: relative;
+  flex: none;
+  width: 42px;
+  height: 24px;
+  padding: 0;
+  border: 1px solid var(--line-2);
+  border-radius: 999px;
+  background: var(--paper);
+  transition:
+    background-color var(--t-fast) var(--ease),
+    border-color var(--t-fast) var(--ease);
+}
+
+.share-switch span {
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  background: var(--ink-3);
+  transition:
+    transform var(--t-fast) var(--ease),
+    background-color var(--t-fast) var(--ease);
+}
+
+.share-switch.is-on {
+  border-color: var(--accent);
+  background: var(--accent);
+}
+
+.share-switch.is-on span {
+  background: var(--accent-contrast);
+  transform: translateX(18px);
+}
+
+.share-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.share-field {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  color: var(--ink-3);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.share-field select,
+.share-invite select,
+.share-members select {
+  height: 34px;
+  padding: 0 8px;
+  border: 1px solid var(--line-2);
+  border-radius: var(--r-sm);
+  background: var(--paper);
+  color: var(--ink);
+  font-size: 13px;
+  letter-spacing: normal;
+  text-transform: none;
+}
+
+.share-field select:disabled {
+  opacity: 0.55;
+}
+
+.share-link {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.share-link input {
+  flex: 1;
+  min-width: 190px;
+  height: 34px;
+  padding: 0 10px;
+  border: 1px solid var(--line-2);
+  border-radius: var(--r-sm);
+  background: var(--paper);
+  color: var(--ink-2);
+  font-size: 12.5px;
+}
+
+.share-hint,
+.share-note {
+  margin: 0;
+  color: var(--ink-3);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.share-warning {
+  margin: 0;
+  color: var(--danger);
+  font-size: 12px;
+  font-weight: 500;
+}
+
+.share-error {
+  margin: 0;
+  color: var(--danger);
+  font-size: 12.5px;
+  font-weight: 500;
+}
+
+.share-members {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding-top: 14px;
+  border-top: 1px solid var(--line);
+}
+
+.share-members header {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.share-members h3 {
+  margin: 0;
+  font-size: 13.5px;
+}
+
+.share-members header span {
+  color: var(--ink-3);
+  font-size: 11.5px;
+}
+
+.share-invite {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.share-invite input {
+  flex: 1;
+  min-width: 180px;
+  height: 34px;
+  padding: 0 10px;
+  border: 1px solid var(--line-2);
+  border-radius: var(--r-sm);
+  background: var(--paper);
+  color: var(--ink);
+  font-size: 13px;
+}
+
+.share-invite input:focus,
+.share-link input:focus {
+  border-color: var(--accent);
+  outline: none;
+}
+
+.share-member-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.share-member-list li {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 0;
+  border-bottom: 1px dashed var(--line);
+}
+
+.share-member-list li:last-child {
+  border-bottom: 0;
+}
+
+.share-member__email {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  color: var(--ink-2);
+  font-size: 12.5px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.share-member__pending {
+  margin-left: 6px;
+  color: var(--ink-3);
+  font-size: 10.5px;
+  font-style: italic;
+}
+
+@media (max-width: 520px) {
+  .share-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .share-dialog {
+    padding: 16px;
+  }
+}

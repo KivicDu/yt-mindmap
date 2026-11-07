@@ -25,9 +25,11 @@ from app.api.deps import get_current_user, get_optional_user
 from app.api.router import api_router
 from app.db.base import utcnow
 from app.db.session import get_db
+from app.models.project import Project
 from app.models.user import User
 from app.schemas.project import AutosaveRequest
 from app.services import projects as project_service
+from app.services import sharing as sharing_service
 from chunking import chunk_time_range, is_seek_backward, select_chunk
 from node_tree import (
     markdown_to_tree,
@@ -153,6 +155,80 @@ def touch_session(session_id: str | None) -> None:
         session["last_active"] = time.time()
 
 
+def find_project_session(project_id: str) -> str | None:
+    """The live session shared by everyone currently editing a project.
+
+    Reusing one session is what turns the existing SSE event log into realtime
+    collaboration: an edit or AI diff appended by one editor is delivered to
+    every other tab watching the same session.
+    """
+    cleanup_sessions()
+    for session_id, session in sessions.items():
+        if session.get("project_id") == project_id:
+            return session_id
+    return None
+
+
+def project_for_session(db: Session, session: dict[str, Any]) -> Project | None:
+    project_id = session.get("project_id")
+    return db.get(Project, project_id) if project_id else None
+
+
+def assert_can_edit_session(
+    db: Session,
+    session: dict[str, Any],
+    user: User | None,
+) -> Project | None:
+    """Reject writes from viewers and from strangers on someone's session.
+
+    A session without a project is a guest map: it may be edited by its creator
+    (or anonymously, before anyone signs in). Once a session is attached to a
+    saved project, the project's sharing rules decide who may write.
+    """
+    project = project_for_session(db, session)
+    if project is None:
+        owner = session.get("owner_id")
+        if owner and (user is None or user.id != owner):
+            raise HTTPException(
+                status_code=403,
+                detail={
+                    "code": "session_owned_by_someone_else",
+                    "message": "This working session belongs to another account.",
+                },
+            )
+        return None
+
+    # Even an "editor" link cannot write without an account: editing needs a
+    # signed-in identity so last-write-wins has someone to attribute it to.
+    if user is None:
+        raise HTTPException(
+            status_code=401,
+            detail={
+                "code": "not_authenticated",
+                "message": "Sign in to edit a shared project.",
+            },
+        )
+
+    role = sharing_service.role_for(db, project, user)
+    if role is None:
+        raise HTTPException(
+            status_code=404,
+            detail={
+                "code": "project_not_found",
+                "message": "That project does not exist.",
+            },
+        )
+    if not sharing_service.can_edit(role):
+        raise HTTPException(
+            status_code=403,
+            detail={
+                "code": "project_read_only",
+                "message": "This project was shared with you as read-only.",
+            },
+        )
+    return project
+
+
 load_video_cache()
 
 def cache_video_map(video_id: str | None, session: dict[str, Any]) -> None:
@@ -247,6 +323,9 @@ def create_session(
         # Present only for signed-in sessions; autosave and resume use them.
         "owner_id": owner_id,
         "project_id": project_id,
+        # Shared editors all drive the player; only one may run the AI at a time
+        # or the same transcript chunk would be mapped twice.
+        "update_lock": threading.Lock(),
     }
     return session_id, bool(cached)
 
@@ -381,8 +460,10 @@ async def get_transcript(
                     "message": "Sign in to open a saved project.",
                 },
             )
-        project = project_service.get_owned(db, user.id, request.project_id)
-        if project is None:
+
+        project = db.get(Project, request.project_id)
+        role = sharing_service.role_for(db, project, user) if project else None
+        if project is None or role is None:
             raise HTTPException(
                 status_code=404,
                 detail={
@@ -407,27 +488,39 @@ async def get_transcript(
                     detail={"code": e.code, "message": e.message},
                 ) from e
 
-        session_id, cached = create_session(
-            vid,
-            transcript,
-            initial_nodes=project.nodes or [],
-            resume_at=project.consumed_until,
-            title=title,
-            language=language,
-            initial_summary=project.summary_so_far,
-            owner_id=user.id,
-            project_id=project.id,
-            use_cache=False,
-        )
+        # Everyone editing the same project shares one live session, so an
+        # edit or AI diff from one collaborator reaches the others over SSE.
+        session_id = find_project_session(project.id)
+        cached = False
+        if session_id is None:
+            session_id, cached = create_session(
+                vid,
+                transcript,
+                initial_nodes=project.nodes or [],
+                resume_at=project.consumed_until,
+                title=title,
+                language=language,
+                initial_summary=project.summary_so_far,
+                owner_id=project.user_id,
+                project_id=project.id,
+                use_cache=False,
+            )
+        else:
+            touch_session(session_id)
+
         project.last_opened_at = utcnow()
         db.commit()
 
+        owner = db.get(User, project.user_id)
         return {
             "transcript": transcript,
             "video_id": vid,
             "title": title,
             "language": language,
             "cached": cached,
+            "role": role,
+            "can_edit": sharing_service.can_edit(role),
+            "owner_name": owner.display_name if owner else None,
             **session_payload(session_id),
         }
 
@@ -554,7 +647,11 @@ async def stream_updates(session_id: str):
     return EventSourceResponse(event_generator())
 
 @app.post("/update-map")
-async def update_map(request: UpdateMapRequest):
+async def update_map(
+    request: UpdateMapRequest,
+    user: User | None = Depends(get_optional_user),
+    db: Session = Depends(get_db),
+):
     cleanup_sessions()
     session_id = request.session_id
     if not session_id or session_id not in sessions:
@@ -568,109 +665,135 @@ async def update_map(request: UpdateMapRequest):
         }
 
     session = sessions[session_id]
+    assert_can_edit_session(db, session, user)
     session["last_active"] = time.time()
-    transcript = session.get("transcript", [])
-    last_time = float(request.last_time)
-    consumed_until = float(session.get("consumed_until", 0.0))
-    summary_so_far = session.get("summary_so_far", "")
-    current_markdown = session.get("markdown", "")
 
-    if not transcript:
+    # One AI call per session at a time. Every collaborator polls while the
+    # video plays; without this lock the same chunk would be mapped twice.
+    lock = session.get("update_lock")
+    if lock is None:
+        lock = threading.Lock()
+        session["update_lock"] = lock
+    if not lock.acquire(blocking=False):
         return {
             "diff": {},
             "should_update": False,
-            "reason": "no_transcript",
-            "consumed_until": consumed_until,
+            "reason": "busy",
+            "consumed_until": float(session.get("consumed_until", 0.0)),
             "chunk_size": 0,
         }
 
-    # Seeking backward past processed content: ignore, it is already mapped.
-    if is_seek_backward(last_time, consumed_until):
+    try:
+        transcript = session.get("transcript", [])
+        last_time = float(request.last_time)
+        consumed_until = float(session.get("consumed_until", 0.0))
+        summary_so_far = session.get("summary_so_far", "")
+        current_markdown = session.get("markdown", "")
+
+        if not transcript:
+            return {
+                "diff": {},
+                "should_update": False,
+                "reason": "no_transcript",
+                "consumed_until": consumed_until,
+                "chunk_size": 0,
+            }
+
+        # Seeking backward past processed content: ignore, it is already mapped.
+        if is_seek_backward(last_time, consumed_until):
+            return {
+                "diff": {},
+                "should_update": False,
+                "reason": "seek_backward",
+                "consumed_until": consumed_until,
+                "chunk_size": 0,
+            }
+
+        # Collect unprocessed entries up to the current position (+look-ahead),
+        # capped so a large forward seek cannot create an unbounded chunk.
+        chunk = select_chunk(transcript, last_time, consumed_until)
+
+        if not chunk:
+            return {
+                "diff": {},
+                "should_update": False,
+                "reason": "no_new_chunk",
+                "consumed_until": consumed_until,
+                "chunk_size": 0,
+            }
+
+        time_range = chunk_time_range(chunk)
+
+        ai_result = await asyncio.to_thread(
+            ai_engine.generate_incremental_update,
+            current_markdown=current_markdown,
+            transcript_chunk=chunk,
+            summary_so_far=summary_so_far,
+            time_range=time_range,
+        )
+
+        # On AI failure, keep the pointer so the chunk is retried later.
+        if ai_result.get("error"):
+            return {
+                "diff": {},
+                "should_update": False,
+                "reason": "ai_error",
+                "error": ai_result["error"],
+                "consumed_until": consumed_until,
+                "chunk_size": len(chunk),
+            }
+
+        # The chunk was processed: advance even when nothing new was found,
+        # otherwise the same chunk would be sent to the AI on every tick.
+        new_consumed = max(consumed_until, time_range[1])
+        session["consumed_until"] = new_consumed
+        if ai_result.get("summary"):
+            session["summary_so_far"] = ai_result["summary"]
+
+        if ai_result.get("should_update") and ai_result.get("markdown_diff"):
+            new_nodes = normalize_nodes(
+                ai_result.get("new_nodes") or [],
+                default_time=float(time_range[0]),
+            )
+            session["nodes"] = merge_nodes(session.get("nodes", []), new_nodes)
+            session["markdown"] = tree_to_markdown(session["nodes"])
+            cache_video_map(session.get("video_id"), session)
+            event_data = {
+                "type": "diff",
+                "markdown_diff": ai_result["markdown_diff"],
+                "chunk_range": time_range,
+                "new_nodes": new_nodes,
+                # Full state, so a client that missed an event can resync.
+                "nodes": session["nodes"],
+                "markdown": session["markdown"],
+            }
+            session.setdefault("events", []).append(
+                {"type": "diff", "data": event_data}
+            )
+
+            return {
+                "diff": event_data,
+                "should_update": True,
+                "consumed_until": new_consumed,
+            }
+
+        cache_video_map(session.get("video_id"), session)
         return {
             "diff": {},
             "should_update": False,
-            "reason": "seek_backward",
-            "consumed_until": consumed_until,
-            "chunk_size": 0,
-        }
-
-    # Collect unprocessed entries up to the current position (+small look-ahead),
-    # capped so a large forward seek cannot create an unbounded chunk.
-    chunk = select_chunk(transcript, last_time, consumed_until)
-
-    if not chunk:
-        return {
-            "diff": {},
-            "should_update": False,
-            "reason": "no_new_chunk",
-            "consumed_until": consumed_until,
-            "chunk_size": 0,
-        }
-
-    time_range = chunk_time_range(chunk)
-
-    ai_result = await asyncio.to_thread(
-        ai_engine.generate_incremental_update,
-        current_markdown=current_markdown,
-        transcript_chunk=chunk,
-        summary_so_far=summary_so_far,
-        time_range=time_range
-    )
-
-    # On AI failure, keep the pointer so the chunk is retried later.
-    if ai_result.get("error"):
-        return {
-            "diff": {},
-            "should_update": False,
-            "reason": "ai_error",
-            "error": ai_result["error"],
-            "consumed_until": consumed_until,
+            "reason": "no_new_content",
+            "consumed_until": new_consumed,
             "chunk_size": len(chunk),
         }
-
-    # The chunk was processed: advance even when nothing new was found,
-    # otherwise the same chunk would be sent to the AI on every tick.
-    new_consumed = max(consumed_until, time_range[1])
-    session["consumed_until"] = new_consumed
-    if ai_result.get("summary"):
-        session["summary_so_far"] = ai_result["summary"]
-
-    if ai_result.get("should_update") and ai_result.get("markdown_diff"):
-        new_nodes = normalize_nodes(
-            ai_result.get("new_nodes") or [],
-            default_time=float(time_range[0]),
-        )
-        session["nodes"] = merge_nodes(session.get("nodes", []), new_nodes)
-        session["markdown"] = tree_to_markdown(session["nodes"])
-        cache_video_map(session.get("video_id"), session)
-        event_data = {
-            "type": "diff",
-            "markdown_diff": ai_result["markdown_diff"],
-            "chunk_range": time_range,
-            "new_nodes": new_nodes,
-            # Full state, so a client that missed an event can resync.
-            "nodes": session["nodes"],
-            "markdown": session["markdown"],
-        }
-        session.setdefault("events", []).append({"type": "diff", "data": event_data})
-
-        return {
-            "diff": event_data,
-            "should_update": True,
-            "consumed_until": new_consumed
-        }
-
-    cache_video_map(session.get("video_id"), session)
-    return {
-        "diff": {},
-        "should_update": False,
-        "reason": "no_new_content",
-        "consumed_until": new_consumed,
-        "chunk_size": len(chunk)
-    }
+    finally:
+        lock.release()
 
 @app.patch("/node")
-async def edit_node(request: NodeEditRequest):
+async def edit_node(
+    request: NodeEditRequest,
+    user: User | None = Depends(get_optional_user),
+    db: Session = Depends(get_db),
+):
     """Rename a node, attach a note, or pin it.
 
     Structure belongs to the AI (and to merge_nodes); this endpoint only edits
@@ -681,6 +804,8 @@ async def edit_node(request: NodeEditRequest):
     session = sessions.get(request.session_id)
     if not session:
         raise HTTPException(status_code=404, detail="session_lost")
+
+    assert_can_edit_session(db, session, user)
 
     provided = request.model_dump(exclude_unset=True)
     if not {"label", "note", "pinned"} & provided.keys():
@@ -740,6 +865,57 @@ def autosave_project(
                 "message": "The working session expired before it could be saved.",
             },
         )
+
+    # A shared session may be attached to a project the caller does not own.
+    # Resolve the project first so an editor can save into it while a viewer is
+    # rejected. ``request.project_id`` wins, but it may not point somewhere
+    # other than the project the session is already bound to.
+    attached_id = session.get("project_id")
+    target_id = request.project_id or attached_id
+    if attached_id and request.project_id and attached_id != request.project_id:
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "code": "project_mismatch",
+                "message": "This session belongs to a different project.",
+            },
+        )
+
+    project = db.get(Project, target_id) if target_id else None
+
+    if project is not None:
+        role = sharing_service.role_for(db, project, user)
+        if role is None:
+            owner_id = session.get("owner_id")
+            if owner_id and owner_id != user.id:
+                raise HTTPException(
+                    status_code=403, detail="session_owned_by_someone_else"
+                )
+            raise HTTPException(status_code=404, detail="project_not_found")
+        if not sharing_service.can_edit(role):
+            raise HTTPException(
+                status_code=403,
+                detail={
+                    "code": "project_read_only",
+                    "message": "This project was shared with you as read-only.",
+                },
+            )
+
+        # The session keeps the owner's id so the shared video cache stays off
+        # and later editors are still checked against the same project.
+        session["owner_id"] = project.user_id
+        session["project_id"] = project.id
+        saved = project_service.save_session(
+            db,
+            project,
+            session,
+            # Only the owner may rename the project.
+            title=request.title if role == sharing_service.ROLE_OWNER else None,
+        )
+        return project_service.summary(saved)
+
+    if target_id:
+        raise HTTPException(status_code=404, detail="project_not_found")
 
     owner = session.get("owner_id")
     if owner and owner != user.id:

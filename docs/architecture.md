@@ -141,15 +141,23 @@ video_cache[video_id]
 └── updated_at
 
 projects                          # one row = one video (or subtitle file) + one map
-├── id / user_id                  # user_id is in every query, so ids never leak
+├── id / user_id                  # user_id is the owner in every query
 ├── video_id                      # null when built from an uploaded file
 ├── title
 ├── nodes / transcript            # the row is authoritative on reopen
 ├── transcript_language
 ├── summary_so_far / consumed_until
 ├── is_draft                      # true = autosave, false = explicitly saved
-├── visibility / share_slug       # reserved for phase 3 sharing
+├── visibility                    # private | unlisted | invited
+├── link_role                     # viewer | editor, what the link grants
+├── share_slug                    # YTMM-XXXXXXXX while sharing is on
 ├── last_opened_at
+└── created_at / updated_at
+
+project_members                  # invitations keyed by email, not user id
+├── id / project_id
+├── email                        # lower-cased; may not have an account yet
+├── role                         # viewer | editor
 └── created_at / updated_at
 ```
 
@@ -284,45 +292,79 @@ cross-account note leak without adding a second table.
 
 Ownership lives in `app/services/projects.py`: every query filters by
 `user_id`, so a foreign project id returns 404 exactly like a missing one.
-`/api/projects` exposes CRUD, `/stats` (saved, drafts, shared, recent) and
-`/{id}/duplicate`; lists never ship the transcript.
+`/api/projects` exposes CRUD, `/stats` (saved, drafts, shared, shared-with-me,
+recent), `/{id}/duplicate`, and the owner-only share/member routes; lists never
+ship the transcript.
 
 ```text
 /api/projects
 ├── GET    ?draft=&q=&limit=&offset=   list (owned, newest first)
 ├── GET    /stats                      counts + 5 recent saved projects
+├── GET    /shared                     projects where my email is a member
 ├── POST   /                           create
 ├── GET    /{id}                       detail (nodes + transcript)
 ├── PATCH  /{id}                       title, is_draft, visibility, nodes…
-├── DELETE /{id}                       204; permanent
+├── DELETE /{id}                       204; permanent, owner only
 ├── POST   /{id}/duplicate             copy without a share slug
-└── POST   /autosave                   {session_id, project_id?, title?, is_draft?}
+├── POST   /autosave                   {session_id, project_id?, title?, is_draft?}
+├── GET    /{id}/share                 owner-only settings + members
+├── PUT    /{id}/share                 {enabled, access: anyone|invited, role}
+├── POST   /{id}/share/rotate          replace the slug (old link dies)
+├── GET    /{id}/members               owner-only invite list
+├── POST   /{id}/members               {email, role}
+├── PATCH  /{id}/members/{member_id}   change a member role
+└── DELETE /{id}/members/{member_id}   204
+
+/api/share/{slug}                     public read; resolves role, can_edit,
+                                      requires_login, owner_name, session_id
 ```
 
-`visibility` (`private`|`unlisted`) and the unique `share_slug` exist now so
-phase 3 sharing is a route + UI change rather than another table migration.
+Sharing rules live in `app/services/sharing.py`. `visibility` is `private`
+(owner only), `unlisted` (anyone with the slug gets `link_role`) or `invited`
+(only `project_members` emails get their member role). Anonymous callers can
+only read a public `unlisted` link; editing always needs a signed-in user.
+Turning sharing off clears the slug, and re-enabling or rotating always
+allocates a new `YTMM-XXXXXXXX` value.
+
+`POST /transcript` with a `project_id` is opened by any role, and
+`find_project_session` reuses one live session per project so every editor
+receives the same SSE `node_edit` and AI `diff` events. `/node` and
+`/update-map` resolve the caller's role from the session's project:
+viewers get 403 `project_read_only`, editors and the owner may write, and an
+anonymous caller gets 401. A per-session lock makes only one editor run the AI
+for a given transcript chunk. Only the owner may rename/delete the project or
+change sharing; editor autosave writes the map fields but ignores a supplied
+title.
 
 ## Frontend structure
 
 - `src/router.tsx` — `/` (landing), `/login`, `/register`, `/app` (workspace,
-  no account needed), `/app/:projectId` (reopen a saved project, guarded) and
-  `/dashboard` behind `ProtectedRoute`.
+  no account needed), `/app/:projectId` (reopen a saved or shared project,
+  guarded), `/s/:slug` (public read-only share page) and `/dashboard` behind
+  `ProtectedRoute`.
 - `src/context/AuthContext.tsx` — session restore (`ytmm_session` hint →
   `/auth/refresh` → `/auth/me`), `login`, `register`, `logout`.
 - `src/lib/api.ts` — API base, in-memory access token, one silent refresh +
   replay on 401, `ApiError`/`errorCode` helpers.
-- `src/lib/projects.ts` — project API client/types, `formatWhen`, and the
+- `src/lib/projects.ts` — project + sharing API client/types (`ShareSettings`,
+  `SharedProjectView`, `shareUrl`, `parseShareSlug`), `formatWhen`, and the
   `ytmm:guest-draft` localStorage helpers.
 - `src/pages/Auth/` — combined login/register page with the mascot, plus
   `OAuthButtons`, which asks `/auth/providers` and only enables providers the
   server can handle.
 - `src/pages/Dashboard/` — real overview (stats + recent), saved projects and
-  drafts lists with search, rename, duplicate, delete and promote; the share
-  section remains a phase 3 placeholder.
+  drafts lists with search, rename, duplicate, delete and promote, a
+  “Được chia sẻ” list, the join-by-link form and `ShareDialog` (toggle, link
+  role, invite-only mode, copy/rotate link, email invites and member roles).
+- `src/pages/SharedProject/` — `/s/:slug` read-only page: project snapshot,
+  optional live SSE updates, player with click-to-seek, login prompt for an
+  invite-only link and “Mở để chỉnh sửa” for editors.
 - `src/pages/Workspace/index.tsx` — player, transcript loading, update loop,
   session recovery, race-condition guards (`loadTokenRef`, `sessionIdRef`,
-  `isUpdatingRef`), node editor panel (`patchNode`, `saveEditor`, `togglePin`),
-  plus autosave, the save dialog and the guest draft banner.
+  `isUpdatingRef`), role-aware read-only mode (`role`, `canEdit`), node editor
+  panel (`patchNode`, `saveEditor`, `togglePin`), plus autosave, the save dialog
+  and the guest draft banner. `/node` and `/update-map` attach the bearer token
+  through `sessionRequest`.
 - `src/lib/youtube.ts` — pure YouTube helpers used by the workspace and tests:
   URL/ID parsing (`watch`, `youtu.be`, `shorts`, `embed`, `live`, bare ID),
   transcript error codes → Vietnamese copy, and player error codes
@@ -387,8 +429,10 @@ gzipped).
 
 ## Known scaling limits
 
-Single-process session store ⇒ one uvicorn worker. Accounts and saved projects
-live in PostgreSQL, but the live session, SSE buffer and guest cache are still
-per process; horizontal scaling needs Redis for sessions/pub-sub. Sharing
-(phase 3) will add public read routes on top of the existing `visibility` and
-`share_slug` columns.
+Single-process session store ⇒ one uvicorn worker. Accounts, saved projects and
+project memberships live in PostgreSQL, but the live session, SSE buffer and
+guest cache are still per process; horizontal scaling needs Redis for
+sessions/pub-sub. Sharing reuses that same live session: every editor of a
+project watches one SSE stream, and a per-session lock serialises AI updates.
+Conflicts are last-write-wins per edit; presence cursors and CRDT/OT merge are
+future work.

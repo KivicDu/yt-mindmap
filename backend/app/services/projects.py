@@ -12,6 +12,7 @@ from sqlalchemy.orm import Session
 
 from app.db.base import utcnow
 from app.models.project import Project
+from node_tree import count_nodes
 
 
 def _iso(value: datetime | None) -> str | None:
@@ -27,7 +28,9 @@ def summary(project: Project) -> dict[str, Any]:
         "is_draft": project.is_draft,
         "visibility": project.visibility,
         "share_slug": project.share_slug,
-        "node_count": len(project.nodes or []),
+        "link_role": project.link_role,
+        # The tree is nested, so the top-level list is only the number of roots.
+        "node_count": count_nodes(project.nodes or []),
         "transcript_language": project.transcript_language,
         "consumed_until": round(float(project.consumed_until or 0.0), 2),
         "created_at": _iso(project.created_at),
@@ -152,6 +155,35 @@ def stats(db: Session, user_id: str) -> dict[str, Any]:
     }
 
 
+def save_session(
+    db: Session,
+    project: Project,
+    session: dict[str, Any],
+    *,
+    title: str | None = None,
+) -> Project:
+    """Write the live session into an existing row.
+
+    Shared editors use this directly: the row belongs to the owner, but the map
+    fields are the session's. ``title`` is only honoured when the caller is the
+    owner; a collaborator may never rename someone else's project.
+    """
+
+    if title:
+        project.title = title
+    project.nodes = session.get("nodes", [])
+    project.transcript = session.get("transcript", [])
+    project.transcript_language = session.get("language")
+    project.summary_so_far = session.get("summary_so_far", "")
+    project.consumed_until = float(session.get("consumed_until", 0.0))
+    project.last_opened_at = utcnow()
+
+    db.commit()
+    db.refresh(project)
+    session["project_id"] = project.id
+    return project
+
+
 def autosave(
     db: Session,
     user_id: str,
@@ -161,7 +193,7 @@ def autosave(
     title: str | None = None,
     is_draft: bool = True,
 ) -> Project | None:
-    """Copy the live in-memory session into a row.
+    """Copy the live in-memory session into a row owned by ``user_id``.
 
     A saved project is never demoted back to a draft, and its title is only
     replaced when the caller explicitly sends one (the "save as" dialog).
@@ -197,17 +229,6 @@ def autosave(
             is_draft=is_draft,
         )
         db.add(project)
-    elif title:
-        project.title = title
+        db.flush()
 
-    project.nodes = session.get("nodes", [])
-    project.transcript = session.get("transcript", [])
-    project.transcript_language = session.get("language")
-    project.summary_so_far = session.get("summary_so_far", "")
-    project.consumed_until = float(session.get("consumed_until", 0.0))
-    project.last_opened_at = utcnow()
-
-    db.commit()
-    db.refresh(project)
-    session["project_id"] = project.id
-    return project
+    return save_session(db, project, session, title=title)

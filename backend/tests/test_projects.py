@@ -44,6 +44,44 @@ def create_project(client: TestClient, headers: dict[str, str], **overrides) -> 
     return response.json()
 
 
+def test_node_count_includes_nested_branches(client: TestClient):
+    """The tree is nested, so len(nodes) would only count the roots."""
+
+    headers = register(client)
+    created = create_project(
+        client,
+        headers,
+        nodes=[
+            {
+                "id": "root",
+                "parentId": None,
+                "label": "Root",
+                "time": 0.0,
+                "children": [
+                    {
+                        "id": "child",
+                        "parentId": "root",
+                        "label": "Child",
+                        "time": 4.0,
+                        "children": [
+                            {
+                                "id": "grandchild",
+                                "parentId": "child",
+                                "label": "Grandchild",
+                                "time": 8.0,
+                                "children": [],
+                            }
+                        ],
+                    }
+                ],
+            }
+        ],
+    )
+
+    assert created["node_count"] == 3
+    assert client.get("/api/projects", headers=headers).json()["items"][0]["node_count"] == 3
+
+
 def test_project_crud_lifecycle(client: TestClient):
     headers = register(client)
     created = create_project(client, headers)

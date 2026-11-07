@@ -1,0 +1,77 @@
+/* Read-only share page: reuses the workspace shell, adds the link header. */
+
+.shared-app {
+  min-height: 100dvh;
+}
+
+.shared-title {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  gap: 1px;
+  min-width: 0;
+}
+
+.shared-title strong {
+  overflow: hidden;
+  font-size: 14px;
+  font-weight: 550;
+  letter-spacing: -0.01em;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.shared-eyebrow {
+  color: var(--ink-3);
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+}
+
+.shared-shell {
+  display: grid;
+  place-items: center;
+  min-height: 100dvh;
+  padding: 24px;
+  background: var(--paper);
+  color: var(--ink);
+}
+
+.shared-loading {
+  color: var(--ink-3);
+  font-size: 13.5px;
+}
+
+.shared-error {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  width: min(480px, 100%);
+  padding: 26px;
+  border: 1px solid var(--line);
+  border-radius: var(--r-lg);
+  background: var(--surface);
+  box-shadow: var(--shadow-1);
+}
+
+.shared-error h1 {
+  margin: 0;
+  font-size: 19px;
+  font-weight: 550;
+  letter-spacing: -0.02em;
+  line-height: 1.35;
+}
+
+.shared-error__actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 7px;
+  margin-top: 6px;
+}
+
+@media (max-width: 760px) {
+  .shared-title {
+    display: none;
+  }
+}
