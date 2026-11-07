@@ -8,18 +8,23 @@ import {
   fetchProjectStats,
   formatWhen,
   listProjects,
+  listSharedProjects,
+  parseShareSlug,
   updateProject,
   type ProjectStats,
   type ProjectSummary,
+  type SharedProjectSummary,
 } from '../../lib/projects'
+import ShareDialog from './ShareDialog'
 import './Dashboard.css'
 
-type SectionID = 'overview' | 'projects' | 'drafts' | 'join' | 'settings'
+type SectionID = 'overview' | 'projects' | 'drafts' | 'shared' | 'join' | 'settings'
 
 const sections: { id: SectionID; label: string }[] = [
   { id: 'overview', label: 'Tổng quan' },
   { id: 'projects', label: 'Dự án của tôi' },
   { id: 'drafts', label: 'Bản nháp' },
+  { id: 'shared', label: 'Được chia sẻ' },
   { id: 'join', label: 'Tham gia dự án' },
   { id: 'settings', label: 'Cài đặt' },
 ]
@@ -96,6 +101,7 @@ function Dashboard() {
           {active === 'drafts' && (
             <ProjectList key="drafts" draft revision={revision} onChanged={refresh} />
           )}
+          {active === 'shared' && <SharedList revision={revision} />}
           {active === 'join' && <JoinSection />}
           {active === 'settings' && <SettingsSection />}
         </div>
@@ -170,9 +176,13 @@ function Overview({
           <span className="dash-stat-note">Tự động lưu, chưa đặt tên</span>
         </article>
         <article className="dash-stat">
-          <span className="dash-stat-label">Được chia sẻ</span>
+          <span className="dash-stat-label">Đang chia sẻ</span>
           <strong>{stats ? stats.shared : '—'}</strong>
-          <span className="dash-stat-note">Chia sẻ sẽ có ở giai đoạn 3</span>
+          <span className="dash-stat-note">
+            {stats && stats.shared_with_me > 0
+              ? `+ ${stats.shared_with_me} dự án người khác chia sẻ với bạn`
+              : 'Dự án bạn đang mở link hoặc mời người khác'}
+          </span>
         </article>
       </section>
 
@@ -230,6 +240,7 @@ function ProjectList({
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
   const [reload, setReload] = useState(0)
+  const [sharing, setSharing] = useState<ProjectSummary | null>(null)
 
   useEffect(() => {
     let cancelled = false
@@ -304,11 +315,16 @@ function ProjectList({
                 project={project}
                 openLabel={handleOpen}
                 onChanged={changed}
+                onShare={() => setSharing(project)}
               />
             ))}
           </ul>
         )}
       </section>
+
+      {sharing && (
+        <ShareDialog project={sharing} onClose={() => setSharing(null)} />
+      )}
     </>
   )
 }
@@ -317,10 +333,12 @@ function ProjectRow({
   project,
   openLabel,
   onChanged,
+  onShare,
 }: {
   project: ProjectSummary
   openLabel: string
   onChanged: () => void
+  onShare: () => void
 }) {
   const [editing, setEditing] = useState(false)
   const [title, setTitle] = useState(project.title)
@@ -393,6 +411,7 @@ function ProjectRow({
               {project.video_id ? `${project.video_id} · ` : ''}
               {project.node_count} nhánh · cập nhật {formatWhen(project.updated_at)}
               {project.is_draft ? ' · bản nháp' : ''}
+              {project.visibility !== 'private' ? ' · đang chia sẻ' : ''}
             </span>
           </Link>
         )}
@@ -430,14 +449,24 @@ function ProjectRow({
                 Lưu thành dự án
               </button>
             ) : (
-              <button
-                className="dash-mini"
-                type="button"
-                disabled={busy}
-                onClick={() => void run(() => duplicateProject(project.id))}
-              >
-                Nhân bản
-              </button>
+              <>
+                <button
+                  className="dash-mini"
+                  type="button"
+                  disabled={busy}
+                  onClick={onShare}
+                >
+                  Chia sẻ
+                </button>
+                <button
+                  className="dash-mini"
+                  type="button"
+                  disabled={busy}
+                  onClick={() => void run(() => duplicateProject(project.id))}
+                >
+                  Nhân bản
+                </button>
+              </>
             )}
             <button
               className="dash-mini dash-mini--danger"
@@ -454,29 +483,159 @@ function ProjectRow({
 }
 
 /* ---------------------------------------------------------------- */
+/* Shared with me                                                    */
+/* ---------------------------------------------------------------- */
+
+const ROLE_TEXT: Record<string, string> = {
+  viewer: 'Chỉ xem',
+  editor: 'Có thể chỉnh sửa',
+}
+
+function SharedList({ revision }: { revision: number }) {
+  const [items, setItems] = useState<SharedProjectSummary[]>([])
+  const [query, setQuery] = useState('')
+  const [loading, setLoading] = useState(true)
+  const [error, setError] = useState('')
+
+  useEffect(() => {
+    let cancelled = false
+    const timer = setTimeout(() => {
+      setLoading(true)
+      listSharedProjects({ q: query })
+        .then((data) => {
+          if (cancelled) return
+          setItems(data.items)
+          setError('')
+        })
+        .catch(() => {
+          if (!cancelled) setError(API_MESSAGE)
+        })
+        .finally(() => {
+          if (!cancelled) setLoading(false)
+        })
+    }, 250)
+    return () => {
+      cancelled = true
+      clearTimeout(timer)
+    }
+  }, [query, revision])
+
+  return (
+    <section className="dash-panel">
+      <header className="dash-panel-header">
+        <h2>Được chia sẻ với tôi</h2>
+        <span className="dash-panel-note">
+          {loading ? 'Đang tải…' : `${items.length} mục`}
+        </span>
+      </header>
+
+      <div className="dash-toolbar">
+        <input
+          className="dash-search"
+          type="search"
+          value={query}
+          placeholder="Tìm theo tên hoặc mã video"
+          aria-label="Tìm dự án được chia sẻ"
+          onChange={(event) => setQuery(event.target.value)}
+        />
+      </div>
+
+      {error && <p className="dash-error" role="alert">{error}</p>}
+
+      {!loading && !error && items.length === 0 ? (
+        <p className="dash-empty-inline">
+          {query
+            ? 'Không tìm thấy dự án nào khớp từ khoá.'
+            : 'Chưa có ai chia sẻ dự án với email của bạn. Khi được mời, dự án sẽ xuất hiện ở đây.'}
+        </p>
+      ) : (
+        <ul className="dash-list">
+          {items.map((project) => (
+            <li key={project.id} className="dash-item">
+              <div className="dash-item__main">
+                <Link className="dash-item__link" to={`/app/${project.id}`}>
+                  <span className="dash-item__title">
+                    {project.title}
+                    <span className={`share-badge share-badge--${project.role}`}>
+                      {ROLE_TEXT[project.role] || project.role}
+                    </span>
+                  </span>
+                  <span className="dash-item__meta">
+                    của {project.owner_name}
+                    {project.video_id ? ` · ${project.video_id}` : ''}
+                    {` · ${project.node_count} nhánh · cập nhật ${formatWhen(project.updated_at)}`}
+                  </span>
+                </Link>
+              </div>
+              <div className="dash-item__actions">
+                <Link className="dash-mini dash-mini--link" to={`/app/${project.id}`}>
+                  Mở
+                </Link>
+                {project.share_slug && (
+                  <Link
+                    className="dash-mini dash-mini--link"
+                    to={`/s/${project.share_slug}`}
+                  >
+                    Xem bằng link
+                  </Link>
+                )}
+              </div>
+            </li>
+          ))}
+        </ul>
+      )}
+    </section>
+  )
+}
+
+/* ---------------------------------------------------------------- */
 /* Placeholders and account                                          */
 /* ---------------------------------------------------------------- */
 
 function JoinSection() {
+  const navigate = useNavigate()
+  const [value, setValue] = useState('')
+  const [error, setError] = useState('')
+
+  const join = () => {
+    const slug = parseShareSlug(value)
+    if (!slug) {
+      setError('Mã chia sẻ chưa đúng. Ví dụ: YTMM-8F2K9QZ1 hoặc dán nguyên link được gửi.')
+      return
+    }
+    navigate(`/s/${slug}`)
+  }
+
   return (
     <section className="dash-panel">
       <header className="dash-panel-header">
         <h2>Tham gia dự án được chia sẻ</h2>
-        <span className="dash-panel-note">Giai đoạn 3</span>
+        <span className="dash-panel-note">Bằng link</span>
       </header>
       <p className="dash-empty-inline">
-        Nhập mã chia sẻ hoặc dán link được gửi cho bạn để xem sơ đồ của người khác. Phần này cần hệ thống chia sẻ
-        ở Giai đoạn 3 nên ô nhập hiện chưa hoạt động.
+        Dán link chia sẻ hoặc mã YTMM-… để mở sơ đồ của người khác. Nếu dự án chỉ dành
+        cho người được mời, bạn cần đăng nhập đúng email đã được mời.
       </p>
-      <div className="dash-join">
+      <form
+        className="dash-join"
+        onSubmit={(event) => {
+          event.preventDefault()
+          join()
+        }}
+      >
         <input
           type="text"
-          placeholder="Ví dụ: YTMM-8F2K"
-          aria-label="Mã chia sẻ"
-          disabled
+          placeholder="Ví dụ: YTMM-8F2K9QZ1"
+          aria-label="Mã hoặc link chia sẻ"
+          value={value}
+          onChange={(event) => {
+            setValue(event.target.value)
+            if (error) setError('')
+          }}
         />
-        <button type="button" disabled>Tham gia</button>
-      </div>
+        <button type="submit" disabled={!value.trim()}>Tham gia</button>
+      </form>
+      {error && <p className="dash-error" role="alert">{error}</p>}
     </section>
   )
 }

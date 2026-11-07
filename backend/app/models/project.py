@@ -41,12 +41,18 @@ class Project(Base, TimestampMixin):
     # Autosave writes a draft; an explicit "save" promotes it to a project.
     is_draft: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
 
-    # Reserved for phase 3 sharing; no UI writes these yet.
+    # Sharing: private (owner only), unlisted (anyone with the link) or
+    # invited (only addresses in ProjectMember). The slug is the capability;
+    # turning sharing off clears it so an old link can never be reused.
     visibility: Mapped[str] = mapped_column(
         String(20), default="private", nullable=False
     )
     share_slug: Mapped[str | None] = mapped_column(
         String(24), unique=True, index=True, nullable=True
+    )
+    # Role granted by the link itself; invited members carry their own role.
+    link_role: Mapped[str] = mapped_column(
+        String(20), default="viewer", nullable=False
     )
 
     last_opened_at: Mapped[datetime | None] = mapped_column(

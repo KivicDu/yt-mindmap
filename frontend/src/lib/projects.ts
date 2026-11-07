@@ -22,12 +22,21 @@ export interface ProjectSummary {
   is_draft: boolean
   visibility: string
   share_slug: string | null
+  link_role: ShareRole
   node_count: number
   transcript_language: string | null
   consumed_until: number
   created_at: string | null
   updated_at: string | null
   last_opened_at: string | null
+}
+
+export type ShareRole = 'viewer' | 'editor'
+export type ShareAccess = 'anyone' | 'invited'
+
+export interface SharedProjectSummary extends ProjectSummary {
+  role: ShareRole
+  owner_name: string
 }
 
 export interface ProjectDetail extends ProjectSummary {
@@ -40,6 +49,7 @@ export interface ProjectStats {
   saved: number
   drafts: number
   shared: number
+  shared_with_me: number
   recent: ProjectSummary[]
 }
 
@@ -48,6 +58,37 @@ export interface ProjectList {
   total: number
   limit: number
   offset: number
+}
+
+export interface SharedProjectList extends ProjectList {
+  items: SharedProjectSummary[]
+}
+
+export interface ShareMember {
+  id: string
+  email: string
+  role: ShareRole
+  registered: boolean
+  created_at: string | null
+}
+
+export interface ShareSettings {
+  enabled: boolean
+  access: ShareAccess
+  role: ShareRole
+  slug: string | null
+  visibility: 'private' | 'unlisted' | 'invited'
+  members: ShareMember[]
+}
+
+/** What `/api/share/:slug` returns to a link holder. */
+export interface SharedProjectView {
+  project: ProjectDetail
+  role: ShareRole
+  can_edit: boolean
+  requires_login: boolean
+  owner_name: string
+  session_id: string | null
 }
 
 export function listProjects(params: {
@@ -63,8 +104,23 @@ export function listProjects(params: {
   return apiFetch<ProjectList>(`/projects${query ? `?${query}` : ''}`)
 }
 
+export function listSharedProjects(params: {
+  q?: string
+  limit?: number
+} = {}): Promise<SharedProjectList> {
+  const search = new URLSearchParams()
+  if (params.q?.trim()) search.set('q', params.q.trim())
+  if (params.limit) search.set('limit', String(params.limit))
+  const query = search.toString()
+  return apiFetch<SharedProjectList>(`/projects/shared${query ? `?${query}` : ''}`)
+}
+
 export function getProject(id: string): Promise<ProjectDetail> {
   return apiFetch<ProjectDetail>(`/projects/${id}`)
+}
+
+export function getSharedBySlug(slug: string): Promise<SharedProjectView> {
+  return apiFetch<SharedProjectView>(`/share/${encodeURIComponent(slug)}`)
 }
 
 export function updateProject(
@@ -84,6 +140,75 @@ export function duplicateProject(id: string): Promise<ProjectSummary> {
 
 export function fetchProjectStats(): Promise<ProjectStats> {
   return apiFetch<ProjectStats>('/projects/stats')
+}
+
+/* ---------------------------------------------------------------- */
+/* Sharing                                                          */
+/* ---------------------------------------------------------------- */
+
+export function getShareSettings(projectId: string): Promise<ShareSettings> {
+  return apiFetch<ShareSettings>(`/projects/${projectId}/share`)
+}
+
+export function updateShareSettings(
+  projectId: string,
+  input: { enabled: boolean; access?: ShareAccess; role?: ShareRole },
+): Promise<ShareSettings> {
+  return apiFetch<ShareSettings>(`/projects/${projectId}/share`, {
+    method: 'PUT',
+    body: { access: 'anyone', role: 'viewer', ...input },
+  })
+}
+
+export function rotateShareLink(
+  projectId: string,
+  role?: ShareRole,
+): Promise<ShareSettings> {
+  return apiFetch<ShareSettings>(`/projects/${projectId}/share/rotate`, {
+    method: 'POST',
+    body: role ? { role } : {},
+  })
+}
+
+export function addShareMember(
+  projectId: string,
+  email: string,
+  role: ShareRole,
+): Promise<ShareMember> {
+  return apiFetch<ShareMember>(`/projects/${projectId}/members`, {
+    method: 'POST',
+    body: { email, role },
+  })
+}
+
+export function updateShareMember(
+  projectId: string,
+  memberId: string,
+  role: ShareRole,
+): Promise<ShareMember> {
+  return apiFetch<ShareMember>(`/projects/${projectId}/members/${memberId}`, {
+    method: 'PATCH',
+    body: { role },
+  })
+}
+
+export function removeShareMember(projectId: string, memberId: string): Promise<void> {
+  return apiFetch<void>(`/projects/${projectId}/members/${memberId}`, {
+    method: 'DELETE',
+  })
+}
+
+/** Absolute URL a recipient can open without an account. */
+export function shareUrl(slug: string): string {
+  return `${window.location.origin}/s/${slug}`
+}
+
+const SLUG_PATTERN = /YTMM-[A-Z0-9]{8}/i
+
+/** Accept either a bare slug or a full share link and return the slug. */
+export function parseShareSlug(input: string): string | null {
+  const match = input.trim().match(SLUG_PATTERN)
+  return match ? match[0].toUpperCase() : null
 }
 
 /**

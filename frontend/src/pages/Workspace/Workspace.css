@@ -164,6 +164,27 @@
   background: var(--danger);
 }
 
+.app-role {
+  display: inline-flex;
+  align-items: center;
+  height: 26px;
+  padding: 0 9px;
+  border: 1px solid var(--line-2);
+  border-radius: var(--r-pill);
+  background: var(--paper-2);
+  color: var(--ink-3);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  white-space: nowrap;
+}
+
+.app-role--editor {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+  color: var(--accent-ink);
+}
+
 .draft-banner {
   display: flex;
   align-items: center;
@@ -635,6 +656,37 @@
   gap: 5px;
   font-size: 11.5px;
   color: var(--ink-3);
+}
+
+.session__readonly {
+  padding: 10px 12px;
+  border: 1px solid var(--line-2);
+  border-radius: var(--r-md);
+  background: var(--paper-2);
+}
+
+.session__readonly strong {
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--ink-3);
+}
+
+.session__readonly p {
+  margin-top: 4px;
+  font-size: 12.5px;
+  line-height: 1.55;
+  color: var(--ink-2);
+}
+
+.session__readonly--edit {
+  border-color: var(--accent-line);
+  background: var(--accent-soft);
+}
+
+.session__readonly--edit strong {
+  color: var(--accent-ink);
 }
 
 /* ============================================================

@@ -53,9 +53,11 @@ indistinguishable from a missing one (404, never 403). `/transcript` accepts the
 optional user dependency so guests can still load captions, but a `project_id`
 requires the owner.
 
-**Sharing is prepared, not implemented.** `visibility` (`private`|`unlisted`)
-and a unique `share_slug` exist from the first migration; phase 3 adds the
-routes and UI without another table migration.
+**Sharing is prepared in phase 2, implemented in phase 3.**
+`visibility` (`private`|`unlisted` from the first migration; `invited` and
+`link_role` added later) and a unique `share_slug` exist from the first
+migration, so sharing is a route + UI change. See ADR 0007 for the sharing and
+realtime collaboration model that builds on these rows.
 
 ## Consequences
 - Reopening a project works offline from YouTube's perspective, and notes/pins
