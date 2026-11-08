@@ -179,6 +179,7 @@ yt-mindmap/
 - [ADR 0004](docs/adr/0004-collaboration-scope.md) — collaboration scope
 - [ADR 0005](docs/adr/0005-accounts-jwt-oauth.md) — accounts, JWT and OAuth
 - [ADR 0006](docs/adr/0006-saved-projects.md) — saved projects, autosave and per-user notes
+- [ADR 0007](docs/adr/0007-sharing-and-collaboration.md) — sharing, invites and realtime collaboration
 - [Contributing workflow](CONTRIBUTING.md) — branch model and commit conventions
 
 ## How It Works
