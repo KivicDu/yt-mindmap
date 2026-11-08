@@ -105,7 +105,12 @@ export function LoginForm({ active, onMoodChange, onCaretChange, onFocusTarget }
         </div>
 
         <div className="auth-field">
-          <label htmlFor="login-password">Mật khẩu</label>
+          <div className="auth-label-row">
+            <label htmlFor="login-password">Mật khẩu</label>
+            <Link className="auth-inline-link" to="/forgot-password">
+              Quên mật khẩu?
+            </Link>
+          </div>
           <PasswordInput
             id="login-password"
             autoComplete="current-password"

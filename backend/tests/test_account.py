@@ -8,7 +8,7 @@ from sqlalchemy.orm import Session
 
 from app.core.config import get_settings
 from app.db.base import utcnow
-from app.models.email_verification import EmailVerificationToken
+from app.models.account_token import AccountToken
 from app.models.user import User
 from app.utils.security import create_token
 
@@ -262,7 +262,7 @@ def test_expired_verification_token_is_rejected(
     body = register(client)
     token = request_link(client, auth_headers(body))
 
-    row = db_session.query(EmailVerificationToken).one()
+    row = db_session.query(AccountToken).one()
     row.expires_at = utcnow() - timedelta(hours=1)
     db_session.commit()
 

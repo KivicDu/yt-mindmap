@@ -8,7 +8,7 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useState } from 'react'
 import type { ReactNode } from 'react'
 import { apiFetch, hasSessionHint, onSessionLost, refreshSession, setAccessToken } from '../lib/api'
-import type { User, VerificationRequestResult } from '../lib/account'
+import type { EmailChangeRequestResult, User, VerificationRequestResult } from '../lib/account'
 
 export type { User } from '../lib/account'
 
@@ -24,6 +24,13 @@ interface AuthContextValue {
   changePassword: (currentPassword: string, newPassword: string) => Promise<void>
   requestEmailVerification: () => Promise<VerificationRequestResult>
   verifyEmail: (token: string) => Promise<User>
+  requestPasswordReset: (email: string) => Promise<void>
+  resetPassword: (token: string, newPassword: string) => Promise<void>
+  requestEmailChange: (
+    newEmail: string,
+    currentPassword?: string,
+  ) => Promise<EmailChangeRequestResult>
+  confirmEmailChange: (token: string) => Promise<User>
 }
 
 interface AuthResponse {
@@ -153,6 +160,52 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     return verified
   }, [])
 
+  const requestPasswordReset = useCallback(async (email: string) => {
+    // The API answers the same way for unknown addresses, so the UI can always
+    // show the same "check your inbox" message.
+    await apiFetch<{ status: 'sent' }>('/auth/password/forgot', {
+      body: { email },
+      anonymous: true,
+    })
+  }, [])
+
+  const resetPassword = useCallback(
+    async (token: string, newPassword: string) => {
+      await apiFetch<void>('/auth/password/reset', {
+        body: { token, new_password: newPassword },
+        anonymous: true,
+      })
+      // A reset revokes every refresh token, including this browser's.
+      clear()
+    },
+    [clear],
+  )
+
+  const requestEmailChange = useCallback(
+    (newEmail: string, currentPassword?: string) =>
+      apiFetch<EmailChangeRequestResult>('/auth/email/request', {
+        body: {
+          new_email: newEmail,
+          ...(currentPassword ? { current_password: currentPassword } : {}),
+        },
+      }),
+    [],
+  )
+
+  const confirmEmailChange = useCallback(
+    async (token: string) => {
+      const updated = await apiFetch<User>('/auth/email/confirm', {
+        method: 'POST',
+        body: { token },
+        anonymous: true,
+      })
+      // Confirming revokes every refresh token, so this browser is signed out.
+      clear()
+      return updated
+    },
+    [clear],
+  )
+
   const value = useMemo<AuthContextValue>(
     () => ({
       user,
@@ -164,6 +217,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       changePassword,
       requestEmailVerification,
       verifyEmail,
+      requestPasswordReset,
+      resetPassword,
+      requestEmailChange,
+      confirmEmailChange,
     }),
     [
       user,
@@ -175,6 +232,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       changePassword,
       requestEmailVerification,
       verifyEmail,
+      requestPasswordReset,
+      resetPassword,
+      requestEmailChange,
+      confirmEmailChange,
     ],
   )
 

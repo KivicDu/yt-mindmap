@@ -67,3 +67,34 @@ class VerificationRequestResponse(BaseModel):
     status: Literal["sent", "already_verified"]
     # Only populated when DEBUG_EMAIL_LINKS is on (local development).
     dev_link: str | None = None
+
+
+class ForgotPasswordRequest(BaseModel):
+    email: EmailStr
+
+
+class ResetPasswordRequest(BaseModel):
+    token: str = Field(min_length=1, max_length=128)
+    new_password: str = PASSWORD_FIELD
+
+
+class EmailChangeRequest(BaseModel):
+    new_email: EmailStr
+    # Required for password accounts; OAuth-only accounts have no password.
+    current_password: str | None = Field(default=None, max_length=72)
+
+
+class ConfirmEmailChangeRequest(BaseModel):
+    token: str = Field(min_length=1, max_length=128)
+
+
+class ActionResponse(BaseModel):
+    """Generic answer that never reveals whether an address has an account."""
+
+    status: Literal["sent"]
+
+
+class EmailChangeRequestResponse(BaseModel):
+    status: Literal["sent", "unchanged"]
+    # Only populated when DEBUG_EMAIL_LINKS is on (local development).
+    dev_link: str | None = None
