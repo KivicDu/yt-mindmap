@@ -36,6 +36,12 @@ class Settings(BaseSettings):
     ACCESS_TOKEN_TTL_MINUTES: int = 15
     REFRESH_TOKEN_TTL_DAYS: int = 14
 
+    # Phase 4 has no SMTP transport: verification links are written to the log.
+    # Set this to true locally to also return the link from the API so the UI
+    # can offer a one-click "open verification link" shortcut. Never enable it
+    # on a public server.
+    DEBUG_EMAIL_LINKS: bool = False
+
     # Refresh cookie
     REFRESH_COOKIE_NAME: str = "ytmm_refresh_token"
     SESSION_HINT_COOKIE_NAME: str = "ytmm_session"

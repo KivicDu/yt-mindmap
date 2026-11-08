@@ -15,7 +15,6 @@ because cookies are bound to the host, not the port).
 from fastapi import Response
 
 from app.core.config import get_settings
-from app.utils.security import create_token
 
 
 def refresh_cookie_kwargs() -> dict:
@@ -30,12 +29,11 @@ def refresh_cookie_kwargs() -> dict:
     }
 
 
-def set_session_cookies(response: Response, user_id: str) -> None:
-    """Attach the refresh cookie and the readable session hint."""
+def set_session_cookies(response: Response, refresh_token: str) -> None:
+    """Attach a pre-issued refresh token and the readable session hint."""
     settings = get_settings()
-    token, _ = create_token(user_id, "refresh")
     response.set_cookie(
-        value=token,
+        value=refresh_token,
         max_age=settings.refresh_cookie_max_age,
         **refresh_cookie_kwargs(),
     )

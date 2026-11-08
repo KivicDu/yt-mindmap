@@ -21,6 +21,7 @@ from sqlalchemy.orm import Session
 from app.core.config import get_settings
 from app.db.session import get_db
 from app.services.accounts import upsert_oauth_user
+from app.services.auth_tokens import issue_refresh_token
 from app.services.oauth import OAuthError, build_authorize_url, exchange_code, is_configured
 from app.utils.cookies import set_session_cookies
 
@@ -107,13 +108,14 @@ def finish(
 
     try:
         user = upsert_oauth_user(db, identity)
+        refresh_token = issue_refresh_token(db, user.id)
     except Exception:  # noqa: BLE001 - never strand the browser on a 500
         db.rollback()
         return fail("oauth_account_error")
 
     response = RedirectResponse(f"{settings.FRONTEND_URL.rstrip('/')}/dashboard", status_code=302)
     _clear_state_cookie(response)
-    set_session_cookies(response, user.id)
+    set_session_cookies(response, refresh_token)
     return response
 
 

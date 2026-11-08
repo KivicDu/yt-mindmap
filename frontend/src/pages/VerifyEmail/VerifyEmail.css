@@ -1,0 +1,112 @@
+.verify-shell {
+  display: flex;
+  flex-direction: column;
+  min-height: 100dvh;
+  padding: 20px 24px 48px;
+  background: var(--paper);
+  color: var(--ink);
+}
+
+.verify-topbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  width: 100%;
+  max-width: 980px;
+  margin: 0 auto 40px;
+}
+
+.verify-brand {
+  color: var(--ink);
+  font-family: var(--mono);
+  font-size: 13px;
+  font-weight: 500;
+  letter-spacing: 0.02em;
+}
+
+.verify-card {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  width: min(480px, 100%);
+  margin: 0 auto;
+  padding: 30px 28px;
+  border: 1px solid var(--line);
+  border-radius: var(--r-lg);
+  background: var(--surface);
+  box-shadow: var(--shadow-1);
+}
+
+.verify-card--ok {
+  border-color: color-mix(in srgb, var(--accent) 30%, var(--line));
+}
+
+.verify-eyebrow {
+  color: var(--ink-3);
+  font-family: var(--mono);
+  font-size: 10.5px;
+  font-weight: 600;
+  letter-spacing: 0.12em;
+}
+
+.verify-card h1 {
+  margin: 0;
+  font-size: 21px;
+  font-weight: 550;
+  letter-spacing: -0.02em;
+  line-height: 1.3;
+}
+
+.verify-text {
+  margin: 0;
+  color: var(--ink-2);
+  font-size: 13.5px;
+  line-height: 1.7;
+}
+
+.verify-text strong {
+  color: var(--ink);
+  font-weight: 550;
+  overflow-wrap: anywhere;
+}
+
+.verify-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 8px;
+}
+
+.verify-cta {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  height: 36px;
+  padding: 0 16px;
+  border: 1px solid var(--accent);
+  border-radius: var(--r-md);
+  background: var(--accent);
+  color: var(--accent-contrast);
+  font-size: 13px;
+  font-weight: 500;
+  transition:
+    background-color var(--t-fast) var(--ease),
+    border-color var(--t-fast) var(--ease);
+}
+
+.verify-cta:hover {
+  background: var(--accent-hover);
+  border-color: var(--accent-hover);
+}
+
+.verify-cta--ghost {
+  border-color: var(--line-2);
+  background: var(--surface);
+  color: var(--ink);
+}
+
+.verify-cta--ghost:hover {
+  border-color: var(--line-strong);
+  background: var(--paper-2);
+}

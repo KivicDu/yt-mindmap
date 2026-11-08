@@ -5,6 +5,7 @@ import Dashboard from './pages/Dashboard'
 import AuthPage from './pages/Auth/AuthPage'
 import Home from './pages/Home'
 import SharedProject from './pages/SharedProject'
+import VerifyEmail from './pages/VerifyEmail'
 import Workspace from './pages/Workspace'
 
 export const router = createBrowserRouter([
@@ -15,6 +16,7 @@ export const router = createBrowserRouter([
       { index: true, element: <Home /> },
       { path: 'app', element: <Workspace /> },
       { path: 's/:slug', element: <SharedProject /> },
+      { path: 'verify-email', element: <VerifyEmail /> },
       {
         path: 'app/:projectId',
         element: (
