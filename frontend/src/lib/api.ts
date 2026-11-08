@@ -97,8 +97,22 @@ async function send(path: string, options: RequestOptions): Promise<Response> {
   })
 }
 
-/** Ask for a new access token using the HttpOnly refresh cookie. */
-export async function refreshSession(): Promise<boolean> {
+/** Ask for a new access token using the HttpOnly refresh cookie.
+ *
+ * Refreshing rotates the cookie, so two concurrent 401s must share one call:
+ * otherwise the second request would replay an already-revoked token and log
+ * the user out. The promise is cleared when it settles so later calls retry.
+ */
+let refreshInFlight: Promise<boolean> | null = null
+
+export function refreshSession(): Promise<boolean> {
+  refreshInFlight ??= performRefresh().finally(() => {
+    refreshInFlight = null
+  })
+  return refreshInFlight
+}
+
+async function performRefresh(): Promise<boolean> {
   const response = await send('/auth/refresh', { method: 'POST', anonymous: true })
   if (!response.ok) {
     setAccessToken(null)

@@ -59,6 +59,9 @@ This project creates a dual-view setup: alongside the YouTube video, there's a d
 - [x] Invite by email (including before registration) and see shared projects under “Được chia sẻ”
 - [x] Realtime collaboration: editors share one live session, node edits and AI diffs arrive over SSE
 - [x] Revoke by turning sharing off (old link dies) or rotate to a new link; only the owner can delete or change settings
+- [x] Account self-service: change the display name and password (current password required)
+- [x] Email verification links with single-use tokens (development outbox logs the link until SMTP is configured)
+- [x] Refresh tokens are registered server-side, so logout and password changes revoke them
 
 ## Getting Started
 
@@ -180,6 +183,7 @@ yt-mindmap/
 - [ADR 0005](docs/adr/0005-accounts-jwt-oauth.md) — accounts, JWT and OAuth
 - [ADR 0006](docs/adr/0006-saved-projects.md) — saved projects, autosave and per-user notes
 - [ADR 0007](docs/adr/0007-sharing-and-collaboration.md) — sharing, invites and realtime collaboration
+- [ADR 0008](docs/adr/0008-account-security.md) — profile, email verification and refresh-token revocation
 - [Contributing workflow](CONTRIBUTING.md) — branch model and commit conventions
 
 ## How It Works
@@ -203,8 +207,9 @@ yt-mindmap/
 - Live sessions and SSE buffers are still per process, so realtime collaboration across multiple backend workers needs Redis pub/sub.
 - A project stores a copy of its transcript, so the same lecture saved twice uses roughly twice the space. Deleting a project is permanent (no trash/undo).
 - Project lists are paginated by the API (50 by default) but the dashboard does not render pagination controls yet.
-- There is no email verification yet: password accounts are usable immediately, and OAuth accounts inherit the provider's verified email.
-- Refresh tokens are stateless JWTs; logging out clears the cookie but does not revoke a token copied elsewhere (a server-side token store is the next step).
+- Email verification is implemented with single-use tokens, but delivery is development-only: the link is written to the backend log (and optionally returned when `DEBUG_EMAIL_LINKS=true`) instead of being emailed. Configure an SMTP transport before using it in production.
+- There is no password-reset flow yet, and the email address itself cannot be changed from the dashboard.
+- Refresh tokens are registered server-side, so logout and password changes revoke them. Access tokens remain stateless and stay valid until they expire (15 minutes), so a copied access token is not revoked immediately.
 - Captions use the video's available original-language track. The server-side
   `youtube-transcript-api` client can still be rate-limited or blocked by
   YouTube; upload an `.srt` or `.vtt` file as a fallback.

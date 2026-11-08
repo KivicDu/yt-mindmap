@@ -420,6 +420,101 @@
   overflow-wrap: anywhere;
 }
 
+/* ---------- settings forms ---------- */
+
+.dash-settings {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.dash-form {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.dash-field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  max-width: 360px;
+}
+
+.dash-field > span {
+  color: var(--ink-3);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+}
+
+.dash-field input {
+  height: 38px;
+  padding: 0 12px;
+  border: 1px solid var(--line-2);
+  border-radius: var(--r-md);
+  background: var(--paper);
+  color: var(--ink);
+  font-size: 13.5px;
+  transition: border-color var(--t-fast) var(--ease);
+}
+
+.dash-field input:hover {
+  border-color: var(--line-strong);
+}
+
+.dash-field input:focus {
+  outline: none;
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 14%, transparent);
+}
+
+.dash-form-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+.dash-feedback {
+  margin: 0;
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.dash-feedback--ok {
+  color: var(--ink-2);
+}
+
+.dash-feedback--ok a {
+  color: var(--accent);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+.dash-feedback--error {
+  color: var(--danger);
+}
+
+.dash-badge {
+  display: inline-flex;
+  align-items: center;
+  height: 22px;
+  padding: 0 9px;
+  border: 1px solid var(--line-2);
+  border-radius: 999px;
+  color: var(--ink-3);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.dash-badge--ok {
+  border-color: color-mix(in srgb, var(--accent) 35%, transparent);
+  color: var(--accent);
+}
+
 /* ============================================================
    Responsive
    ============================================================ */

@@ -1,7 +1,9 @@
 import { useCallback, useEffect, useState } from 'react'
+import type { FormEvent } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
 import ThemeToggle from '../../components/ThemeToggle'
 import { useAuth } from '../../context/AuthContext'
+import { accountErrorMessage, validatePasswordChange } from '../../lib/account'
 import {
   deleteProject,
   duplicateProject,
@@ -644,38 +646,263 @@ function SettingsSection() {
   const { user, logout } = useAuth()
 
   return (
+    <div className="dash-settings">
+      <ProfileCard />
+      <VerificationCard />
+
+      <section className="dash-panel">
+        <header className="dash-panel-header">
+          <h2>Thông tin tài khoản</h2>
+          <span className="dash-panel-note">Chỉ bạn nhìn thấy</span>
+        </header>
+
+        <dl className="dash-rows">
+          <div>
+            <dt>Email</dt>
+            <dd>{user?.email}</dd>
+          </div>
+          <div>
+            <dt>Phương thức đăng nhập</dt>
+            <dd>{user?.provider === 'local' ? 'Email & mật khẩu' : user?.provider}</dd>
+          </div>
+          <div>
+            <dt>Lưu trữ</dt>
+            <dd>Dự án và bản nháp được lưu trong tài khoản, không phụ thuộc trình duyệt</dd>
+          </div>
+        </dl>
+      </section>
+
+      {user?.provider === 'local' && <PasswordCard />}
+
+      <section className="dash-panel">
+        <header className="dash-panel-header">
+          <h2>Phiên đăng nhập</h2>
+          <span className="dash-panel-note">Thiết bị này</span>
+        </header>
+        <p className="dash-empty-inline">
+          Đăng xuất sẽ thu hồi refresh token của trình duyệt này. Các thiết bị khác vẫn
+          giữ phiên riêng cho tới khi bạn đổi mật khẩu.
+        </p>
+        <div className="dash-actions">
+          <button className="dash-cta dash-cta--ghost" type="button" onClick={() => void logout()}>
+            Đăng xuất
+          </button>
+        </div>
+      </section>
+    </div>
+  )
+}
+
+function ProfileCard() {
+  const { user, updateProfile } = useAuth()
+  const [name, setName] = useState(user?.display_name ?? '')
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState('')
+  const [saved, setSaved] = useState(false)
+
+  const trimmed = name.trim()
+  const dirty = Boolean(user) && trimmed !== user?.display_name && trimmed.length > 0
+
+  const submit = async (event: FormEvent) => {
+    event.preventDefault()
+    if (!trimmed || busy) return
+    setBusy(true)
+    setError('')
+    setSaved(false)
+    try {
+      await updateProfile(trimmed)
+      setSaved(true)
+    } catch (caught) {
+      setError(accountErrorMessage(caught))
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  return (
     <section className="dash-panel">
       <header className="dash-panel-header">
-        <h2>Thông tin tài khoản</h2>
-        <span className="dash-panel-note">Chỉnh sửa hồ sơ: Giai đoạn 4</span>
+        <h2>Hồ sơ</h2>
+        <span className="dash-panel-note">Tên hiển thị trong dự án được chia sẻ</span>
       </header>
 
-      <dl className="dash-rows">
-        <div>
-          <dt>Tên hiển thị</dt>
-          <dd>{user?.display_name}</dd>
-        </div>
-        <div>
-          <dt>Email</dt>
-          <dd>{user?.email}</dd>
-        </div>
-        <div>
-          <dt>Phương thức đăng nhập</dt>
-          <dd>{user?.provider === 'local' ? 'Email & mật khẩu' : user?.provider}</dd>
-        </div>
-        <div>
-          <dt>Xác minh email</dt>
-          <dd>{user?.email_verified ? 'Đã xác minh' : 'Chưa xác minh (sẽ bổ sung ở giai đoạn cuối)'}</dd>
-        </div>
-        <div>
-          <dt>Lưu trữ</dt>
-          <dd>Dự án và bản nháp được lưu trong tài khoản, không phụ thuộc trình duyệt</dd>
-        </div>
-      </dl>
+      <form className="dash-form" onSubmit={(event) => void submit(event)}>
+        <label className="dash-field">
+          <span>Tên hiển thị</span>
+          <input
+            type="text"
+            value={name}
+            maxLength={80}
+            autoComplete="name"
+            onChange={(event) => {
+              setName(event.target.value)
+              setSaved(false)
+            }}
+          />
+        </label>
 
-      <button className="dash-cta dash-cta--ghost" type="button" onClick={() => void logout()}>
-        Đăng xuất
-      </button>
+        {error && <p className="dash-feedback dash-feedback--error">{error}</p>}
+        {saved && <p className="dash-feedback dash-feedback--ok">Đã lưu tên hiển thị.</p>}
+
+        <div className="dash-form-actions">
+          <button className="dash-cta" type="submit" disabled={!dirty || busy}>
+            {busy ? 'Đang lưu…' : 'Lưu hồ sơ'}
+          </button>
+        </div>
+      </form>
+    </section>
+  )
+}
+
+function VerificationCard() {
+  const { user, requestEmailVerification } = useAuth()
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState('')
+  const [sent, setSent] = useState(false)
+  const [devLink, setDevLink] = useState<string | null>(null)
+
+  const request = async () => {
+    if (busy) return
+    setBusy(true)
+    setError('')
+    try {
+      const result = await requestEmailVerification()
+      setSent(result.status === 'sent')
+      setDevLink(result.dev_link)
+    } catch (caught) {
+      setError(accountErrorMessage(caught))
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  return (
+    <section className="dash-panel">
+      <header className="dash-panel-header">
+        <h2>Xác minh email</h2>
+        <span className={`dash-badge${user?.email_verified ? ' dash-badge--ok' : ''}`}>
+          {user?.email_verified ? 'Đã xác minh' : 'Chưa xác minh'}
+        </span>
+      </header>
+
+      {user?.email_verified ? (
+        <p className="dash-empty-inline">
+          Email <strong>{user.email}</strong> đã được xác minh. Người được mời bằng đúng
+          địa chỉ này sẽ mở được dự án chia sẻ.
+        </p>
+      ) : (
+        <>
+          <p className="dash-empty-inline">
+            Xác minh <strong>{user?.email}</strong> để chắc chắn lời mời chia sẻ đến đúng
+            người. Trong giai đoạn này, link xác minh được ghi ra log máy chủ (chưa gửi
+            email thật).
+          </p>
+
+          {error && <p className="dash-feedback dash-feedback--error">{error}</p>}
+          {sent && !devLink && (
+            <p className="dash-feedback dash-feedback--ok">
+              Đã tạo link xác minh. Kiểm tra log backend để mở link.
+            </p>
+          )}
+          {devLink && (
+            <p className="dash-feedback dash-feedback--ok">
+              Chế độ dev:{' '}
+              <a href={devLink}>mở link xác minh</a>.
+            </p>
+          )}
+
+          <div className="dash-actions">
+            <button className="dash-cta" type="button" onClick={() => void request()} disabled={busy}>
+              {busy ? 'Đang tạo link…' : sent ? 'Tạo link mới' : 'Gửi link xác minh'}
+            </button>
+          </div>
+        </>
+      )}
+    </section>
+  )
+}
+
+function PasswordCard() {
+  const { changePassword } = useAuth()
+  const [current, setCurrent] = useState('')
+  const [next, setNext] = useState('')
+  const [confirm, setConfirm] = useState('')
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState('')
+  const [saved, setSaved] = useState(false)
+
+  const submit = async (event: FormEvent) => {
+    event.preventDefault()
+    if (busy) return
+
+    const problem = validatePasswordChange(current, next, confirm)
+    if (problem) {
+      setError(problem)
+      setSaved(false)
+      return
+    }
+
+    setBusy(true)
+    setError('')
+    setSaved(false)
+    try {
+      await changePassword(current, next)
+      setCurrent('')
+      setNext('')
+      setConfirm('')
+      setSaved(true)
+    } catch (caught) {
+      setError(accountErrorMessage(caught))
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  return (
+    <section className="dash-panel">
+      <header className="dash-panel-header">
+        <h2>Đổi mật khẩu</h2>
+        <span className="dash-panel-note">Các thiết bị khác sẽ bị đăng xuất</span>
+      </header>
+
+      <form className="dash-form" onSubmit={(event) => void submit(event)}>
+        <label className="dash-field">
+          <span>Mật khẩu hiện tại</span>
+          <input
+            type="password"
+            value={current}
+            autoComplete="current-password"
+            onChange={(event) => setCurrent(event.target.value)}
+          />
+        </label>
+        <label className="dash-field">
+          <span>Mật khẩu mới</span>
+          <input
+            type="password"
+            value={next}
+            autoComplete="new-password"
+            onChange={(event) => setNext(event.target.value)}
+          />
+        </label>
+        <label className="dash-field">
+          <span>Nhập lại mật khẩu mới</span>
+          <input
+            type="password"
+            value={confirm}
+            autoComplete="new-password"
+            onChange={(event) => setConfirm(event.target.value)}
+          />
+        </label>
+
+        {error && <p className="dash-feedback dash-feedback--error">{error}</p>}
+        {saved && <p className="dash-feedback dash-feedback--ok">Đã đổi mật khẩu và làm mới phiên đăng nhập.</p>}
+
+        <div className="dash-form-actions">
+          <button className="dash-cta" type="submit" disabled={busy}>
+            {busy ? 'Đang đổi…' : 'Đổi mật khẩu'}
+          </button>
+        </div>
+      </form>
     </section>
   )
 }

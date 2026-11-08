@@ -93,9 +93,11 @@ exists. The SPA route is `/s/:slug`; signed-in editors get a button to
 - Realtime works through the existing SSE stream, so no WebSocket/CRDT layer was
   needed. The trade-off is coarse conflict handling: two edits to the same node
   resolve to whichever request lands last, and there is no cursor/presence UI.
-- Invitations assume the provider's email is verified. Password accounts are
-  usable immediately, so an unverified address could claim a pending invite (the
-  same limitation as account creation, phase 4 adds verification).
+- Invitations are keyed by email, not by a confirmed identity. OAuth addresses
+  arrive verified; password accounts can now verify too (see
+  [ADR 0008](0008-account-security.md)), and the dashboard shows the owner
+  whether an invited address is verified before trusting it. Delivery is still
+  development-only, so verification is optional rather than enforced.
 - Live sessions remain per process. Multiple workers or instances need Redis
   pub/sub before collaboration works across them.
 - Removing a member or disabling sharing takes effect on the next API request;

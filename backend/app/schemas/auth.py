@@ -5,6 +5,7 @@ longer is rejected up front instead of being silently truncated.
 """
 
 from datetime import datetime
+from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, EmailStr, Field
 
@@ -47,3 +48,22 @@ class AccessTokenResponse(BaseModel):
     access_token: str
     token_type: str = "bearer"
     expires_in: int
+
+
+class UpdateProfileRequest(BaseModel):
+    display_name: str = Field(min_length=1, max_length=80)
+
+
+class ChangePasswordRequest(BaseModel):
+    current_password: str = Field(min_length=1, max_length=72)
+    new_password: str = PASSWORD_FIELD
+
+
+class VerifyEmailRequest(BaseModel):
+    token: str = Field(min_length=1, max_length=128)
+
+
+class VerificationRequestResponse(BaseModel):
+    status: Literal["sent", "already_verified"]
+    # Only populated when DEBUG_EMAIL_LINKS is on (local development).
+    dev_link: str | None = None
