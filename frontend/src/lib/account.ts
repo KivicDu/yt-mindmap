@@ -22,11 +22,26 @@ export interface VerificationRequestResult {
   dev_link: string | null
 }
 
+export interface EmailChangeRequestResult {
+  status: 'sent' | 'unchanged'
+  /** Present only when the API runs with DEBUG_EMAIL_LINKS (local dev). */
+  dev_link: string | null
+}
+
 const BCRYPT_MAX_BYTES = 72
+const EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/
 
 /** Byte length, because bcrypt caps the password at 72 bytes, not chars. */
 function byteLength(value: string): number {
   return new TextEncoder().encode(value).length
+}
+
+/** Rules shared by "change password" and "reset password". */
+export function validateNewPassword(next: string, confirm: string): string | null {
+  if (next.length < 8) return 'Mật khẩu mới cần ít nhất 8 ký tự.'
+  if (byteLength(next) > BCRYPT_MAX_BYTES) return 'Mật khẩu mới tối đa 72 bytes.'
+  if (next !== confirm) return 'Mật khẩu nhập lại chưa khớp.'
+  return null
 }
 
 export function validatePasswordChange(
@@ -35,10 +50,16 @@ export function validatePasswordChange(
   confirm: string,
 ): string | null {
   if (!current) return 'Nhập mật khẩu hiện tại.'
-  if (next.length < 8) return 'Mật khẩu mới cần ít nhất 8 ký tự.'
-  if (byteLength(next) > BCRYPT_MAX_BYTES) return 'Mật khẩu mới tối đa 72 bytes.'
   if (next === current) return 'Mật khẩu mới cần khác mật khẩu hiện tại.'
-  if (next !== confirm) return 'Mật khẩu nhập lại chưa khớp.'
+  return validateNewPassword(next, confirm)
+}
+
+export function validateEmailChange(newEmail: string, currentEmail: string): string | null {
+  const trimmed = newEmail.trim()
+  if (!trimmed) return 'Nhập email mới.'
+  if (!EMAIL_PATTERN.test(trimmed)) return 'Email mới chưa đúng định dạng.'
+  if (trimmed.toLowerCase() === currentEmail.trim().toLowerCase())
+    return 'Email mới cần khác email hiện tại.'
   return null
 }
 
@@ -55,6 +76,16 @@ export function accountErrorMessage(error: unknown): string {
       return 'Tên hiển thị không được để trống.'
     case 'invalid_verification_token':
       return 'Link xác minh không hợp lệ, đã dùng rồi hoặc đã hết hạn.'
+    case 'invalid_reset_token':
+      return 'Link đặt lại mật khẩu không hợp lệ, đã dùng rồi hoặc đã hết hạn.'
+    case 'invalid_email_change_token':
+      return 'Link xác nhận email không hợp lệ, đã dùng rồi hoặc đã hết hạn.'
+    case 'email_taken':
+      return 'Email này đã có tài khoản khác sử dụng.'
+    case 'same_email':
+      return 'Email mới cần khác email hiện tại.'
+    case 'email_delivery_failed':
+      return 'Chưa gửi được email. Kiểm tra cấu hình SMTP rồi thử lại.'
     case 'not_authenticated':
     case 'missing_refresh_token':
     case 'invalid_refresh_token':
@@ -64,7 +95,7 @@ export function accountErrorMessage(error: unknown): string {
   }
 
   if (error instanceof ApiError && error.status === 422) {
-    return 'Thông tin chưa hợp lệ. Kiểm tra lại tên hiển thị hoặc mật khẩu.'
+    return 'Thông tin chưa hợp lệ. Kiểm tra lại tên hiển thị, email hoặc mật khẩu.'
   }
   if (error instanceof TypeError) {
     return 'Không kết nối được máy chủ. Kiểm tra backend đang chạy ở cổng 8001 nhé.'

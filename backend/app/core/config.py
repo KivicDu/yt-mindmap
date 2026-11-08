@@ -7,6 +7,7 @@ must be overridden in production -- ``JWT_SECRET_KEY`` especially.
 
 from functools import lru_cache
 from pathlib import Path
+from typing import Literal
 
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
@@ -36,10 +37,22 @@ class Settings(BaseSettings):
     ACCESS_TOKEN_TTL_MINUTES: int = 15
     REFRESH_TOKEN_TTL_DAYS: int = 14
 
-    # Phase 4 has no SMTP transport: verification links are written to the log.
-    # Set this to true locally to also return the link from the API so the UI
-    # can offer a one-click "open verification link" shortcut. Never enable it
-    # on a public server.
+    # Email delivery. "log" writes messages to the server log (development);
+    # "smtp" sends through the SMTP server below. Mailpit on 127.0.0.1:1025 is
+    # enough for local end-to-end testing; production needs real credentials.
+    EMAIL_BACKEND: Literal["log", "smtp"] = "log"
+    SMTP_HOST: str | None = None
+    SMTP_PORT: int = 587
+    SMTP_USERNAME: str | None = None
+    SMTP_PASSWORD: str | None = None
+    SMTP_FROM: str = "yt-mindmap <no-reply@ytmindmap.local>"
+    SMTP_STARTTLS: bool = True
+    SMTP_SSL: bool = False
+    SMTP_TIMEOUT_SECONDS: float = 10.0
+
+    # Set this to true locally to also return account links from the API so the
+    # UI can offer a one-click shortcut. Never enable it on a public server:
+    # it bypasses the inbox and would leak password-reset links.
     DEBUG_EMAIL_LINKS: bool = False
 
     # Refresh cookie

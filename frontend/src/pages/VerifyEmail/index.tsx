@@ -8,10 +8,9 @@
 
 import { useEffect, useRef, useState } from 'react'
 import { Link, useSearchParams } from 'react-router-dom'
-import ThemeToggle from '../../components/ThemeToggle'
 import { useAuth } from '../../context/AuthContext'
 import { accountErrorMessage } from '../../lib/account'
-import './VerifyEmail.css'
+import AccountShell from '../Account/AccountShell'
 
 type Phase = 'loading' | 'success' | 'error'
 
@@ -42,58 +41,57 @@ function VerifyEmail() {
       })
   }, [token, verifyEmail])
 
+  if (phase === 'loading') {
+    return (
+      <AccountShell eyebrow="XÁC MINH EMAIL" title="Đang xác minh…">
+        <p className="account-text">Chỉ mất một giây, bạn đợi nhé.</p>
+      </AccountShell>
+    )
+  }
+
+  if (phase === 'success') {
+    return (
+      <AccountShell eyebrow="XÁC MINH EMAIL" title="Email đã được xác minh" tone="ok">
+        <p className="account-text">
+          <strong>{email}</strong> đã được xác minh. Lời mời chia sẻ gửi tới địa chỉ này
+          giờ sẽ mở đúng vào tài khoản của bạn.
+        </p>
+        <div className="account-actions">
+          {status === 'authenticated' ? (
+            <Link className="account-cta" to="/dashboard">
+              Vào dashboard
+            </Link>
+          ) : (
+            <Link className="account-cta" to="/login">
+              Đăng nhập
+            </Link>
+          )}
+          <Link className="account-cta account-cta--ghost" to="/">
+            Về trang chủ
+          </Link>
+        </div>
+      </AccountShell>
+    )
+  }
+
   return (
-    <div className="verify-shell">
-      <div className="verify-topbar">
-        <Link className="verify-brand" to="/">yt-mindmap</Link>
-        <ThemeToggle />
+    <AccountShell eyebrow="XÁC MINH EMAIL" title="Chưa xác minh được" tone="error">
+      <p className="account-text">{message}</p>
+      <div className="account-actions">
+        {status === 'authenticated' ? (
+          <Link className="account-cta" to="/dashboard">
+            Tạo link mới trong Cài đặt
+          </Link>
+        ) : (
+          <Link className="account-cta" to="/login">
+            Đăng nhập
+          </Link>
+        )}
+        <Link className="account-cta account-cta--ghost" to="/">
+          Về trang chủ
+        </Link>
       </div>
-
-      <main className={`verify-card${phase === 'success' ? ' verify-card--ok' : ''}`}>
-        {phase === 'loading' && (
-          <>
-            <span className="verify-eyebrow">XÁC MINH EMAIL</span>
-            <h1>Đang xác minh…</h1>
-            <p className="verify-text">Chỉ mất một giây, bạn đợi nhé.</p>
-          </>
-        )}
-
-        {phase === 'success' && (
-          <>
-            <span className="verify-eyebrow">XÁC MINH EMAIL</span>
-            <h1>Email đã được xác minh</h1>
-            <p className="verify-text">
-              <strong>{email}</strong> đã được xác minh. Lời mời chia sẻ gửi tới địa chỉ
-              này giờ sẽ mở đúng vào tài khoản của bạn.
-            </p>
-            <div className="verify-actions">
-              {status === 'authenticated' ? (
-                <Link className="verify-cta" to="/dashboard">Vào dashboard</Link>
-              ) : (
-                <Link className="verify-cta" to="/login">Đăng nhập</Link>
-              )}
-              <Link className="verify-cta verify-cta--ghost" to="/">Về trang chủ</Link>
-            </div>
-          </>
-        )}
-
-        {phase === 'error' && (
-          <>
-            <span className="verify-eyebrow">XÁC MINH EMAIL</span>
-            <h1>Chưa xác minh được</h1>
-            <p className="verify-text">{message}</p>
-            <div className="verify-actions">
-              {status === 'authenticated' ? (
-                <Link className="verify-cta" to="/dashboard">Tạo link mới trong Cài đặt</Link>
-              ) : (
-                <Link className="verify-cta" to="/login">Đăng nhập</Link>
-              )}
-              <Link className="verify-cta verify-cta--ghost" to="/">Về trang chủ</Link>
-            </div>
-          </>
-        )}
-      </main>
-    </div>
+    </AccountShell>
   )
 }
 

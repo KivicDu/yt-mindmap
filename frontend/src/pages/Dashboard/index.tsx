@@ -3,7 +3,7 @@ import type { FormEvent } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
 import ThemeToggle from '../../components/ThemeToggle'
 import { useAuth } from '../../context/AuthContext'
-import { accountErrorMessage, validatePasswordChange } from '../../lib/account'
+import { accountErrorMessage, validateEmailChange, validatePasswordChange } from '../../lib/account'
 import {
   deleteProject,
   duplicateProject,
@@ -649,6 +649,7 @@ function SettingsSection() {
     <div className="dash-settings">
       <ProfileCard />
       <VerificationCard />
+      <EmailCard />
 
       <section className="dash-panel">
         <header className="dash-panel-header">
@@ -794,14 +795,13 @@ function VerificationCard() {
         <>
           <p className="dash-empty-inline">
             Xác minh <strong>{user?.email}</strong> để chắc chắn lời mời chia sẻ đến đúng
-            người. Trong giai đoạn này, link xác minh được ghi ra log máy chủ (chưa gửi
-            email thật).
+            người. Link xác minh được gửi tới hộp thư của bạn và hết hạn sau 24 giờ.
           </p>
 
           {error && <p className="dash-feedback dash-feedback--error">{error}</p>}
           {sent && !devLink && (
             <p className="dash-feedback dash-feedback--ok">
-              Đã tạo link xác minh. Kiểm tra log backend để mở link.
+              Đã gửi link xác minh. Kiểm tra hộp thư (và cả thư mục spam) nhé.
             </p>
           )}
           {devLink && (
@@ -813,11 +813,124 @@ function VerificationCard() {
 
           <div className="dash-actions">
             <button className="dash-cta" type="button" onClick={() => void request()} disabled={busy}>
-              {busy ? 'Đang tạo link…' : sent ? 'Tạo link mới' : 'Gửi link xác minh'}
+              {busy ? 'Đang gửi…' : sent ? 'Gửi lại link' : 'Gửi link xác minh'}
             </button>
           </div>
         </>
       )}
+    </section>
+  )
+}
+
+function EmailCard() {
+  const { user, requestEmailChange } = useAuth()
+  const [email, setEmail] = useState('')
+  const [password, setPassword] = useState('')
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState('')
+  const [sent, setSent] = useState(false)
+  const [devLink, setDevLink] = useState<string | null>(null)
+
+  const submit = async (event: FormEvent) => {
+    event.preventDefault()
+    if (busy || !user) return
+
+    const problem = validateEmailChange(email, user.email)
+    if (problem) {
+      setError(problem)
+      setSent(false)
+      return
+    }
+    if (user.provider === 'local' && !password) {
+      setError('Nhập mật khẩu hiện tại để đổi email.')
+      return
+    }
+
+    setBusy(true)
+    setError('')
+    setSent(false)
+    setDevLink(null)
+    try {
+      const result = await requestEmailChange(
+        email.trim(),
+        user.provider === 'local' ? password : undefined,
+      )
+      if (result.status === 'unchanged') {
+        setError('Email mới cần khác email hiện tại.')
+        return
+      }
+      setSent(true)
+      setDevLink(result.dev_link)
+      setPassword('')
+    } catch (caught) {
+      setError(accountErrorMessage(caught))
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  return (
+    <section className="dash-panel">
+      <header className="dash-panel-header">
+        <h2>Đổi email</h2>
+        <span className="dash-panel-note">Cần xác nhận qua hộp thư mới</span>
+      </header>
+
+      <p className="dash-empty-inline">
+        Email hiện tại: <strong>{user?.email}</strong>. Link xác nhận sẽ gửi tới địa chỉ
+        mới; sau khi xác nhận, mọi thiết bị sẽ đăng xuất.
+      </p>
+
+      <form className="dash-form" onSubmit={(event) => void submit(event)} noValidate>
+        <label className="dash-field">
+          <span>Email mới</span>
+          <input
+            type="email"
+            autoComplete="email"
+            value={email}
+            onChange={(event) => {
+              setEmail(event.target.value)
+              setError('')
+              setSent(false)
+            }}
+            placeholder="email-moi@example.com"
+          />
+        </label>
+
+        {user?.provider === 'local' && (
+          <label className="dash-field">
+            <span>Mật khẩu hiện tại</span>
+            <input
+              type="password"
+              autoComplete="current-password"
+              value={password}
+              onChange={(event) => {
+                setPassword(event.target.value)
+                setError('')
+                setSent(false)
+              }}
+            />
+          </label>
+        )}
+
+        {error && <p className="dash-feedback dash-feedback--error">{error}</p>}
+        {sent && !devLink && (
+          <p className="dash-feedback dash-feedback--ok">
+            Đã gửi link xác nhận tới <strong>{email.trim()}</strong>. Mở hộp thư để hoàn tất.
+          </p>
+        )}
+        {devLink && (
+          <p className="dash-feedback dash-feedback--ok">
+            Chế độ dev: <a href={devLink}>mở link xác nhận email mới</a>.
+          </p>
+        )}
+
+        <div className="dash-form-actions">
+          <button className="dash-cta" type="submit" disabled={busy}>
+            {busy ? 'Đang gửi…' : 'Gửi link xác nhận'}
+          </button>
+        </div>
+      </form>
     </section>
   )
 }

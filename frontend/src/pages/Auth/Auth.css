@@ -522,6 +522,28 @@
   font-weight: 500;
 }
 
+.auth-label-row {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.auth-label-row label {
+  margin-bottom: 4px;
+}
+
+.auth-inline-link {
+  margin-bottom: 4px;
+  color: var(--ink-3);
+  font-size: 12.5px;
+  transition: color var(--t-fast) var(--ease);
+}
+
+.auth-inline-link:hover {
+  color: var(--accent);
+}
+
 .auth-field input {
   width: 100%;
   height: 44px;
