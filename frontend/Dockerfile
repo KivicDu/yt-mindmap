@@ -13,6 +13,10 @@ COPY . .
 ARG VITE_API_BASE=http://localhost:8001
 ENV VITE_API_BASE=$VITE_API_BASE
 
+# Contact address shown on the legal pages.
+ARG VITE_CONTACT_EMAIL=contact@ytmindmap.local
+ENV VITE_CONTACT_EMAIL=$VITE_CONTACT_EMAIL
+
 RUN npm run build
 
 FROM nginx:1.27-alpine AS runtime

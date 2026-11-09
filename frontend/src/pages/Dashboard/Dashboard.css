@@ -258,6 +258,26 @@
   background: var(--paper-2);
 }
 
+.dash-cta--danger {
+  border-color: var(--danger);
+  background: var(--danger);
+  color: #fff;
+}
+
+.dash-cta--danger:hover {
+  border-color: var(--danger);
+  background: color-mix(in srgb, var(--danger) 86%, #000);
+}
+
+.dash-panel--danger {
+  border-color: var(--danger-line);
+  background: var(--danger-soft);
+}
+
+.dash-panel--danger .dash-panel-note {
+  color: var(--danger);
+}
+
 /* ---------- stats ---------- */
 
 .dash-stats {

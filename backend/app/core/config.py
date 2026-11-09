@@ -74,6 +74,17 @@ class Settings(BaseSettings):
     OAUTH_STATE_COOKIE_NAME: str = "ytmm_oauth_state"
     OAUTH_STATE_TTL_SECONDS: int = 600
 
+    # Abuse protection. The limiter lives in memory, so it matches the current
+    # single-worker deployment; move the counters to Redis before scaling out.
+    RATE_LIMIT_ENABLED: bool = True
+    RATE_LIMIT_AUTH_PER_MINUTE: int = 30
+    RATE_LIMIT_AI_PER_MINUTE: int = 240
+    AI_DAILY_QUOTA_PER_USER: int = 5000
+    AI_DAILY_QUOTA_ANONYMOUS: int = 1000
+    # Only enable behind a reverse proxy that overwrites X-Forwarded-For;
+    # otherwise a client could spoof the header and dodge IP limits.
+    TRUST_PROXY_HEADERS: bool = False
+
     @property
     def is_sqlite(self) -> bool:
         return self.DATABASE_URL.startswith("sqlite")

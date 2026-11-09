@@ -82,6 +82,10 @@ export function accountErrorMessage(error: unknown): string {
       return 'Link xác nhận email không hợp lệ, đã dùng rồi hoặc đã hết hạn.'
     case 'email_taken':
       return 'Email này đã có tài khoản khác sử dụng.'
+    case 'email_mismatch':
+      return 'Email xác nhận chưa khớp với tài khoản đang đăng nhập.'
+    case 'rate_limited':
+      return 'Bạn thao tác quá nhanh. Chờ một chút rồi thử lại nhé.'
     case 'same_email':
       return 'Email mới cần khác email hiện tại.'
     case 'email_delivery_failed':

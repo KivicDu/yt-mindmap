@@ -346,7 +346,7 @@ function App() {
           : typeof detail === 'string'
             ? detail
             : 'Không thể tải phụ đề'
-      throw new TranscriptRequestError(message, code)
+      throw new TranscriptRequestError(message, code ?? (typeof detail === 'string' ? detail : undefined))
     }
     return response.json()
   }
@@ -572,10 +572,15 @@ function App() {
 
       if (!response.ok) {
         const detail = data && typeof data.detail === 'object' ? data.detail : null
+        const code = typeof data?.detail === 'string' ? data.detail : detail?.code
         setStatus(
-          detail?.code === 'project_read_only'
+          code === 'project_read_only'
             ? 'Dự án này chỉ cho phép xem'
-            : 'Không cập nhật được sơ đồ',
+            : code === 'rate_limited'
+              ? 'Bạn thao tác quá nhanh — chờ một chút rồi thử lại'
+              : code === 'ai_quota_exceeded'
+                ? 'Đã hết hạn mức AI hôm nay. Đăng nhập hoặc thử lại vào ngày mai.'
+                : 'Không cập nhật được sơ đồ',
           'error',
         )
         return

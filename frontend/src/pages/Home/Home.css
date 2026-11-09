@@ -745,6 +745,18 @@
   font-size: 14px;
 }
 
+.home-footer-links {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 16px;
+  color: var(--ink-3);
+  font-size: 13px;
+}
+
+.home-footer-links a:hover {
+  color: var(--ink);
+}
+
 /* ---------- product walkthrough ---------- */
 
 .home-study-copy h2 {

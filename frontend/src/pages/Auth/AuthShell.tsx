@@ -48,6 +48,11 @@ function AuthShell({ mode, mascotMood, caretPosition, focusTarget, children }: A
       <footer className="auth-note">
         <span>yt-mindmap</span>
         <span>Biến bài giảng thành nội dung dễ ôn tập.</span>
+        <nav className="auth-note-links" aria-label="Pháp lý">
+          <Link to="/privacy">Quyền riêng tư</Link>
+          <Link to="/terms">Điều khoản</Link>
+          <Link to="/contact">Liên hệ</Link>
+        </nav>
       </footer>
     </main>
   )

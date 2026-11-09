@@ -690,7 +690,132 @@ function SettingsSection() {
           </button>
         </div>
       </section>
+
+      <DangerZone />
     </div>
+  )
+}
+
+function DangerZone() {
+  const { user, deleteAccount } = useAuth()
+  const [email, setEmail] = useState('')
+  const [password, setPassword] = useState('')
+  const [confirming, setConfirming] = useState(false)
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState('')
+
+  const emailMatches =
+    Boolean(user) &&
+    email.trim().toLowerCase() === user?.email.trim().toLowerCase() &&
+    (user?.provider !== 'local' || password.length > 0)
+
+  const submit = async (event: FormEvent) => {
+    event.preventDefault()
+    if (!user || busy) return
+
+    if (email.trim().toLowerCase() !== user.email.trim().toLowerCase()) {
+      setError('Gõ đúng email của tài khoản để xác nhận.')
+      return
+    }
+    if (user.provider === 'local' && !password) {
+      setError('Nhập mật khẩu hiện tại để xoá tài khoản.')
+      return
+    }
+
+    setBusy(true)
+    setError('')
+    try {
+      await deleteAccount(email.trim(), user.provider === 'local' ? password : undefined)
+      // A full reload is deliberate: it drops the in-memory access token and
+      // avoids a race where ProtectedRoute redirects to /login while the SPA
+      // is still transitioning away from /dashboard.
+      window.location.assign('/')
+    } catch (caught) {
+      setError(accountErrorMessage(caught))
+      setBusy(false)
+    }
+  }
+
+  return (
+    <section className="dash-panel dash-panel--danger">
+      <header className="dash-panel-header">
+        <h2>Xoá tài khoản</h2>
+        <span className="dash-panel-note">Không thể hoàn tác</span>
+      </header>
+
+      <p className="dash-empty-inline">
+        Toàn bộ dự án, bản nháp, sơ đồ tư duy và phiên đăng nhập sẽ bị xoá vĩnh viễn.
+        Email của bạn cũng được gỡ khỏi mọi lời mời chia sẻ.
+      </p>
+
+      {!confirming ? (
+        <div className="dash-actions">
+          <button
+            className="dash-cta dash-cta--danger"
+            type="button"
+            onClick={() => setConfirming(true)}
+          >
+            Tôi muốn xoá tài khoản
+          </button>
+        </div>
+      ) : (
+        <form className="dash-form" onSubmit={(event) => void submit(event)} noValidate>
+          <label className="dash-field">
+            <span>Gõ lại email {user?.email}</span>
+            <input
+              type="email"
+              autoComplete="off"
+              value={email}
+              onChange={(event) => {
+                setEmail(event.target.value)
+                setError('')
+              }}
+              placeholder={user?.email}
+            />
+          </label>
+
+          {user?.provider === 'local' && (
+            <label className="dash-field">
+              <span>Mật khẩu hiện tại</span>
+              <input
+                type="password"
+                autoComplete="current-password"
+                value={password}
+                onChange={(event) => {
+                  setPassword(event.target.value)
+                  setError('')
+                }}
+              />
+            </label>
+          )}
+
+          {error && <p className="dash-feedback dash-feedback--error">{error}</p>}
+
+          <div className="dash-form-actions">
+            <button
+              className="dash-cta dash-cta--danger"
+              type="submit"
+              disabled={!emailMatches || busy}
+            >
+              {busy ? 'Đang xoá…' : 'Xoá tài khoản vĩnh viễn'}
+            </button>
+            <button
+              className="dash-cta dash-cta--ghost"
+              type="button"
+              disabled={busy}
+              onClick={() => {
+                setConfirming(false)
+                setEmail('')
+                setPassword('')
+                setError('')
+              }}
+            >
+              Huỷ
+            </button>
+          </div>
+        </form>
+      )}
+    </section>
   )
 }
 

@@ -25,6 +25,7 @@ from app.schemas.auth import (
     AuthResponse,
     ChangePasswordRequest,
     ConfirmEmailChangeRequest,
+    DeleteAccountRequest,
     EmailChangeRequest,
     EmailChangeRequestResponse,
     ForgotPasswordRequest,
@@ -39,6 +40,7 @@ from app.schemas.auth import (
 from app.services.account_emails import (
     email_change_link,
     password_reset_link,
+    send_account_deleted_email,
     send_email_change_email,
     send_email_changed_notice,
     send_password_reset_email,
@@ -54,7 +56,7 @@ from app.services.account_tokens import (
     find_token,
     issue_token,
 )
-from app.services.accounts import normalize_email
+from app.services.accounts import normalize_email, purge_account
 from app.services.auth_tokens import (
     consume_refresh_token,
     issue_refresh_token,
@@ -408,3 +410,38 @@ def confirm_email_change(
         logger.warning("Email-change notice failed for user %s", user.id)
 
     return UserOut.model_validate(user)
+
+
+@router.post("/account/delete", status_code=status.HTTP_204_NO_CONTENT)
+def delete_account(
+    payload: DeleteAccountRequest,
+    response: Response,
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> None:
+    """Hard-delete the signed-in account after an explicit confirmation.
+
+    The typed email must match, and password accounts must prove the password
+    again: an access token alone is not enough for an irreversible action.
+    """
+    if normalize_email(payload.confirm_email) != user.email:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, detail="email_mismatch"
+        )
+
+    if user.password_hash is not None:
+        if not payload.password or not verify_password(
+            payload.password, user.password_hash
+        ):
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST, detail="wrong_password"
+            )
+
+    email = purge_account(db, user)
+    clear_session_cookies(response)
+
+    # The account is already gone; a mail failure must not resurrect it.
+    try:
+        send_account_deleted_email(email)
+    except EmailDeliveryError:
+        logger.warning("Account-deleted notice failed for %s", email)
