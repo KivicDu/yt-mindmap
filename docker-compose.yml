@@ -37,6 +37,28 @@ services:
       GOOGLE_CLIENT_SECRET: ${GOOGLE_CLIENT_SECRET:-}
       GITHUB_CLIENT_ID: ${GITHUB_CLIENT_ID:-}
       GITHUB_CLIENT_SECRET: ${GITHUB_CLIENT_SECRET:-}
+      # Email delivery. Keep EMAIL_BACKEND=log to write links to the container
+      # log, or set smtp + the SMTP_* values below to send real mail.
+      EMAIL_BACKEND: ${EMAIL_BACKEND:-log}
+      SMTP_HOST: ${SMTP_HOST:-}
+      SMTP_PORT: ${SMTP_PORT:-587}
+      SMTP_USERNAME: ${SMTP_USERNAME:-}
+      SMTP_PASSWORD: ${SMTP_PASSWORD:-}
+      SMTP_FROM: ${SMTP_FROM:-yt-mindmap <no-reply@ytmindmap.local>}
+      SMTP_STARTTLS: ${SMTP_STARTTLS:-true}
+      SMTP_SSL: ${SMTP_SSL:-false}
+      SMTP_TIMEOUT_SECONDS: ${SMTP_TIMEOUT_SECONDS:-10}
+      DEBUG_EMAIL_LINKS: ${DEBUG_EMAIL_LINKS:-false}
+      # Cookies must be Secure when the site is served over HTTPS.
+      COOKIE_SECURE: ${COOKIE_SECURE:-false}
+      COOKIE_SAMESITE: ${COOKIE_SAMESITE:-lax}
+      # Abuse protection (in-memory; matches the single-worker backend).
+      RATE_LIMIT_ENABLED: ${RATE_LIMIT_ENABLED:-true}
+      RATE_LIMIT_AUTH_PER_MINUTE: ${RATE_LIMIT_AUTH_PER_MINUTE:-30}
+      RATE_LIMIT_AI_PER_MINUTE: ${RATE_LIMIT_AI_PER_MINUTE:-240}
+      AI_DAILY_QUOTA_PER_USER: ${AI_DAILY_QUOTA_PER_USER:-5000}
+      AI_DAILY_QUOTA_ANONYMOUS: ${AI_DAILY_QUOTA_ANONYMOUS:-1000}
+      TRUST_PROXY_HEADERS: ${TRUST_PROXY_HEADERS:-false}
     ports:
       - "8001:8001"
     volumes:
@@ -51,11 +73,24 @@ services:
       context: ./frontend
       args:
         VITE_API_BASE: ${VITE_API_BASE:-http://localhost:8001}
+        VITE_CONTACT_EMAIL: ${VITE_CONTACT_EMAIL:-contact@ytmindmap.local}
     ports:
       - "8080:80"
     depends_on:
       backend:
         condition: service_healthy
+    restart: unless-stopped
+
+  # Optional local inbox for testing real SMTP delivery:
+  #   docker compose --profile mailpit up -d
+  # then set EMAIL_BACKEND=smtp, SMTP_HOST=mailpit, SMTP_PORT=1025,
+  # SMTP_STARTTLS=false and open http://localhost:8025.
+  mailpit:
+    image: axllent/mailpit:v1.21
+    profiles: ["mailpit"]
+    ports:
+      - "8025:8025"
+      - "1025:1025"
     restart: unless-stopped
 
 volumes:

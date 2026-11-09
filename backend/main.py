@@ -25,6 +25,7 @@ from app.api.deps import get_current_user, get_optional_user
 from app.api.router import api_router
 from app.db.base import utcnow
 from app.db.session import get_db
+from app.middleware.rate_limit import RateLimitMiddleware
 from app.models.project import Project
 from app.models.user import User
 from app.schemas.project import AutosaveRequest
@@ -59,6 +60,10 @@ ALLOWED_ORIGINS = [
 ] or DEFAULT_ALLOWED_ORIGINS
 
 app = FastAPI(title="YouTube Mind Map API", version="0.3.0")
+
+# Registered before CORS so CORS stays the outermost layer and 429 responses
+# still carry the headers a browser needs to read them.
+app.add_middleware(RateLimitMiddleware)
 
 app.add_middleware(
     CORSMiddleware,

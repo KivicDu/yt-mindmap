@@ -10,6 +10,7 @@ from sqlalchemy.pool import StaticPool
 import main as main_module
 from app.db.base import Base
 from app.db.session import get_db
+from app.services.rate_limit import reset_rate_limits
 
 # SQLite is a test double only: models use portable column types and the app
 # itself runs on PostgreSQL. StaticPool keeps one in-memory database alive
@@ -28,9 +29,11 @@ def isolated_state(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setattr(main_module, "CACHE_PATH", tmp_path / "video_cache.json")
     main_module.sessions.clear()
     main_module.video_cache.clear()
+    reset_rate_limits()
     yield
     main_module.sessions.clear()
     main_module.video_cache.clear()
+    reset_rate_limits()
 
 
 @pytest.fixture()

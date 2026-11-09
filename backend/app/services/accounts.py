@@ -6,10 +6,14 @@ second account. Google and GitHub only report verified addresses, so the linkage
 proves ownership of the email. The password stays valid and keeps working.
 """
 
-from sqlalchemy import select
+from sqlalchemy import delete, or_, select
 from sqlalchemy.orm import Session
 
 from app.db.base import utcnow
+from app.models.account_token import AccountToken
+from app.models.project import Project
+from app.models.project_member import ProjectMember
+from app.models.refresh_token import RefreshToken
 from app.models.user import User
 from app.services.oauth import OAuthIdentity
 
@@ -54,3 +58,33 @@ def upsert_oauth_user(db: Session, identity: OAuthIdentity) -> User:
     db.commit()
     db.refresh(user)
     return user
+
+
+def purge_account(db: Session, user: User) -> str:
+    """Hard-delete one account and everything that belongs to it.
+
+    Rows are removed explicitly instead of relying on ``ON DELETE CASCADE``
+    alone: SQLite (used by the tests) does not enforce foreign keys by default,
+    and ``project_members`` is keyed by email, so invitations sent to this
+    address in *other* people's projects must go too.
+
+    Returns the email address so the caller can send a final notice after the
+    transaction commits.
+    """
+    email = user.email
+    owned_project_ids = select(Project.id).where(Project.user_id == user.id)
+
+    db.execute(
+        delete(ProjectMember).where(
+            or_(
+                ProjectMember.project_id.in_(owned_project_ids),
+                ProjectMember.email == email,
+            )
+        )
+    )
+    db.execute(delete(Project).where(Project.user_id == user.id))
+    db.execute(delete(AccountToken).where(AccountToken.user_id == user.id))
+    db.execute(delete(RefreshToken).where(RefreshToken.user_id == user.id))
+    db.execute(delete(User).where(User.id == user.id))
+    db.commit()
+    return email

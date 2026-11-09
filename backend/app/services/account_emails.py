@@ -107,6 +107,28 @@ def send_email_change_email(to: str, link: str) -> None:
     )
 
 
+def send_account_deleted_email(to: str) -> None:
+    """Final notice after a hard delete: no link, the account is gone."""
+    send_email(
+        to=to,
+        subject=f"Tài khoản {BRAND} đã được xoá",
+        text=(
+            "Tài khoản của bạn đã được xoá\n\n"
+            "Toàn bộ dự án, sơ đồ tư duy và phiên đăng nhập thuộc tài khoản này "
+            "đã bị xoá vĩnh viễn.\n\n"
+            "Nếu bạn không yêu cầu việc này, hãy trả lời email này ngay để được hỗ trợ. "
+            "Bạn vẫn có thể tạo tài khoản mới bất cứ lúc nào."
+        ),
+        html=_html(
+            "Tài khoản của bạn đã được xoá",
+            "Toàn bộ dự án, sơ đồ tư duy và phiên đăng nhập thuộc tài khoản này đã bị "
+            "xoá vĩnh viễn. Nếu bạn không yêu cầu việc này, hãy liên hệ quản trị viên ngay.",
+            "Mở yt-mindmap",
+            _base_url(),
+        ),
+    )
+
+
 def send_email_changed_notice(to: str, old_email: str, new_email: str) -> None:
     """Tell the old address that the account moved (security notice)."""
     send_email(

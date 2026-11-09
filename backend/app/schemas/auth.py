@@ -88,6 +88,14 @@ class ConfirmEmailChangeRequest(BaseModel):
     token: str = Field(min_length=1, max_length=128)
 
 
+class DeleteAccountRequest(BaseModel):
+    """Irreversible: the typed email must match the account being deleted."""
+
+    confirm_email: EmailStr
+    # Required for password accounts; OAuth-only accounts have no password.
+    password: str | None = Field(default=None, max_length=72)
+
+
 class ActionResponse(BaseModel):
     """Generic answer that never reveals whether an address has an account."""
 

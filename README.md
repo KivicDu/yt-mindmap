@@ -63,6 +63,12 @@ This project creates a dual-view setup: alongside the YouTube video, there's a d
 - [x] Email verification, password reset and email change with single-use, hashed tokens
 - [x] Email delivery through SMTP (Mailpit locally) or the development log
 - [x] Refresh tokens are registered server-side, so logout, password changes, resets and email changes revoke them
+- [x] Rate limits on auth endpoints and AI calls, plus a daily AI quota per user/anonymous IP
+- [x] Account deletion: confirm the email (and password for local accounts), hard-delete every project and session, send a final notice
+- [x] Friendly 404 page and a global error boundary instead of a blank screen
+- [x] Privacy, Terms and Contact pages (template copy, contact address from `VITE_CONTACT_EMAIL`)
+- [x] SMTP settings and an optional Mailpit profile in Docker
+- [x] `pg_dump` backup/restore scripts and a runbook for the Postgres volume
 
 ## Getting Started
 
@@ -81,6 +87,16 @@ in the `mindmap-db` Postgres volume. Migrations run automatically on start.
 > `VITE_API_BASE` is baked into the frontend at build time. When deploying,
 > rebuild with `--build-arg VITE_API_BASE=https://your-api-host` and set
 > `ALLOWED_ORIGINS` to the frontend origin.
+>
+> Email: set `EMAIL_BACKEND=smtp` plus `SMTP_HOST`, `SMTP_PORT`,
+> `SMTP_USERNAME`, `SMTP_PASSWORD` and `SMTP_FROM` to send real verification,
+> reset and deletion mail. For a local inbox, run
+> `docker compose --profile mailpit up -d` and use `SMTP_HOST=mailpit`,
+> `SMTP_PORT=1025`, `SMTP_STARTTLS=false`; the UI is at http://localhost:8025.
+>
+> Legal pages read `VITE_CONTACT_EMAIL` at build time (default
+> `contact@ytmindmap.local`). Back up the database with
+> `./scripts/backup-db.sh`; see [docs/backup-restore.md](docs/backup-restore.md).
 
 ### Option B — Local development
 
@@ -203,6 +219,8 @@ yt-mindmap/
 - [ADR 0007](docs/adr/0007-sharing-and-collaboration.md) — sharing, invites and realtime collaboration
 - [ADR 0008](docs/adr/0008-account-security.md) — profile, email verification and refresh-token revocation
 - [ADR 0009](docs/adr/0009-account-recovery.md) — SMTP delivery, password reset and email change
+- [ADR 0010](docs/adr/0010-production-readiness.md) — rate limits, account deletion, legal pages and backups
+- [Backup and restore](docs/backup-restore.md) — `pg_dump` scripts and the restore runbook
 - [Contributing workflow](CONTRIBUTING.md) — branch model and commit conventions
 
 ## How It Works
@@ -228,6 +246,10 @@ yt-mindmap/
 - Project lists are paginated by the API (50 by default) but the dashboard does not render pagination controls yet.
 - Account emails go through SMTP when `EMAIL_BACKEND=smtp`; the default `log` backend writes the link to the backend log so local development needs no mail server. `DEBUG_EMAIL_LINKS=true` additionally returns links for authenticated verification/email-change requests (never enable it publicly; password-reset links are never returned).
 - Password reset links expire after 1 hour, email-change links after 1 hour, verification links after 24 hours. Issuing a new link invalidates the previous one for that purpose.
+- Rate limits and daily AI quotas live in memory, so they are per process and reset on restart. A multi-worker deployment needs Redis (or an edge limiter) before the counters are shared.
+- Account deletion is permanent: there is no trash or grace period. The confirmation step exists to prevent accidents, not to allow recovery.
+- Privacy, Terms and Contact are template pages; review the copy and set `VITE_CONTACT_EMAIL` before launch.
+- `scripts/backup-db.sh` writes local dumps only. Off-site copies, encryption and retention are left to the deployment environment.
 - Changing the email address requires the current password for password accounts and a click on the link sent to the new address; confirming it revokes every session, so all devices sign in again with the new address.
 - Refresh tokens are registered server-side, so logout, password changes, password resets and email changes revoke them. Access tokens remain stateless and stay valid until they expire (15 minutes), so a copied access token is not revoked immediately.
 - Captions use the video's available original-language track. The server-side

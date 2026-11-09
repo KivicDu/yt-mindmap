@@ -492,6 +492,11 @@ function Home() {
         <div className="home-footer-inner">
           <div className="home-brand">yt-mindmap</div>
           <span className="home-footer-text">Biến video YouTube thành sơ đồ tư duy để học nhanh hơn.</span>
+          <nav className="home-footer-links" aria-label="Pháp lý">
+            <Link to="/privacy">Quyền riêng tư</Link>
+            <Link to="/terms">Điều khoản</Link>
+            <Link to="/contact">Liên hệ</Link>
+          </nav>
         </div>
       </footer>
     </main>

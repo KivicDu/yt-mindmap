@@ -34,5 +34,8 @@ htmlcov/
 # Runtime data (mind map cache)
 backend/data/
 
+# Database backups (created by scripts/backup-db.sh)
+backups/
+
 # Logs
 *.log

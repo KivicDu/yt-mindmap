@@ -31,6 +31,7 @@ interface AuthContextValue {
     currentPassword?: string,
   ) => Promise<EmailChangeRequestResult>
   confirmEmailChange: (token: string) => Promise<User>
+  deleteAccount: (confirmEmail: string, password?: string) => Promise<void>
 }
 
 interface AuthResponse {
@@ -206,6 +207,18 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     [clear],
   )
 
+  const deleteAccount = useCallback(
+    async (confirmEmail: string, password?: string) => {
+      await apiFetch<void>('/auth/account/delete', {
+        body: {
+          confirm_email: confirmEmail,
+          ...(password ? { password } : {}),
+        },
+      })
+    },
+    [],
+  )
+
   const value = useMemo<AuthContextValue>(
     () => ({
       user,
@@ -221,6 +234,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       resetPassword,
       requestEmailChange,
       confirmEmailChange,
+      deleteAccount,
     }),
     [
       user,
@@ -236,6 +250,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       resetPassword,
       requestEmailChange,
       confirmEmailChange,
+      deleteAccount,
     ],
   )
 

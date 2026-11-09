@@ -108,6 +108,10 @@ export function transcriptErrorMessage(code: string | undefined): string {
       return 'Không kết nối được tới YouTube. Kiểm tra mạng rồi thử lại, hoặc tải file .srt/.vtt.'
     case 'invalid_subtitle_file':
       return 'File phụ đề không đọc được. Kiểm tra lại định dạng .srt hoặc .vtt.'
+    case 'rate_limited':
+      return 'Bạn thao tác quá nhanh. Chờ một chút rồi thử lại nhé.'
+    case 'ai_quota_exceeded':
+      return 'Đã hết hạn mức AI hôm nay. Đăng nhập hoặc thử lại vào ngày mai.'
     default:
       return 'Không tải được phụ đề cho link này. Thử tải file .srt/.vtt bên dưới.'
   }
@@ -133,6 +137,10 @@ export function transcriptStatusText(code: string | undefined): string {
     case 'youtube_error':
     case 'network_error':
       return 'Không kết nối được YouTube'
+    case 'rate_limited':
+      return 'Thao tác quá nhanh'
+    case 'ai_quota_exceeded':
+      return 'Hết hạn mức AI hôm nay'
     default:
       return 'Không tải được phụ đề'
   }
