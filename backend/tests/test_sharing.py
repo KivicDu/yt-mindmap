@@ -288,6 +288,49 @@ def test_invite_before_registration_works(client: TestClient):
     assert stats["shared_with_me"] == 1
 
 
+def test_shared_list_supports_sort_and_pagination(client: TestClient, db_session):
+    from datetime import timedelta
+
+    from app.db.base import utcnow
+    from app.models.project import Project
+
+    owner = register(client)
+    invitee = register(client, email="invitee@example.com")
+
+    projects = []
+    for title in ("Zeta", "Alpha", "Mika"):
+        project = create_project(client, owner, title=title)
+        invite(client, owner, project["id"], "invitee@example.com", "viewer")
+        share(client, owner, project["id"], access="invited", role="viewer")
+        projects.append(project)
+
+    base = utcnow()
+    for position, project in enumerate(projects):
+        row = db_session.get(Project, project["id"])
+        row.created_at = base + timedelta(days=position)
+        row.updated_at = base + timedelta(days=2 - position)
+    db_session.commit()
+
+    def titles(params: dict) -> list[str]:
+        body = client.get(
+            "/api/projects/shared", params=params, headers=invitee
+        ).json()
+        return [item["title"] for item in body["items"]]
+
+    assert titles({"sort": "title"}) == ["Alpha", "Mika", "Zeta"]
+    assert titles({"sort": "created"}) == ["Mika", "Alpha", "Zeta"]
+    assert titles({"sort": "updated"}) == ["Zeta", "Alpha", "Mika"]
+
+    page = client.get(
+        "/api/projects/shared",
+        params={"sort": "title", "limit": 2, "offset": 2},
+        headers=invitee,
+    ).json()
+    assert page["total"] == 3
+    assert [item["title"] for item in page["items"]] == ["Zeta"]
+
+
+
 def test_remove_member_immediately_revokes_access(client: TestClient):
     owner = register(client)
     invitee = register(client, email="invitee@example.com")

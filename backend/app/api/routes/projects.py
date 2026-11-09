@@ -31,13 +31,20 @@ def _owned_or_404(db: Session, user: User, project_id: str):
 def list_projects(
     draft: bool | None = Query(default=None),
     q: str | None = Query(default=None, max_length=120),
+    sort: str = Query(default="updated", pattern="^(updated|created|title)$"),
     limit: int = Query(default=50, ge=1, le=200),
     offset: int = Query(default=0, ge=0),
     user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
     rows, total = project_service.list_projects(
-        db, user.id, is_draft=draft, query=q, limit=limit, offset=offset
+        db,
+        user.id,
+        is_draft=draft,
+        query=q,
+        sort=sort,
+        limit=limit,
+        offset=offset,
     )
     return {
         "items": [project_service.summary(row) for row in rows],
@@ -60,13 +67,14 @@ def project_stats(
 @router.get("/shared")
 def shared_projects(
     q: str | None = Query(default=None, max_length=120),
+    sort: str = Query(default="updated", pattern="^(updated|created|title)$"),
     limit: int = Query(default=50, ge=1, le=200),
     offset: int = Query(default=0, ge=0),
     user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
     rows, total = sharing_service.list_shared(
-        db, user, query=q, limit=limit, offset=offset
+        db, user, query=q, sort=sort, limit=limit, offset=offset
     )
     return {
         "items": [

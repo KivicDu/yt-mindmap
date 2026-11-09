@@ -14,6 +14,7 @@ import {
   parseShareSlug,
   updateProject,
   type ProjectStats,
+  type ProjectSort,
   type ProjectSummary,
   type SharedProjectSummary,
 } from '../../lib/projects'
@@ -32,6 +33,82 @@ const sections: { id: SectionID; label: string }[] = [
 ]
 
 const API_MESSAGE = 'Không tải được dữ liệu. Kiểm tra kết nối rồi thử lại.'
+const PAGE_SIZE = 10
+
+const SORT_OPTIONS: { value: ProjectSort; label: string }[] = [
+  { value: 'updated', label: 'Mới cập nhật' },
+  { value: 'created', label: 'Mới tạo' },
+  { value: 'title', label: 'Tên A–Z' },
+]
+
+function SortSelect({
+  value,
+  onChange,
+}: {
+  value: ProjectSort
+  onChange: (value: ProjectSort) => void
+}) {
+  return (
+    <label className="dash-sort">
+      <span className="sr-only">Sắp xếp danh sách</span>
+      <select
+        value={value}
+        onChange={(event) => onChange(event.target.value as ProjectSort)}
+      >
+        {SORT_OPTIONS.map((option) => (
+          <option key={option.value} value={option.value}>
+            {option.label}
+          </option>
+        ))}
+      </select>
+    </label>
+  )
+}
+
+function Pagination({
+  offset,
+  total,
+  onChange,
+}: {
+  offset: number
+  total: number
+  onChange: (offset: number) => void
+}) {
+  if (total <= PAGE_SIZE) return null
+  const pages = Math.max(1, Math.ceil(total / PAGE_SIZE))
+  const page = Math.floor(offset / PAGE_SIZE) + 1
+  const from = offset + 1
+  const to = Math.min(total, offset + PAGE_SIZE)
+
+  return (
+    <div className="dash-pagination">
+      <span className="dash-pagination__range">
+        {from}–{to} / {total}
+      </span>
+      <div className="dash-pagination__controls">
+        <button
+          className="dash-mini"
+          type="button"
+          disabled={offset <= 0}
+          onClick={() => onChange(Math.max(0, offset - PAGE_SIZE))}
+        >
+          Trước
+        </button>
+        <span className="dash-pagination__page">
+          Trang {page} / {pages}
+        </span>
+        <button
+          className="dash-mini"
+          type="button"
+          disabled={offset + PAGE_SIZE >= total}
+          onClick={() => onChange(offset + PAGE_SIZE)}
+        >
+          Sau
+        </button>
+      </div>
+    </div>
+  )
+}
 
 function Dashboard() {
   const { user, logout } = useAuth()
@@ -239,6 +316,9 @@ function ProjectList({
 }) {
   const [items, setItems] = useState<ProjectSummary[]>([])
   const [query, setQuery] = useState('')
+  const [sort, setSort] = useState<ProjectSort>('updated')
+  const [offset, setOffset] = useState(0)
+  const [total, setTotal] = useState(0)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
   const [reload, setReload] = useState(0)
@@ -248,10 +328,16 @@ function ProjectList({
     let cancelled = false
     const timer = setTimeout(() => {
       setLoading(true)
-      listProjects({ draft, q: query })
+      listProjects({ draft, q: query, sort, limit: PAGE_SIZE, offset })
         .then((data) => {
           if (cancelled) return
+          // A delete on the last page can leave the offset past the end.
+          if (offset >= data.total && data.total > 0) {
+            setOffset(Math.max(0, Math.floor((data.total - 1) / PAGE_SIZE) * PAGE_SIZE))
+            return
+          }
           setItems(data.items)
+          setTotal(data.total)
           setError('')
         })
         .catch(() => {
@@ -265,7 +351,7 @@ function ProjectList({
       cancelled = true
       clearTimeout(timer)
     }
-  }, [draft, query, revision, reload])
+  }, [draft, query, sort, offset, revision, reload])
 
   const changed = () => {
     setReload((value) => value + 1)
@@ -281,7 +367,7 @@ function ProjectList({
         <header className="dash-panel-header">
           <h2>{heading}</h2>
           <span className="dash-panel-note">
-            {loading ? 'Đang tải…' : `${items.length} mục`}
+            {loading ? 'Đang tải…' : `${total} mục`}
           </span>
         </header>
 
@@ -292,7 +378,17 @@ function ProjectList({
             value={query}
             placeholder="Tìm theo tên hoặc mã video"
             aria-label="Tìm dự án"
-            onChange={(event) => setQuery(event.target.value)}
+            onChange={(event) => {
+              setQuery(event.target.value)
+              setOffset(0)
+            }}
+          />
+          <SortSelect
+            value={sort}
+            onChange={(value) => {
+              setSort(value)
+              setOffset(0)
+            }}
           />
           <Link className="dash-cta dash-cta--ghost" to="/app">
             {draft ? 'Tạo bản nháp mới' : 'Tạo dự án mới'}
@@ -301,7 +397,7 @@ function ProjectList({
 
         {error && <p className="dash-error" role="alert">{error}</p>}
 
-        {!loading && !error && items.length === 0 ? (
+        {!loading && !error && total === 0 ? (
           <p className="dash-empty-inline">
             {query
               ? 'Không tìm thấy dự án nào khớp từ khoá.'
@@ -322,6 +418,8 @@ function ProjectList({
             ))}
           </ul>
         )}
+
+        <Pagination offset={offset} total={total} onChange={setOffset} />
       </section>
 
       {sharing && (
@@ -496,6 +594,9 @@ const ROLE_TEXT: Record<string, string> = {
 function SharedList({ revision }: { revision: number }) {
   const [items, setItems] = useState<SharedProjectSummary[]>([])
   const [query, setQuery] = useState('')
+  const [sort, setSort] = useState<ProjectSort>('updated')
+  const [offset, setOffset] = useState(0)
+  const [total, setTotal] = useState(0)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
 
@@ -503,10 +604,15 @@ function SharedList({ revision }: { revision: number }) {
     let cancelled = false
     const timer = setTimeout(() => {
       setLoading(true)
-      listSharedProjects({ q: query })
+      listSharedProjects({ q: query, sort, limit: PAGE_SIZE, offset })
         .then((data) => {
           if (cancelled) return
+          if (offset >= data.total && data.total > 0) {
+            setOffset(Math.max(0, Math.floor((data.total - 1) / PAGE_SIZE) * PAGE_SIZE))
+            return
+          }
           setItems(data.items)
+          setTotal(data.total)
           setError('')
         })
         .catch(() => {
@@ -520,14 +626,14 @@ function SharedList({ revision }: { revision: number }) {
       cancelled = true
       clearTimeout(timer)
     }
-  }, [query, revision])
+  }, [query, sort, offset, revision])
 
   return (
     <section className="dash-panel">
       <header className="dash-panel-header">
         <h2>Được chia sẻ với tôi</h2>
         <span className="dash-panel-note">
-          {loading ? 'Đang tải…' : `${items.length} mục`}
+          {loading ? 'Đang tải…' : `${total} mục`}
         </span>
       </header>
 
@@ -538,13 +644,23 @@ function SharedList({ revision }: { revision: number }) {
           value={query}
           placeholder="Tìm theo tên hoặc mã video"
           aria-label="Tìm dự án được chia sẻ"
-          onChange={(event) => setQuery(event.target.value)}
+          onChange={(event) => {
+            setQuery(event.target.value)
+            setOffset(0)
+          }}
+        />
+        <SortSelect
+          value={sort}
+          onChange={(value) => {
+            setSort(value)
+            setOffset(0)
+          }}
         />
       </div>
 
       {error && <p className="dash-error" role="alert">{error}</p>}
 
-      {!loading && !error && items.length === 0 ? (
+      {!loading && !error && total === 0 ? (
         <p className="dash-empty-inline">
           {query
             ? 'Không tìm thấy dự án nào khớp từ khoá.'
@@ -586,6 +702,8 @@ function SharedList({ revision }: { revision: number }) {
           ))}
         </ul>
       )}
+
+      <Pagination offset={offset} total={total} onChange={setOffset} />
     </section>
   )
 }

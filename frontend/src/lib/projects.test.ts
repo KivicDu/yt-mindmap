@@ -1,5 +1,9 @@
-import { describe, expect, it } from 'vitest'
-import { formatWhen, parseShareSlug } from './projects'
+import { afterEach, describe, expect, it, vi } from 'vitest'
+import { formatWhen, listProjects, listSharedProjects, parseShareSlug } from './projects'
+
+afterEach(() => {
+  vi.unstubAllGlobals()
+})
 
 describe('formatWhen', () => {
   it('describes recent edits in words', () => {
@@ -33,5 +37,61 @@ describe('parseShareSlug', () => {
     expect(parseShareSlug('')).toBeNull()
     expect(parseShareSlug('YTMM-short')).toBeNull()
     expect(parseShareSlug('hello world')).toBeNull()
+  })
+})
+
+describe('project list queries', () => {
+  function mockList() {
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(
+        JSON.stringify({ items: [], total: 0, limit: 10, offset: 0 }),
+        { status: 200 },
+      ),
+    )
+    vi.stubGlobal('fetch', fetchMock as unknown as typeof fetch)
+    return fetchMock
+  }
+
+  it('sends search, sort and paging for owned projects', async () => {
+    const fetchMock = mockList()
+
+    await listProjects({
+      draft: false,
+      q: '  giải  ',
+      sort: 'title',
+      limit: 10,
+      offset: 10,
+    })
+
+    const url = String(fetchMock.mock.calls[0][0])
+    expect(url).toContain('/api/projects?')
+    expect(url).toContain('draft=false')
+    expect(url).toContain('q=gi%E1%BA%A3i')
+    expect(url).toContain('sort=title')
+    expect(url).toContain('limit=10')
+    expect(url).toContain('offset=10')
+  })
+
+  it('omits empty searches and a zero offset', async () => {
+    const fetchMock = mockList()
+
+    await listProjects({ q: '   ', sort: 'created' })
+
+    const url = String(fetchMock.mock.calls[0][0])
+    expect(url).not.toContain('q=')
+    expect(url).not.toContain('offset=')
+    expect(url).toContain('sort=created')
+  })
+
+  it('uses the shared endpoint with the same paging options', async () => {
+    const fetchMock = mockList()
+
+    await listSharedProjects({ sort: 'updated', limit: 10, offset: 20 })
+
+    const url = String(fetchMock.mock.calls[0][0])
+    expect(url).toContain('/api/projects/shared?')
+    expect(url).toContain('sort=updated')
+    expect(url).toContain('limit=10')
+    expect(url).toContain('offset=20')
   })
 })

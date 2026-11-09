@@ -91,26 +91,36 @@ export interface SharedProjectView {
   session_id: string | null
 }
 
+export type ProjectSort = 'updated' | 'created' | 'title'
+
 export function listProjects(params: {
   draft?: boolean
   q?: string
+  sort?: ProjectSort
   limit?: number
+  offset?: number
 } = {}): Promise<ProjectList> {
   const search = new URLSearchParams()
   if (params.draft !== undefined) search.set('draft', String(params.draft))
   if (params.q?.trim()) search.set('q', params.q.trim())
+  if (params.sort) search.set('sort', params.sort)
   if (params.limit) search.set('limit', String(params.limit))
+  if (params.offset) search.set('offset', String(params.offset))
   const query = search.toString()
   return apiFetch<ProjectList>(`/projects${query ? `?${query}` : ''}`)
 }
 
 export function listSharedProjects(params: {
   q?: string
+  sort?: ProjectSort
   limit?: number
+  offset?: number
 } = {}): Promise<SharedProjectList> {
   const search = new URLSearchParams()
   if (params.q?.trim()) search.set('q', params.q.trim())
+  if (params.sort) search.set('sort', params.sort)
   if (params.limit) search.set('limit', String(params.limit))
+  if (params.offset) search.set('offset', String(params.offset))
   const query = search.toString()
   return apiFetch<SharedProjectList>(`/projects/shared${query ? `?${query}` : ''}`)
 }

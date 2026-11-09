@@ -60,6 +60,7 @@ def list_projects(
     *,
     is_draft: bool | None = None,
     query: str | None = None,
+    sort: str = "updated",
     limit: int = 50,
     offset: int = 0,
 ) -> tuple[list[Project], int]:
@@ -72,11 +73,17 @@ def list_projects(
             or_(Project.title.ilike(pattern), Project.video_id.ilike(pattern))
         )
 
+    order = {
+        "updated": Project.updated_at.desc(),
+        "created": Project.created_at.desc(),
+        "title": func.lower(Project.title).asc(),
+    }.get(sort, Project.updated_at.desc())
+
     total = db.scalar(select(func.count(Project.id)).where(*conditions)) or 0
     rows = db.scalars(
         select(Project)
         .where(*conditions)
-        .order_by(Project.updated_at.desc())
+        .order_by(order, Project.id.asc())
         .offset(offset)
         .limit(limit)
     ).all()

@@ -5,6 +5,10 @@ import YouTube from 'react-youtube'
 import type { YouTubeProps } from 'react-youtube'
 import './Workspace.css'
 import ThemeToggle from '../../components/ThemeToggle'
+import ExportMenu from '../../components/ExportMenu'
+import TranscriptPanel, {
+  type TranscriptCue as TranscriptEntry,
+} from '../../components/TranscriptPanel'
 import { useAuth } from '../../context/AuthContext'
 import type { MindMapHandle } from '../../components/MindMap'
 import {
@@ -23,25 +27,23 @@ import {
   type LocalDraft,
 } from '../../lib/projects'
 import { getAccessToken, refreshSession } from '../../lib/api'
+import { exportMap, type ExportFormat } from '../../lib/mapExport'
 import {
   extractVideoId,
   isCaptionOnlyProblem,
+  listTranscriptLanguages,
   playerErrorMessage,
   transcriptErrorMessage,
   transcriptStatusText,
+  TranscriptLanguagesError,
   watchUrl,
   type PlayerErrorInfo,
+  type TranscriptLanguage,
   type VideoInfo,
 } from '../../lib/youtube'
 
 // markmap + d3 are heavy; load them after the player shell is interactive.
 const MindMap = lazy(() => import('../../components/MindMap'))
-
-interface TranscriptEntry {
-  start: number
-  duration: number
-  text: string
-}
 
 /** Draft of the node being edited; separate from the tree until saved. */
 interface NodeDraft {
@@ -138,6 +140,13 @@ function App() {
   const [pendingDraft, setPendingDraft] = useState<LocalDraft | null>(null)
   const [role, setRole] = useState<SessionRole | null>(null)
   const [ownerName, setOwnerName] = useState<string | null>(null)
+  const [summary, setSummary] = useState('')
+  const [detailTab, setDetailTab] = useState<'session' | 'transcript'>('session')
+  const [languages, setLanguages] = useState<TranscriptLanguage[]>([])
+  const [languagesLoading, setLanguagesLoading] = useState(false)
+  const [languagesError, setLanguagesError] = useState('')
+  const [languageBusy, setLanguageBusy] = useState(false)
+  const [exporting, setExporting] = useState<ExportFormat | null>(null)
 
   const urlInputRef = useRef<HTMLInputElement>(null)
   const fileInputRef = useRef<HTMLInputElement>(null)
@@ -153,6 +162,8 @@ function App() {
   const titleRef = useRef<string>(DEFAULT_TITLE)
   const projectIdRef = useRef<string | null>(routeProjectId ?? null)
   const saveRef = useRef<() => Promise<boolean>>(async () => false)
+  const languagesLoadedRef = useRef(false)
+  const languagesRequestRef = useRef(false)
 
   const setStatus = useCallback((text: string, kind: StatusKind = 'idle') => {
     setStatusState({ kind, text })
@@ -262,6 +273,10 @@ function App() {
       setTranscript(data.transcript)
     }
     setTranscriptLang(typeof data.language === 'string' ? data.language : null)
+    setSummary(typeof data.summary === 'string' ? data.summary : '')
+    setLanguages([])
+    setLanguagesError('')
+    languagesLoadedRef.current = false
 
     const resolvedTitle = data.title || vid || DEFAULT_TITLE
     titleRef.current = resolvedTitle
@@ -360,6 +375,15 @@ function App() {
     setVideoInfo(null)
     setTranscript([])
     setTranscriptLang(null)
+    setSummary('')
+    setDetailTab('session')
+    setLanguages([])
+    setLanguagesError('')
+    setLanguagesLoading(false)
+    setLanguageBusy(false)
+    setExporting(null)
+    languagesLoadedRef.current = false
+    languagesRequestRef.current = false
     setSessionId(null)
     sessionIdRef.current = null
     setConsumedUntil(0)
@@ -607,6 +631,10 @@ function App() {
         )
       }
 
+      const nextSummary =
+        typeof data.summary === 'string' ? data.summary : data.diff?.summary
+      if (typeof nextSummary === 'string') setSummary(nextSummary)
+
       if (typeof data.consumed_until === 'number') {
         lastTriggerRef.current = data.consumed_until
         setConsumedUntil(data.consumed_until)
@@ -648,6 +676,85 @@ function App() {
     },
     [player, setStatus],
   )
+
+  /** Caption tracks are fetched only when the picker is opened. */
+  const loadLanguages = useCallback(async () => {
+    if (languagesLoadedRef.current || languagesRequestRef.current) return
+    const id = videoId || extractVideoId(url)
+    if (!id) return
+    languagesRequestRef.current = true
+    setLanguagesLoading(true)
+    setLanguagesError('')
+    try {
+      const items = await listTranscriptLanguages(watchUrl(id))
+      setLanguages(items)
+      languagesLoadedRef.current = true
+    } catch (error: unknown) {
+      const code = error instanceof TranscriptLanguagesError ? error.code : undefined
+      setLanguagesError(transcriptErrorMessage(code))
+    } finally {
+      languagesRequestRef.current = false
+      setLanguagesLoading(false)
+    }
+  }, [videoId, url])
+
+  /** Swap the caption track in the live session; the map is left untouched. */
+  const switchLanguage = async (code: string) => {
+    const session = sessionIdRef.current
+    if (!session || languageBusy) return
+    setLanguageBusy(true)
+    setLanguagesError('')
+    setStatus('Đang đổi ngôn ngữ phụ đề…', 'busy')
+    try {
+      const response = await sessionRequest('/transcript', 'POST', {
+        session_id: session,
+        language: code,
+      })
+      const data = await response.json().catch(() => ({}))
+      if (sessionIdRef.current !== session) return
+      if (!response.ok) {
+        const detail = data?.detail
+        const detailCode =
+          detail && typeof detail === 'object' ? detail.code : typeof detail === 'string' ? detail : undefined
+        setStatus(
+          detailCode === 'project_read_only'
+            ? 'Dự án này chỉ cho phép xem'
+            : 'Không đổi được ngôn ngữ phụ đề',
+          'error',
+        )
+        return
+      }
+      if (Array.isArray(data.transcript)) setTranscript(data.transcript)
+      setTranscriptLang(typeof data.language === 'string' ? data.language : code)
+      setStatus(`Đã đổi phụ đề sang ${data.language || code}`, 'ok')
+    } catch (error: any) {
+      setStatus(`Không đổi được ngôn ngữ: ${error.message}`, 'error')
+    } finally {
+      setLanguageBusy(false)
+    }
+  }
+
+  const handleExport = async (format: ExportFormat) => {
+    if (nodeCount === 0) {
+      setStatus('Chưa có nội dung để xuất — hãy tạo sơ đồ trước', 'idle')
+      return
+    }
+    setExporting(format)
+    setStatus(`Đang xuất ${format.toUpperCase()}…`, 'busy')
+    try {
+      await exportMap(format, {
+        title: mapTitle,
+        nodes: nodesRef.current,
+        svg: mindmapRef.current?.getSvg() ?? null,
+        bounds: mindmapRef.current?.getBounds() ?? null,
+      })
+      setStatus(`Đã xuất ${format.toUpperCase()}`, 'ok')
+    } catch (error: any) {
+      setStatus(error?.message || 'Không xuất được sơ đồ', 'error')
+    } finally {
+      setExporting(null)
+    }
+  }
 
   const onPlayerStateChange: YouTubeProps['onStateChange'] = (event: any) => {
     const YT = (window as any).YT
@@ -694,6 +801,7 @@ function App() {
         if (data && Array.isArray(data.nodes) && mindmapRef.current) {
           applyNodes(data.nodes, data?.type === 'diff')
         }
+        if (typeof data?.summary === 'string') setSummary(data.summary)
       } catch (err) {
         console.error('SSE parse error', err)
       }
@@ -1105,9 +1213,43 @@ function App() {
                 </svg>
               </button>
             ) : (
-              <span className="panel__meta">{nodeCount > 0 ? `${nodeCount} ý` : 'Trống'}</span>
+              <span className="panel__meta">
+                {detailTab === 'transcript'
+                  ? transcript.length > 0
+                    ? `${transcript.length} đoạn`
+                    : 'Trống'
+                  : nodeCount > 0
+                    ? `${nodeCount} ý`
+                    : 'Trống'}
+              </span>
             )}
           </header>
+
+          {!editor && (
+            <div className="detail-tabs" role="tablist" aria-label="Nội dung phiên học">
+              <button
+                type="button"
+                role="tab"
+                aria-selected={detailTab === 'session'}
+                className={`detail-tabs__item${detailTab === 'session' ? ' is-active' : ''}`}
+                onClick={() => setDetailTab('session')}
+              >
+                Phiên học
+              </button>
+              <button
+                type="button"
+                role="tab"
+                aria-selected={detailTab === 'transcript'}
+                className={`detail-tabs__item${detailTab === 'transcript' ? ' is-active' : ''}`}
+                onClick={() => setDetailTab('transcript')}
+              >
+                Phụ đề
+                {transcript.length > 0 && (
+                  <span className="detail-tabs__count">{transcript.length}</span>
+                )}
+              </button>
+            </div>
+          )}
 
           <div className="panel__body panel__body--details">
             {editor ? (
@@ -1177,11 +1319,36 @@ function App() {
                   </button>
                 </div>
               </div>
+            ) : detailTab === 'transcript' ? (
+              <TranscriptPanel
+                entries={transcript}
+                currentTime={currentTime}
+                onSeek={handleSeek}
+                language={transcriptLang}
+                languages={languages}
+                languagesLoading={languagesLoading}
+                languagesError={languagesError}
+                onLoadLanguages={() => void loadLanguages()}
+                onSelectLanguage={(code) => void switchLanguage(code)}
+                languageBusy={languageBusy}
+                canEdit={canEdit}
+              />
             ) : (
               <div className="session">
                 <div className="session__title">
                   <span className="session__label">Chủ đề</span>
                   <strong>{mapTitle}</strong>
+                </div>
+
+                <div className={`summary-card${summary ? '' : ' summary-card--empty'}`}>
+                  <div className="summary-card__head">
+                    <span className="summary-card__label">Tóm tắt AI</span>
+                    {isUpdating && <span className="summary-card__live">đang cập nhật…</span>}
+                  </div>
+                  <p>
+                    {summary ||
+                      'Tóm tắt sẽ xuất hiện khi video được phân tích. Bấm “Cập nhật” hoặc phát video để bắt đầu.'}
+                  </p>
                 </div>
 
                 <dl className="session__rows">
@@ -1290,6 +1457,12 @@ function App() {
                 {isUpdating && <span className="spinner" aria-hidden="true" />}
                 {isUpdating ? 'Đang phân tích…' : 'Cập nhật'}
               </button>
+
+              <ExportMenu
+                onExport={(format) => void handleExport(format)}
+                disabled={nodeCount === 0}
+                busy={exporting}
+              />
             </div>
           </header>
 

@@ -15,7 +15,7 @@ from typing import Any
 import httpx
 from fastapi import Depends, FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 from sse_starlette.sse import EventSourceResponse
 from starlette.concurrency import run_in_threadpool
@@ -41,7 +41,12 @@ from node_tree import (
     update_node,
 )
 from subtitles import parse_vtt_or_srt
-from transcript import TranscriptError, extract_video_id, fetch_transcript
+from transcript import (
+    TranscriptError,
+    extract_video_id,
+    fetch_transcript,
+    list_transcript_languages,
+)
 
 DEFAULT_ALLOWED_ORIGINS = [
     "http://localhost:5173",
@@ -87,6 +92,10 @@ class TranscriptRequest(BaseModel):
     title: str | None = None
     # Reopen a saved project: captions and nodes come from the database.
     project_id: str | None = None
+    # Switch the caption track of an already-loaded session without rebuilding
+    # the map. `session_id` is required for that path.
+    session_id: str | None = None
+    language: str | None = Field(default=None, max_length=20)
 
 class UpdateMapRequest(BaseModel):
     video_id: str
@@ -343,6 +352,7 @@ def session_payload(session_id: str) -> dict[str, Any]:
         "markdown": session.get("markdown", ""),
         "consumed_until": float(session.get("consumed_until", 0.0)),
         "title": session.get("title"),
+        "summary": session.get("summary_so_far", ""),
     }
 
 @app.get("/")
@@ -445,6 +455,94 @@ async def get_video_info(url: str):
     return result
 
 
+async def switch_transcript_language(
+    request: TranscriptRequest,
+    user: User | None,
+    db: Session,
+) -> dict[str, Any]:
+    """Replace the captions of a live session without touching the map.
+
+    The learner may switch from an auto-generated track to a manual one (or to
+    a language they read better). Nodes, notes, pins and the AI pointer stay as
+    they are: the map is a study artefact, not a transcript mirror.
+    """
+
+    session = sessions.get(request.session_id) if request.session_id else None
+    if session is None:
+        raise HTTPException(
+            status_code=404,
+            detail={
+                "code": "session_lost",
+                "message": "The study session expired. Reload the video.",
+            },
+        )
+
+    # A viewer must not rewrite a shared project's captions.
+    assert_can_edit_session(db, session, user)
+    project = project_for_session(db, session)
+    video_id = project.video_id if project is not None else session.get("video_id")
+    if not video_id:
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "code": "missing_input",
+                "message": "This session has no video to fetch captions for.",
+            },
+        )
+
+    try:
+        transcript, language = await run_in_threadpool(
+            fetch_transcript,
+            f"https://www.youtube.com/watch?v={video_id}",
+            request.language,
+        )
+    except TranscriptError as error:
+        raise HTTPException(
+            status_code=error.status_code,
+            detail={"code": error.code, "message": error.message},
+        ) from error
+
+    session["transcript"] = transcript
+    session["language"] = language
+    session["last_active"] = time.time()
+
+    if project is not None:
+        project.transcript = transcript
+        project.transcript_language = language
+        db.commit()
+
+    owner_name = None
+    if project is not None:
+        owner = db.get(User, project.user_id)
+        owner_name = owner.display_name if owner else None
+
+    return {
+        "transcript": transcript,
+        "video_id": video_id,
+        "title": project.title if project is not None else session.get("title"),
+        "language": language,
+        "cached": False,
+        "role": sharing_service.role_for(db, project, user) if project else None,
+        "can_edit": True,
+        "owner_name": owner_name,
+        **session_payload(request.session_id),
+    }
+
+
+@app.get("/transcript/languages")
+async def get_transcript_languages(url: str):
+    """Caption tracks for the language picker (called on demand, not on load)."""
+
+    try:
+        items = await run_in_threadpool(list_transcript_languages, url)
+    except TranscriptError as error:
+        raise HTTPException(
+            status_code=error.status_code,
+            detail={"code": error.code, "message": error.message},
+        ) from error
+    return {"items": items}
+
+
 @app.post("/transcript")
 async def get_transcript(
     request: TranscriptRequest,
@@ -452,6 +550,9 @@ async def get_transcript(
     db: Session = Depends(get_db),
 ):
     cleanup_sessions()
+
+    if request.language:
+        return await switch_transcript_language(request, user, db)
 
     if request.project_id:
         # Reopening a saved map: the row is authoritative for captions, nodes,
@@ -771,6 +872,7 @@ async def update_map(
                 # Full state, so a client that missed an event can resync.
                 "nodes": session["nodes"],
                 "markdown": session["markdown"],
+                "summary": session.get("summary_so_far", ""),
             }
             session.setdefault("events", []).append(
                 {"type": "diff", "data": event_data}
@@ -780,6 +882,7 @@ async def update_map(
                 "diff": event_data,
                 "should_update": True,
                 "consumed_until": new_consumed,
+                "summary": session.get("summary_so_far", ""),
             }
 
         cache_video_map(session.get("video_id"), session)
@@ -789,6 +892,7 @@ async def update_map(
             "reason": "no_new_content",
             "consumed_until": new_consumed,
             "chunk_size": len(chunk),
+            "summary": session.get("summary_so_far", ""),
         }
     finally:
         lock.release()
