@@ -18,6 +18,10 @@ interface MindMapHandle {
   zoom: (factor: number) => void
   fit: () => void
   center: () => void
+  /** Live SVG element, used by the export menu. */
+  getSvg: () => SVGSVGElement | null
+  /** Content bounds in map coordinates, before the pan/zoom transform. */
+  getBounds: () => { x1: number; y1: number; x2: number; y2: number } | null
 }
 
 interface MindMapProps {
@@ -408,6 +412,15 @@ const MindMap = forwardRef<MindMapHandle, MindMapProps>(
       void instance.centerNode(root, { left: 0, right: 0, top: 0, bottom: 0 })
     }
 
+    const getSvg = () => refSvg.current
+
+    const getBounds = () => {
+      const rect = mm.current?.state.rect
+      if (!rect) return null
+      if (rect.x2 <= rect.x1 || rect.y2 <= rect.y1) return null
+      return { x1: rect.x1, y1: rect.y1, x2: rect.x2, y2: rect.y2 }
+    }
+
     const handleKeyDown = (event: KeyboardEvent<SVGSVGElement>) => {
       if (event.key === '+' || event.key === '=') {
         event.preventDefault()
@@ -421,7 +434,7 @@ const MindMap = forwardRef<MindMapHandle, MindMapProps>(
       }
     }
 
-    useImperativeHandle(ref, () => ({ updateTree, zoom, fit, center }))
+    useImperativeHandle(ref, () => ({ updateTree, zoom, fit, center, getSvg, getBounds }))
 
     return (
       <svg

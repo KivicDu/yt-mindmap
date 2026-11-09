@@ -1,3 +1,5 @@
+import { API_BASE } from './api'
+
 const VIDEO_ID = /^[A-Za-z0-9_-]{11}$/
 const HAS_SCHEME = /^[a-zA-Z][a-zA-Z0-9+.-]*:\/\//
 const YOUTUBE_HOSTS = new Set([
@@ -189,6 +191,49 @@ export function playerErrorMessage(code: number): PlayerErrorInfo {
           'YouTube từ chối phát video trong trang này (giới hạn tuổi, khu vực hoặc quyền nhúng). Mở trên YouTube để xem.',
       }
   }
+}
+
+export interface TranscriptLanguage {
+  code: string
+  name: string
+  generated: boolean
+}
+
+/** A caption-listing failure with the same `code` vocabulary as `/transcript`. */
+export class TranscriptLanguagesError extends Error {
+  readonly code?: string
+
+  constructor(message: string, code?: string) {
+    super(message)
+    this.name = 'TranscriptLanguagesError'
+    this.code = code
+  }
+}
+
+/**
+ * Caption tracks available for a video. Called only when the learner opens the
+ * language picker, so the extra YouTube listing never sits on the load path.
+ */
+export async function listTranscriptLanguages(url: string): Promise<TranscriptLanguage[]> {
+  const response = await fetch(
+    `${API_BASE}/transcript/languages?url=${encodeURIComponent(url)}`,
+  )
+  if (!response.ok) {
+    const body = await response.json().catch(() => null)
+    const detail =
+      body && typeof body === 'object' && 'detail' in body ? body.detail : undefined
+    const code =
+      detail && typeof detail === 'object' && 'code' in detail && typeof detail.code === 'string'
+        ? detail.code
+        : undefined
+    const message =
+      detail && typeof detail === 'object' && 'message' in detail && typeof detail.message === 'string'
+        ? detail.message
+        : 'Không tải được danh sách phụ đề'
+    throw new TranscriptLanguagesError(message, code)
+  }
+  const data = (await response.json()) as { items?: TranscriptLanguage[] }
+  return Array.isArray(data.items) ? data.items : []
 }
 
 export interface VideoInfo {
