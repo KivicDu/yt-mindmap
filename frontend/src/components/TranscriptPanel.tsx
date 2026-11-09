@@ -20,6 +20,8 @@ interface TranscriptPanelProps {
   onSelectLanguage: (code: string) => void
   languageBusy: boolean
   canEdit: boolean
+  /** False for file-upload sessions, which have no video to list tracks for. */
+  canChangeLanguage: boolean
 }
 
 /** Diacritic-insensitive search: "tong quan" still finds "Tổng quan". */
@@ -50,6 +52,7 @@ function TranscriptPanel({
   onSelectLanguage,
   languageBusy,
   canEdit,
+  canChangeLanguage,
 }: TranscriptPanelProps) {
   const [query, setQuery] = useState('')
   const listRef = useRef<HTMLOListElement>(null)
@@ -111,7 +114,7 @@ function TranscriptPanel({
           <span className="sr-only">Ngôn ngữ phụ đề</span>
           <select
             value={language ?? ''}
-            disabled={!canEdit || languageBusy || entries.length === 0}
+            disabled={!canEdit || !canChangeLanguage || languageBusy || entries.length === 0}
             onFocus={onLoadLanguages}
             onMouseDown={onLoadLanguages}
             onChange={(event) => {

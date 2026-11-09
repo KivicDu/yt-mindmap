@@ -1332,6 +1332,7 @@ function App() {
                 onSelectLanguage={(code) => void switchLanguage(code)}
                 languageBusy={languageBusy}
                 canEdit={canEdit}
+                canChangeLanguage={Boolean(videoId || extractVideoId(url))}
               />
             ) : (
               <div className="session">
