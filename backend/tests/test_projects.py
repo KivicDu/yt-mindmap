@@ -316,3 +316,58 @@ def test_reopening_a_project_requires_the_owner(client: TestClient):
     )
     assert response.status_code == 404
     assert response.json()["detail"]["code"] == "project_not_found"
+
+
+def test_projects_support_sort_and_pagination(client: TestClient, db_session):
+    from datetime import timedelta
+
+    from app.db.base import utcnow
+    from app.models.project import Project
+
+    headers = register(client)
+    first = create_project(client, headers, title="Zeta")
+    second = create_project(client, headers, title="Alpha")
+    third = create_project(client, headers, title="Mika")
+
+    # Give every row a distinct created/updated order instead of racing the clock.
+    base = utcnow()
+    for position, project in enumerate([first, second, third]):
+        row = db_session.get(Project, project["id"])
+        row.created_at = base + timedelta(days=position)
+        row.updated_at = base + timedelta(days=2 - position)
+    db_session.commit()
+
+    def titles(params: dict) -> list[str]:
+        body = client.get("/api/projects", params=params, headers=headers).json()
+        return [item["title"] for item in body["items"]]
+
+    assert titles({"sort": "title"}) == ["Alpha", "Mika", "Zeta"]
+    assert titles({"sort": "created"}) == ["Mika", "Alpha", "Zeta"]
+    assert titles({"sort": "updated"}) == ["Zeta", "Alpha", "Mika"]
+
+    page = client.get(
+        "/api/projects",
+        params={"sort": "title", "limit": 2, "offset": 2},
+        headers=headers,
+    ).json()
+    assert page["total"] == 3
+    assert page["limit"] == 2
+    assert page["offset"] == 2
+    assert [item["title"] for item in page["items"]] == ["Zeta"]
+
+    # The route only accepts the three known sort keys.
+    assert (
+        client.get("/api/projects", params={"sort": "bogus"}, headers=headers).status_code
+        == 422
+    )
+
+
+def test_reopening_a_project_returns_the_ai_summary(client: TestClient):
+    headers = register(client)
+    project = create_project(client, headers, summary_so_far="Tóm tắt bài giảng")
+
+    body = client.post(
+        "/transcript", json={"project_id": project["id"]}, headers=headers
+    ).json()
+
+    assert body["summary"] == "Tóm tắt bài giảng"

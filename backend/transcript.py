@@ -212,6 +212,43 @@ def _as_transcript_error(error: Exception) -> TranscriptError:
     )
 
 
+def list_transcript_languages(url: str) -> list[dict[str, object]]:
+    """Available caption tracks, manual first, de-duplicated by language code.
+
+    The UI only calls this when the learner opens the language picker, so the
+    extra YouTube listing never sits on the normal load path.
+    """
+
+    video_id = extract_video_id(url)
+    if not video_id:
+        raise TranscriptError("invalid_url", "That is not a YouTube video link.", 400)
+
+    api = YouTubeTranscriptApi()
+    try:
+        listing = api.list(video_id)
+        tracks = list(listing)
+    except Exception as error:  # noqa: BLE001 - converted to a typed error below
+        raise _as_transcript_error(error) from error
+
+    seen: set[str] = set()
+    items: list[dict[str, object]] = []
+    for track in tracks:
+        code = str(track.language_code or "").lower()
+        if not code or code in seen:
+            continue
+        seen.add(code)
+        items.append(
+            {
+                "code": code,
+                "name": str(track.language or code),
+                "generated": bool(getattr(track, "is_generated", False)),
+            }
+        )
+    # Manual tracks are usually the better transcript; offer them first.
+    items.sort(key=lambda item: (bool(item["generated"]), str(item["name"]).lower()))
+    return items
+
+
 def fetch_transcript(
     url: str, lang: str | None = None
 ) -> tuple[list[dict[str, object]], str]:

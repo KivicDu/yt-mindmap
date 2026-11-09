@@ -137,6 +137,39 @@ def test_update_map_keeps_pointer_on_ai_failure(monkeypatch):
     assert main_module.sessions[session_id]["markdown"] == ""
 
 
+def test_update_map_returns_the_running_summary(monkeypatch):
+    monkeypatch.setattr(
+        main_module.ai_engine,
+        "generate_incremental_update",
+        lambda **kwargs: {
+            "markdown_diff": "- [Core](#seek-5.0)",
+            "new_nodes": [{"name": "Core", "time": 5}],
+            "should_update": True,
+            "summary": "tóm tắt",
+        },
+    )
+
+    session_id, _ = main_module.create_session("vid", TRANSCRIPT)
+    body = client.post(
+        "/update-map",
+        json={"video_id": "vid", "last_time": 20, "session_id": session_id},
+    ).json()
+
+    # The summary rides along on both the top level and the diff payload.
+    assert body["summary"] == "tóm tắt"
+    assert body["diff"]["summary"] == "tóm tắt"
+
+
+def test_session_payload_includes_the_summary():
+    session_id, _ = main_module.create_session("vid", TRANSCRIPT)
+    main_module.sessions[session_id]["summary_so_far"] = "tóm tắt"
+
+    payload = main_module.session_payload(session_id)
+
+    assert payload["summary"] == "tóm tắt"
+
+
+
 LONG_TRANSCRIPT = [
     {"start": float(second), "duration": 4.0, "text": f"line at {second}s"}
     for second in range(0, 200, 5)

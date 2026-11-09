@@ -2,7 +2,13 @@ import pytest
 from fastapi.testclient import TestClient
 
 import main as main_module
-from transcript import TranscriptError, _select_transcript, extract_video_id
+import transcript as transcript_module
+from transcript import (
+    TranscriptError,
+    _select_transcript,
+    extract_video_id,
+    list_transcript_languages,
+)
 
 client = TestClient(main_module.app)
 
@@ -158,3 +164,125 @@ def test_video_info_detects_blocked_embedding(monkeypatch, status_code):
 
     assert body["embeddable"] is False
     assert body["reason"] == "not_embeddable"
+
+
+class _LangTrack:
+    """A caption track with the fields the language picker and fetch need."""
+
+    def __init__(self, code, name, generated, entries=None):
+        self.language_code = code
+        self.language = name
+        self.is_generated = generated
+        self._entries = entries or []
+
+    def fetch(self):
+        return self._entries
+
+
+def _fake_api(tracks):
+    class FakeApi:
+        def list(self, video_id):
+            assert video_id == "abcdefghijk"
+            return _FakeListing(tracks)
+
+    return FakeApi
+
+
+def test_list_transcript_languages_prefers_manual_and_dedupes(monkeypatch):
+    tracks = [
+        _LangTrack("vi", "Vietnamese", True),
+        _LangTrack("en", "English", False),
+        _LangTrack("en", "English duplicate", True),
+        _LangTrack("", "Unknown", False),
+    ]
+    monkeypatch.setattr(transcript_module, "YouTubeTranscriptApi", _fake_api(tracks))
+
+    items = list_transcript_languages("https://youtu.be/abcdefghijk")
+
+    # Codes are lower-cased, blank codes are skipped and duplicates collapse.
+    assert [item["code"] for item in items] == ["en", "vi"]
+    # Manual tracks come before auto-generated ones.
+    assert items[0]["generated"] is False
+    assert items[1]["generated"] is True
+    assert items[0]["name"] == "English"
+
+
+def test_list_transcript_languages_rejects_a_non_youtube_url():
+    with pytest.raises(TranscriptError) as caught:
+        list_transcript_languages("https://example.com/watch?v=abcdefghijk")
+    assert caught.value.code == "invalid_url"
+
+
+def test_languages_endpoint_returns_tracks(monkeypatch):
+    items = [{"code": "vi", "name": "Vietnamese", "generated": False}]
+    monkeypatch.setattr(main_module, "list_transcript_languages", lambda _url: items)
+
+    response = client.get(
+        "/transcript/languages", params={"url": "https://youtu.be/abcdefghijk"}
+    )
+
+    assert response.status_code == 200
+    assert response.json() == {"items": items}
+
+
+def test_languages_endpoint_reports_a_bad_link(monkeypatch):
+    def fail(_url):
+        raise TranscriptError("invalid_url", "That is not a YouTube video link.", 400)
+
+    monkeypatch.setattr(main_module, "list_transcript_languages", fail)
+
+    response = client.get("/transcript/languages", params={"url": "nope"})
+
+    assert response.status_code == 400
+    assert response.json()["detail"]["code"] == "invalid_url"
+
+
+def test_switching_language_replaces_captions_only(monkeypatch):
+    calls: list[str | None] = []
+
+    def fake_fetch(url, lang=None):
+        calls.append(lang)
+        if lang == "en":
+            return ([{"start": 0.0, "duration": 2.0, "text": "hello"}], "en")
+        return ([{"start": 0.0, "duration": 2.0, "text": "xin chào"}], "vi")
+
+    monkeypatch.setattr(main_module, "fetch_transcript", fake_fetch)
+
+    async def fake_title(_url):
+        return "Bài giảng"
+
+    monkeypatch.setattr(main_module, "_fetch_youtube_title", fake_title)
+
+    created = client.post(
+        "/transcript", json={"url": "https://youtu.be/abcdefghijk"}
+    ).json()
+    session_id = created["session_id"]
+    assert created["language"] == "vi"
+
+    # A node already on the map must survive the caption swap.
+    nodes = [{"id": "n1", "parentId": None, "label": "Root", "time": 0.0}]
+    main_module.sessions[session_id]["nodes"] = nodes
+    main_module.sessions[session_id]["markdown"] = "# Root"
+
+    response = client.post(
+        "/transcript", json={"session_id": session_id, "language": "en"}
+    )
+
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body["language"] == "en"
+    assert body["transcript"] == [
+        {"start": 0.0, "duration": 2.0, "text": "hello"}
+    ]
+    assert body["nodes"] == nodes
+    assert body["markdown"] == "# Root"
+    assert calls == [None, "en"]
+
+
+def test_switching_language_requires_a_live_session():
+    response = client.post(
+        "/transcript", json={"session_id": "gone", "language": "en"}
+    )
+
+    assert response.status_code == 404
+    assert response.json()["detail"]["code"] == "session_lost"
