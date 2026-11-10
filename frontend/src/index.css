@@ -127,6 +127,28 @@ hr {
   border-radius: var(--r-xs);
 }
 
+/* Skip link: out of the way until a keyboard user asks for it. */
+.skip-link {
+  position: fixed;
+  top: 8px;
+  left: 8px;
+  z-index: 200;
+  padding: 8px 14px;
+  border: 1px solid var(--accent-line);
+  border-radius: var(--r-sm);
+  background: var(--surface-raised);
+  box-shadow: var(--shadow-float);
+  color: var(--accent-ink);
+  font-size: 13px;
+  font-weight: 550;
+  transform: translateY(-160%);
+  transition: transform var(--t-fast) var(--ease);
+}
+
+.skip-link:focus-visible {
+  transform: none;
+}
+
 ::selection {
   color: var(--accent-ink);
   background: var(--accent-soft-2);

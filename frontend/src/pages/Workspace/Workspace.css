@@ -1440,3 +1440,32 @@
 .transcript__cue.is-active .transcript__text--secondary {
   color: var(--ink-2);
 }
+
+/* ============================================================
+   Keyboard hint
+   ============================================================ */
+
+.app-topbar__keys {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.app-topbar__keys kbd {
+  display: inline-grid;
+  place-items: center;
+  min-width: 18px;
+  height: 18px;
+  padding: 0 4px;
+  border: 1px solid var(--line-2);
+  border-radius: var(--r-xs);
+  background: var(--paper-2);
+  color: var(--ink-2);
+  font: 600 10.5px/1 var(--mono);
+}
+
+@media (max-width: 560px) {
+  .app-topbar__keys-label {
+    display: none;
+  }
+}
