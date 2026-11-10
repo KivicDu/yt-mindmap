@@ -133,7 +133,7 @@ export function collectIds(node: MarkmapNode | null | undefined, ids: Set<string
   }
 }
 
-function nodeIdOf(node: MarkmapNode): string | null {
+export function nodeIdOf(node: MarkmapNode): string | null {
   const match = /data-node-id="([^"]+)"/.exec(String(node.content ?? ''))
   return match ? match[1] : null
 }
