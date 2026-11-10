@@ -1,0 +1,105 @@
+/* Toast stack — quiet paper cards that never cover the player controls. */
+.toast-stack {
+  position: fixed;
+  z-index: 90;
+  right: max(16px, env(safe-area-inset-right));
+  bottom: max(16px, env(safe-area-inset-bottom));
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+  width: min(380px, calc(100vw - 32px));
+  pointer-events: none;
+}
+
+.toast {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--sp-2);
+  padding: 10px 10px 10px 12px;
+  border: 1px solid var(--line-2);
+  border-radius: var(--r-lg);
+  background: var(--surface-raised);
+  box-shadow: var(--shadow-float);
+  color: var(--ink);
+  pointer-events: auto;
+  animation: toast-in var(--t) var(--ease);
+}
+
+@keyframes toast-in {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+.toast__dot {
+  flex: none;
+  width: 7px;
+  height: 7px;
+  margin-top: 7px;
+  border-radius: 50%;
+  background: var(--ink-3);
+}
+
+.toast--success .toast__dot {
+  background: var(--live);
+}
+
+.toast--error .toast__dot {
+  background: var(--danger);
+}
+
+.toast__message {
+  flex: 1;
+  font-size: var(--fs-sm);
+  line-height: 1.45;
+  color: var(--ink);
+}
+
+.toast__action {
+  flex: none;
+  padding: 2px 8px;
+  border: 1px solid var(--accent-line);
+  border-radius: var(--r-sm);
+  background: var(--accent-soft);
+  color: var(--accent-ink);
+  font: 600 var(--fs-xs) / 1.6 var(--sans);
+  cursor: pointer;
+}
+
+.toast__action:hover {
+  background: var(--accent-soft-2);
+}
+
+.toast__close {
+  flex: none;
+  display: grid;
+  place-items: center;
+  width: 24px;
+  height: 24px;
+  border: 0;
+  border-radius: var(--r-sm);
+  background: transparent;
+  color: var(--ink-3);
+  cursor: pointer;
+}
+
+.toast__close svg {
+  width: 14px;
+  height: 14px;
+}
+
+.toast__close:hover {
+  background: var(--hover);
+  color: var(--ink);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .toast {
+    animation: none;
+  }
+}

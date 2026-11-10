@@ -69,6 +69,12 @@ This project creates a dual-view setup: alongside the YouTube video, there's a d
 - [x] Privacy, Terms and Contact pages (template copy, contact address from `VITE_CONTACT_EMAIL`)
 - [x] SMTP settings and an optional Mailpit profile in Docker
 - [x] `pg_dump` backup/restore scripts and a runbook for the Postgres volume
+- [x] Trash: deleting a project keeps it for 30 days, with an undo toast and permanent purge
+- [x] Tags per project with filter chips, and content search across labels, notes, captions and summaries
+- [x] Map version history with rollback; restoring keeps the replaced map and syncs every open tab
+- [x] Chapter rail built from the map's timed topics
+- [x] Bilingual captions: a second YouTube track shown under the primary one
+- [x] Toast feedback, loading skeletons, workspace keyboard shortcuts and a WCAG AA accessibility pass
 
 ## Getting Started
 

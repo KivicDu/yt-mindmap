@@ -16,6 +16,7 @@ class ProjectCreate(BaseModel):
     summary_so_far: str = ""
     consumed_until: float = 0.0
     is_draft: bool = False
+    tags: list[str] = Field(default_factory=list, max_length=8)
 
 
 class ProjectUpdate(BaseModel):
@@ -29,6 +30,7 @@ class ProjectUpdate(BaseModel):
     consumed_until: float | None = None
     is_draft: bool | None = None
     visibility: str | None = Field(default=None, pattern="^(private|unlisted)$")
+    tags: list[str] | None = Field(default=None, max_length=8)
 
 
 class AutosaveRequest(BaseModel):

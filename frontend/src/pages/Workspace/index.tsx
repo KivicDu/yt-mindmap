@@ -1,11 +1,12 @@
-import { lazy, Suspense, useState, useRef, useEffect, useCallback } from 'react'
-import type { ChangeEvent } from 'react'
+import { lazy, Suspense, useState, useRef, useEffect, useCallback, useMemo } from 'react'
+import type { ChangeEvent, KeyboardEvent as ReactKeyboardEvent } from 'react'
 import { Link, useNavigate, useParams } from 'react-router-dom'
 import YouTube from 'react-youtube'
 import type { YouTubeProps } from 'react-youtube'
 import './Workspace.css'
 import ThemeToggle from '../../components/ThemeToggle'
 import ExportMenu from '../../components/ExportMenu'
+import ShortcutHelp from '../../components/ShortcutHelp'
 import TranscriptPanel, {
   type TranscriptCue as TranscriptEntry,
 } from '../../components/TranscriptPanel'
@@ -21,15 +22,24 @@ import {
 import {
   autosaveProject,
   clearLocalDraft,
+  formatWhen,
+  listProjectVersions,
   readLocalDraft,
+  restoreProjectVersion,
   updateProject,
   writeLocalDraft,
   type LocalDraft,
+  type ProjectVersionSummary,
 } from '../../lib/projects'
 import { getAccessToken, refreshSession } from '../../lib/api'
 import { exportMap, type ExportFormat } from '../../lib/mapExport'
+import { SkeletonList } from '../../components/ui/Skeleton'
+import { useToast } from '../../components/ui/useToast'
+import { activeChapter, buildChapters } from '../../lib/chapters'
+import { isTypingTarget, shortcutFor } from '../../lib/shortcuts'
 import {
   extractVideoId,
+  fetchTranscriptTrack,
   isCaptionOnlyProblem,
   listTranscriptLanguages,
   playerErrorMessage,
@@ -77,6 +87,8 @@ const AUTOSAVE_SECONDS = 2.5
 
 type SessionRole = 'owner' | 'editor' | 'viewer'
 
+type DetailTab = 'session' | 'transcript' | 'history'
+
 /**
  * `/node` and `/update-map` are outside `/api` because they belong to the
  * live-session module, so they need the bearer token attached by hand. A
@@ -107,6 +119,7 @@ async function sessionRequest(
 
 function App() {
   const { status: authStatus } = useAuth()
+  const toast = useToast()
   const { projectId: routeProjectId } = useParams<{ projectId?: string }>()
   const navigate = useNavigate()
   const [url, setUrl] = useState('')
@@ -141,12 +154,22 @@ function App() {
   const [role, setRole] = useState<SessionRole | null>(null)
   const [ownerName, setOwnerName] = useState<string | null>(null)
   const [summary, setSummary] = useState('')
-  const [detailTab, setDetailTab] = useState<'session' | 'transcript'>('session')
+  const [detailTab, setDetailTab] = useState<DetailTab>('session')
+  const [versions, setVersions] = useState<ProjectVersionSummary[]>([])
+  const [versionsLoading, setVersionsLoading] = useState(false)
+  const [versionsError, setVersionsError] = useState('')
+  const [restoringVersion, setRestoringVersion] = useState<string | null>(null)
   const [languages, setLanguages] = useState<TranscriptLanguage[]>([])
   const [languagesLoading, setLanguagesLoading] = useState(false)
   const [languagesError, setLanguagesError] = useState('')
   const [languageBusy, setLanguageBusy] = useState(false)
+  const [bilingual, setBilingual] = useState(false)
+  const [secondaryEntries, setSecondaryEntries] = useState<TranscriptEntry[]>([])
+  const [secondaryLang, setSecondaryLang] = useState<string | null>(null)
+  const [secondaryBusy, setSecondaryBusy] = useState(false)
+  const [secondaryError, setSecondaryError] = useState('')
   const [exporting, setExporting] = useState<ExportFormat | null>(null)
+  const [showHelp, setShowHelp] = useState(false)
 
   const urlInputRef = useRef<HTMLInputElement>(null)
   const fileInputRef = useRef<HTMLInputElement>(null)
@@ -164,6 +187,7 @@ function App() {
   const saveRef = useRef<() => Promise<boolean>>(async () => false)
   const languagesLoadedRef = useRef(false)
   const languagesRequestRef = useRef(false)
+  const tabRefs = useRef<Record<string, HTMLButtonElement | null>>({})
 
   const setStatus = useCallback((text: string, kind: StatusKind = 'idle') => {
     setStatusState({ kind, text })
@@ -277,6 +301,11 @@ function App() {
     setLanguages([])
     setLanguagesError('')
     languagesLoadedRef.current = false
+    setBilingual(false)
+    setSecondaryEntries([])
+    setSecondaryLang(null)
+    setSecondaryBusy(false)
+    setSecondaryError('')
 
     const resolvedTitle = data.title || vid || DEFAULT_TITLE
     titleRef.current = resolvedTitle
@@ -377,10 +406,18 @@ function App() {
     setTranscriptLang(null)
     setSummary('')
     setDetailTab('session')
+    setVersions([])
+    setVersionsError('')
+    setVersionsLoading(false)
     setLanguages([])
     setLanguagesError('')
     setLanguagesLoading(false)
     setLanguageBusy(false)
+    setBilingual(false)
+    setSecondaryEntries([])
+    setSecondaryLang(null)
+    setSecondaryBusy(false)
+    setSecondaryError('')
     setExporting(null)
     languagesLoadedRef.current = false
     languagesRequestRef.current = false
@@ -552,6 +589,8 @@ function App() {
     setProjectId(routeProjectId)
     projectIdRef.current = routeProjectId
     setIsDraft(false)
+    setDetailTab('session')
+    setVersions([])
     fetchTranscript({ projectId: routeProjectId })
       .then((data) => {
         if (token !== loadTokenRef.current) return
@@ -678,10 +717,10 @@ function App() {
   )
 
   /** Caption tracks are fetched only when the picker is opened. */
-  const loadLanguages = useCallback(async () => {
-    if (languagesLoadedRef.current || languagesRequestRef.current) return
+  const loadLanguages = useCallback(async (): Promise<TranscriptLanguage[]> => {
+    if (languagesLoadedRef.current || languagesRequestRef.current) return []
     const id = videoId || extractVideoId(url)
-    if (!id) return
+    if (!id) return []
     languagesRequestRef.current = true
     setLanguagesLoading(true)
     setLanguagesError('')
@@ -689,9 +728,11 @@ function App() {
       const items = await listTranscriptLanguages(watchUrl(id))
       setLanguages(items)
       languagesLoadedRef.current = true
+      return items
     } catch (error: unknown) {
       const code = error instanceof TranscriptLanguagesError ? error.code : undefined
       setLanguagesError(transcriptErrorMessage(code))
+      return []
     } finally {
       languagesRequestRef.current = false
       setLanguagesLoading(false)
@@ -734,6 +775,45 @@ function App() {
     }
   }
 
+  /** Load a second caption track for the bilingual view, without switching. */
+  const loadSecondary = async (code: string) => {
+    const id = videoId || extractVideoId(url)
+    if (!id) return
+    setSecondaryLang(code)
+    setSecondaryBusy(true)
+    setSecondaryError('')
+    try {
+      const data = await fetchTranscriptTrack(watchUrl(id), code)
+      setSecondaryEntries(data.transcript)
+      setSecondaryLang(data.language || code)
+    } catch (error: unknown) {
+      const message =
+        error instanceof TranscriptLanguagesError
+          ? transcriptErrorMessage(error.code)
+          : 'Không tải được phụ đề song ngữ.'
+      setSecondaryEntries([])
+      setSecondaryError(message)
+    } finally {
+      setSecondaryBusy(false)
+    }
+  }
+
+  const toggleBilingual = async () => {
+    if (bilingual) {
+      setBilingual(false)
+      return
+    }
+    setBilingual(true)
+    if (secondaryEntries.length > 0) return
+    const items = languagesLoadedRef.current ? languages : await loadLanguages()
+    const candidate = items.find((item) => item.code !== transcriptLang)
+    if (candidate) {
+      await loadSecondary(candidate.code)
+    } else if (items.length > 0) {
+      setSecondaryError('Video chỉ có một track phụ đề, chưa thể hiện song ngữ.')
+    }
+  }
+
   const handleExport = async (format: ExportFormat) => {
     if (nodeCount === 0) {
       setStatus('Chưa có nội dung để xuất — hãy tạo sơ đồ trước', 'idle')
@@ -753,6 +833,50 @@ function App() {
       setStatus(error?.message || 'Không xuất được sơ đồ', 'error')
     } finally {
       setExporting(null)
+    }
+  }
+
+  const loadVersions = useCallback(async () => {
+    const id = projectIdRef.current
+    if (!id) return
+    setVersionsLoading(true)
+    setVersionsError('')
+    try {
+      const data = await listProjectVersions(id)
+      setVersions(data.items)
+    } catch {
+      setVersionsError('Không tải được lịch sử phiên bản.')
+    } finally {
+      setVersionsLoading(false)
+    }
+  }, [])
+
+  const openHistory = useCallback(() => {
+    setDetailTab('history')
+    void loadVersions()
+  }, [loadVersions])
+
+  const restoreVersion = async (version: ProjectVersionSummary) => {
+    const id = projectIdRef.current
+    if (!id || restoringVersion) return
+    setRestoringVersion(version.id)
+    setStatus('Đang khôi phục phiên bản…', 'busy')
+    try {
+      const data = await restoreProjectVersion(id, version.id)
+      applyNodes(data.nodes, false)
+      setSummary(typeof data.summary_so_far === 'string' ? data.summary_so_far : '')
+      titleRef.current = data.title
+      setMapTitle(data.title)
+      setConsumedUntil(Number(data.consumed_until || 0))
+      lastTriggerRef.current = Number(data.consumed_until || 0)
+      setStatus('Đã khôi phục phiên bản sơ đồ', 'ok')
+      toast.show({ message: 'Đã khôi phục phiên bản sơ đồ', tone: 'success' })
+      await loadVersions()
+    } catch {
+      setStatus('Không khôi phục được phiên bản', 'error')
+      toast.show({ message: 'Không khôi phục được phiên bản', tone: 'error' })
+    } finally {
+      setRestoringVersion(null)
     }
   }
 
@@ -918,13 +1042,119 @@ function App() {
     },
   }
 
+  const hasHistoryTab = Boolean(projectId && canEdit)
+
+  const togglePlay = useCallback(() => {
+    if (!player) return
+    try {
+      if (isPlaying) player.pauseVideo()
+      else player.playVideo()
+    } catch {
+      setStatus('Không điều khiển được video', 'error')
+    }
+  }, [player, isPlaying, setStatus])
+
+  const seekBy = useCallback(
+    (delta: number) => {
+      handleSeek(Math.max(0, currentTimeRef.current + delta))
+    },
+    [handleSeek],
+  )
+
+  /** Select a tab and move focus there, for arrow-key navigation. */
+  const selectTab = useCallback(
+    (tab: DetailTab) => {
+      setDetailTab(tab)
+      if (tab === 'history') void loadVersions()
+      tabRefs.current[tab]?.focus()
+    },
+    [loadVersions],
+  )
+
+  const onTabKeyDown = (event: ReactKeyboardEvent<HTMLElement>) => {
+    const order: DetailTab[] = hasHistoryTab
+      ? ['session', 'transcript', 'history']
+      : ['session', 'transcript']
+    const index = order.indexOf(detailTab)
+    let nextIndex = -1
+    if (event.key === 'ArrowRight') nextIndex = (index + 1) % order.length
+    else if (event.key === 'ArrowLeft') nextIndex = (index - 1 + order.length) % order.length
+    else if (event.key === 'Home') nextIndex = 0
+    else if (event.key === 'End') nextIndex = order.length - 1
+    if (nextIndex < 0) return
+    event.preventDefault()
+    selectTab(order[nextIndex])
+  }
+
+  // One listener for the whole workspace. Fields keep their keys; the cheat
+  // sheet owns the keyboard while it is open.
+  useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent) => {
+      const action = shortcutFor(event, {
+        typing: isTypingTarget(event.target),
+        hasHistory: hasHistoryTab,
+      })
+      if (!action) return
+
+      if (action === 'escape') {
+        if (showHelp) {
+          setShowHelp(false)
+          event.preventDefault()
+        } else if (editor) {
+          setEditor(null)
+          event.preventDefault()
+        }
+        return
+      }
+      if (action === 'toggle-help') {
+        event.preventDefault()
+        setShowHelp((value) => !value)
+        return
+      }
+      if (showHelp) return
+
+      if (action === 'toggle-play') {
+        event.preventDefault()
+        togglePlay()
+      } else if (action === 'seek-back') {
+        event.preventDefault()
+        seekBy(-5)
+      } else if (action === 'seek-forward') {
+        event.preventDefault()
+        seekBy(5)
+      } else if (action === 'fit-map') {
+        event.preventDefault()
+        mindmapRef.current?.fit()
+        setStatus('Đã thu sơ đồ vừa khung', 'idle')
+      } else if (action === 'tab-session') {
+        event.preventDefault()
+        setDetailTab('session')
+      } else if (action === 'tab-transcript') {
+        event.preventDefault()
+        setDetailTab('transcript')
+      } else if (action === 'tab-history') {
+        event.preventDefault()
+        openHistory()
+      }
+    }
+    window.addEventListener('keydown', onKeyDown)
+    return () => window.removeEventListener('keydown', onKeyDown)
+  }, [showHelp, editor, hasHistoryTab, togglePlay, seekBy, setStatus, openHistory])
+
   const lastEntry = transcript[transcript.length - 1]
   const totalSeconds = lastEntry ? lastEntry.start + (lastEntry.duration || 0) : 0
   const progress = totalSeconds > 0 ? Math.min(100, (currentTime / totalSeconds) * 100) : 0
   const playbackError = playerError
+  // `mapVersion` is the render trigger for the mutable tree in `nodesRef`.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  const chapters = useMemo(() => buildChapters(nodesRef.current), [mapVersion])
+  const currentChapter = activeChapter(chapters, currentTime)
 
   return (
     <div className="app-shell">
+      <a className="skip-link" href="#workspace-main">
+        Bỏ qua tới nội dung chính
+      </a>
       <header className="app-topbar">
         <div className="app-topbar__row">
           <Link className="app-brand" to="/" aria-label="yt-mindmap — về trang chủ">
@@ -1050,6 +1280,17 @@ function App() {
               {authStatus === 'authenticated' ? 'Dashboard' : 'Đăng nhập'}
             </Link>
             <ThemeToggle />
+            <button
+              className="btn btn--ghost btn--sm app-topbar__keys"
+              type="button"
+              aria-haspopup="dialog"
+              aria-keyshortcuts="?"
+              title="Phím tắt (?)"
+              onClick={() => setShowHelp(true)}
+            >
+              <kbd aria-hidden="true">?</kbd>
+              <span className="app-topbar__keys-label">Phím tắt</span>
+            </button>
           </div>
         </div>
 
@@ -1119,7 +1360,7 @@ function App() {
         </div>
       </header>
 
-      <main className="workspace">
+      <main className="workspace" id="workspace-main" tabIndex={-1}>
         <section className="panel panel--player" aria-label="Bài giảng">
           <header className="panel__head">
             <h2 className="panel__title">Bài giảng</h2>
@@ -1191,6 +1432,36 @@ function App() {
               {totalSeconds > 0 ? formatTime(totalSeconds) : '—:—'}
             </span>
           </div>
+
+          {chapters.length > 0 && (
+            <nav className="chapter-rail" aria-label="Chương theo chủ đề">
+              <div className="chapter-rail__head">
+                <span className="chapter-rail__title">Chương</span>
+                <span className="chapter-rail__now">
+                  {currentChapter ? currentChapter.label : 'Chưa tới chương đầu'}
+                </span>
+              </div>
+              <ol className="chapter-rail__list">
+                {chapters.map((chapter) => {
+                  const isActive = currentChapter?.id === chapter.id
+                  return (
+                    <li key={chapter.id}>
+                      <button
+                        type="button"
+                        className={`chapter-rail__item${isActive ? ' is-active' : ''}`}
+                        aria-current={isActive ? 'true' : undefined}
+                        title={`Tua tới ${formatTime(chapter.start)}`}
+                        onClick={() => handleSeek(chapter.start)}
+                      >
+                        <span className="chapter-rail__time">{formatTime(chapter.start)}</span>
+                        <span className="chapter-rail__label">{chapter.label}</span>
+                      </button>
+                    </li>
+                  )
+                })}
+              </ol>
+            </nav>
+          )}
         </section>
 
         <section className="panel panel--details" aria-label="Chi tiết phiên học">
@@ -1218,28 +1489,51 @@ function App() {
                   ? transcript.length > 0
                     ? `${transcript.length} đoạn`
                     : 'Trống'
-                  : nodeCount > 0
-                    ? `${nodeCount} ý`
-                    : 'Trống'}
+                  : detailTab === 'history'
+                    ? versions.length > 0
+                      ? `${versions.length} bản`
+                      : 'Trống'
+                    : nodeCount > 0
+                      ? `${nodeCount} ý`
+                      : 'Trống'}
               </span>
             )}
           </header>
 
           {!editor && (
-            <div className="detail-tabs" role="tablist" aria-label="Nội dung phiên học">
+            <div
+              className="detail-tabs"
+              role="tablist"
+              aria-label="Nội dung phiên học"
+              onKeyDown={onTabKeyDown}
+            >
               <button
+                id="detail-tab-session"
                 type="button"
                 role="tab"
                 aria-selected={detailTab === 'session'}
+                aria-controls="detail-panel"
+                aria-keyshortcuts="s"
+                tabIndex={detailTab === 'session' ? 0 : -1}
+                ref={(element) => {
+                  tabRefs.current.session = element
+                }}
                 className={`detail-tabs__item${detailTab === 'session' ? ' is-active' : ''}`}
                 onClick={() => setDetailTab('session')}
               >
                 Phiên học
               </button>
               <button
+                id="detail-tab-transcript"
                 type="button"
                 role="tab"
                 aria-selected={detailTab === 'transcript'}
+                aria-controls="detail-panel"
+                aria-keyshortcuts="t"
+                tabIndex={detailTab === 'transcript' ? 0 : -1}
+                ref={(element) => {
+                  tabRefs.current.transcript = element
+                }}
                 className={`detail-tabs__item${detailTab === 'transcript' ? ' is-active' : ''}`}
                 onClick={() => setDetailTab('transcript')}
               >
@@ -1248,10 +1542,33 @@ function App() {
                   <span className="detail-tabs__count">{transcript.length}</span>
                 )}
               </button>
+              {hasHistoryTab && (
+                <button
+                  id="detail-tab-history"
+                  type="button"
+                  role="tab"
+                  aria-selected={detailTab === 'history'}
+                  aria-controls="detail-panel"
+                  aria-keyshortcuts="h"
+                  tabIndex={detailTab === 'history' ? 0 : -1}
+                  ref={(element) => {
+                    tabRefs.current.history = element
+                  }}
+                  className={`detail-tabs__item${detailTab === 'history' ? ' is-active' : ''}`}
+                  onClick={openHistory}
+                >
+                  Lịch sử
+                </button>
+              )}
             </div>
           )}
 
-          <div className="panel__body panel__body--details">
+          <div
+            className="panel__body panel__body--details"
+            role={editor ? undefined : 'tabpanel'}
+            id={editor ? undefined : 'detail-panel'}
+            aria-labelledby={editor ? undefined : `detail-tab-${detailTab}`}
+          >
             {editor ? (
               <div className="node-editor">
                 <div className="node-editor__field">
@@ -1333,7 +1650,62 @@ function App() {
                 languageBusy={languageBusy}
                 canEdit={canEdit}
                 canChangeLanguage={Boolean(videoId || extractVideoId(url))}
+                bilingual={bilingual}
+                onToggleBilingual={() => void toggleBilingual()}
+                secondary={secondaryEntries}
+                secondaryLanguage={secondaryLang}
+                secondaryBusy={secondaryBusy}
+                secondaryError={secondaryError}
+                onSelectSecondary={(code) => void loadSecondary(code)}
               />
+            ) : detailTab === 'history' ? (
+              <div className="version-history">
+                <p className="version-history__hint">
+                  Mỗi lần AI cập nhật hoặc bạn lưu đè sơ đồ, bản trước được giữ lại. Khôi
+                  phục sẽ tạo thêm một bản an toàn, nên bạn vẫn quay lại được.
+                </p>
+
+                {versionsError && (
+                  <p className="dash-error" role="alert">{versionsError}</p>
+                )}
+
+                {versionsLoading ? (
+                  <SkeletonList rows={3} label="Đang tải lịch sử…" />
+                ) : versions.length === 0 ? (
+                  <p className="version-history__empty">
+                    Chưa có bản nào. Lịch sử bắt đầu từ lần cập nhật sơ đồ tiếp theo.
+                  </p>
+                ) : (
+                  <ol className="version-list">
+                    {versions.map((version) => (
+                      <li key={version.id} className="version-item">
+                        <div className="version-item__main">
+                          <span className="version-item__time">
+                            {formatWhen(version.created_at)}
+                          </span>
+                          <span className="version-item__meta">
+                            {version.node_count} nhánh
+                            {version.consumed_until > 0
+                              ? ` · tới ${formatTime(version.consumed_until)}`
+                              : ''}
+                          </span>
+                          {version.summary && (
+                            <p className="version-item__summary">{version.summary}</p>
+                          )}
+                        </div>
+                        <button
+                          className="btn btn--outline btn--sm"
+                          type="button"
+                          disabled={restoringVersion !== null}
+                          onClick={() => void restoreVersion(version)}
+                        >
+                          {restoringVersion === version.id ? 'Đang khôi phục…' : 'Khôi phục'}
+                        </button>
+                      </li>
+                    ))}
+                  </ol>
+                )}
+              </div>
             ) : (
               <div className="session">
                 <div className="session__title">
@@ -1546,6 +1918,8 @@ function App() {
           </div>
         </section>
       </main>
+
+      {showHelp && <ShortcutHelp onClose={() => setShowHelp(false)} />}
     </div>
   )
 }

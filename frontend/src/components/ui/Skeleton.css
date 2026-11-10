@@ -1,0 +1,57 @@
+/* Loading placeholders: paper-coloured bars, no spinners competing with text. */
+.skeleton-list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-3);
+  padding: var(--sp-2) 0;
+}
+
+.skeleton-row {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 14px 0;
+  border-bottom: 1px solid var(--line);
+}
+
+.skeleton-row:last-child {
+  border-bottom: 0;
+}
+
+.skeleton-bar {
+  display: block;
+  height: 10px;
+  border-radius: var(--r-pill);
+  background: linear-gradient(
+    90deg,
+    var(--paper-2) 0%,
+    var(--paper-3) 45%,
+    var(--paper-2) 90%
+  );
+  background-size: 220% 100%;
+  animation: skeleton-sheen 1.4s var(--ease) infinite;
+}
+
+.skeleton-bar--title {
+  width: min(46%, 260px);
+  height: 12px;
+}
+
+.skeleton-bar--meta {
+  width: min(72%, 420px);
+}
+
+@keyframes skeleton-sheen {
+  from {
+    background-position: 120% 0;
+  }
+  to {
+    background-position: -120% 0;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .skeleton-bar {
+    animation: none;
+  }
+}

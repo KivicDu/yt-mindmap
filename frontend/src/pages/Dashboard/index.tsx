@@ -2,8 +2,11 @@ import { useCallback, useEffect, useState } from 'react'
 import type { FormEvent } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
 import ThemeToggle from '../../components/ThemeToggle'
+import { SkeletonList } from '../../components/ui/Skeleton'
+import { useToast } from '../../components/ui/useToast'
 import { useAuth } from '../../context/AuthContext'
 import { accountErrorMessage, validateEmailChange, validatePasswordChange } from '../../lib/account'
+import { formatTime as formatClock } from '../../lib/mindmapTree'
 import {
   deleteProject,
   duplicateProject,
@@ -11,23 +14,42 @@ import {
   formatWhen,
   listProjects,
   listSharedProjects,
+  listTags,
+  listTrash,
   parseShareSlug,
+  purgeProject,
+  restoreProject,
+  searchProjects,
   updateProject,
   type ProjectStats,
   type ProjectSort,
   type ProjectSummary,
+  type SearchMatch,
+  type SearchResult,
   type SharedProjectSummary,
+  type TagCount,
+  type TrashedProject,
 } from '../../lib/projects'
 import ShareDialog from './ShareDialog'
 import './Dashboard.css'
 
-type SectionID = 'overview' | 'projects' | 'drafts' | 'shared' | 'join' | 'settings'
+type SectionID =
+  | 'overview'
+  | 'projects'
+  | 'drafts'
+  | 'search'
+  | 'shared'
+  | 'trash'
+  | 'join'
+  | 'settings'
 
 const sections: { id: SectionID; label: string }[] = [
   { id: 'overview', label: 'Tổng quan' },
   { id: 'projects', label: 'Dự án của tôi' },
   { id: 'drafts', label: 'Bản nháp' },
+  { id: 'search', label: 'Tìm kiếm' },
   { id: 'shared', label: 'Được chia sẻ' },
+  { id: 'trash', label: 'Thùng rác' },
   { id: 'join', label: 'Tham gia dự án' },
   { id: 'settings', label: 'Cài đặt' },
 ]
@@ -180,7 +202,9 @@ function Dashboard() {
           {active === 'drafts' && (
             <ProjectList key="drafts" draft revision={revision} onChanged={refresh} />
           )}
+          {active === 'search' && <SearchSection />}
           {active === 'shared' && <SharedList revision={revision} />}
+          {active === 'trash' && <TrashSection revision={revision} onChanged={refresh} />}
           {active === 'join' && <JoinSection />}
           {active === 'settings' && <SettingsSection />}
         </div>
@@ -263,6 +287,16 @@ function Overview({
               : 'Dự án bạn đang mở link hoặc mời người khác'}
           </span>
         </article>
+        <article className="dash-stat">
+          <span className="dash-stat-label">Trong thùng rác</span>
+          <strong>{stats ? stats.trashed : '—'}</strong>
+          <span className="dash-stat-note">
+            <button className="dash-panel-link" type="button" onClick={() => onOpen('trash')}>
+              Mở thùng rác
+            </button>{' '}
+            · tự xoá sau 30 ngày
+          </span>
+        </article>
       </section>
 
       <section className="dash-panel">
@@ -323,12 +357,28 @@ function ProjectList({
   const [error, setError] = useState('')
   const [reload, setReload] = useState(0)
   const [sharing, setSharing] = useState<ProjectSummary | null>(null)
+  const [tags, setTags] = useState<TagCount[]>([])
+  const [activeTag, setActiveTag] = useState<string | null>(null)
+
+  useEffect(() => {
+    let cancelled = false
+    listTags()
+      .then((data) => {
+        if (!cancelled) setTags(data.items)
+      })
+      .catch(() => {
+        // A tag summary is a convenience; the list itself still works.
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [revision, reload])
 
   useEffect(() => {
     let cancelled = false
     const timer = setTimeout(() => {
       setLoading(true)
-      listProjects({ draft, q: query, sort, limit: PAGE_SIZE, offset })
+      listProjects({ draft, q: query, tag: activeTag ?? undefined, sort, limit: PAGE_SIZE, offset })
         .then((data) => {
           if (cancelled) return
           // A delete on the last page can leave the offset past the end.
@@ -351,7 +401,7 @@ function ProjectList({
       cancelled = true
       clearTimeout(timer)
     }
-  }, [draft, query, sort, offset, revision, reload])
+  }, [draft, query, activeTag, sort, offset, revision, reload])
 
   const changed = () => {
     setReload((value) => value + 1)
@@ -395,12 +445,45 @@ function ProjectList({
           </Link>
         </div>
 
+        {tags.length > 0 && (
+          <div className="dash-tag-filter" role="group" aria-label="Lọc theo thẻ">
+            <button
+              type="button"
+              className={`dash-tag-chip${activeTag === null ? ' is-active' : ''}`}
+              aria-pressed={activeTag === null}
+              onClick={() => {
+                setActiveTag(null)
+                setOffset(0)
+              }}
+            >
+              Tất cả
+            </button>
+            {tags.map((item) => (
+              <button
+                key={item.tag}
+                type="button"
+                className={`dash-tag-chip${activeTag === item.tag ? ' is-active' : ''}`}
+                aria-pressed={activeTag === item.tag}
+                onClick={() => {
+                  setActiveTag(activeTag === item.tag ? null : item.tag)
+                  setOffset(0)
+                }}
+              >
+                {item.tag}
+                <span className="dash-tag-chip__count">{item.count}</span>
+              </button>
+            ))}
+          </div>
+        )}
+
         {error && <p className="dash-error" role="alert">{error}</p>}
 
-        {!loading && !error && total === 0 ? (
+        {loading ? (
+          <SkeletonList rows={3} label="Đang tải danh sách dự án…" />
+        ) : !error && total === 0 ? (
           <p className="dash-empty-inline">
-            {query
-              ? 'Không tìm thấy dự án nào khớp từ khoá.'
+            {query || activeTag
+              ? 'Không tìm thấy dự án nào khớp bộ lọc.'
               : draft
                 ? 'Chưa có bản nháp. Sơ đồ đang làm trong workspace sẽ tự lưu thành bản nháp.'
                 : 'Chưa có dự án nào. Mở workspace, tạo sơ đồ rồi bấm “Lưu dự án”.'}
@@ -440,11 +523,24 @@ function ProjectRow({
   onChanged: () => void
   onShare: () => void
 }) {
+  const toast = useToast()
   const [editing, setEditing] = useState(false)
   const [title, setTitle] = useState(project.title)
   const [confirming, setConfirming] = useState(false)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
+  const [tagging, setTagging] = useState(false)
+  const [tags, setTags] = useState<string[]>(project.tags ?? [])
+  const [syncedTags, setSyncedTags] = useState(project.tags)
+  const [tagDraft, setTagDraft] = useState('')
+  const [tagError, setTagError] = useState('')
+
+  // Adopt tags the server sent (normalised, or changed in another tab) without
+  // an effect: React re-renders immediately with the new list.
+  if (project.tags !== syncedTags) {
+    setSyncedTags(project.tags)
+    setTags(project.tags ?? [])
+  }
 
   const run = async (action: () => Promise<unknown>) => {
     setBusy(true)
@@ -472,6 +568,52 @@ function ProjectRow({
 
   const promote = async () => {
     await run(() => updateProject(project.id, { is_draft: false }))
+  }
+
+  const saveTags = async (next: string[]) => {
+    setTagError('')
+    const previous = tags
+    setTags(next)
+    try {
+      await updateProject(project.id, { tags: next })
+      onChanged()
+    } catch {
+      setTags(previous)
+      setTagError('Không lưu được thẻ')
+    }
+  }
+
+  const addTag = () => {
+    const value = tagDraft.trim()
+    if (!value) return
+    if (tags.length >= 8) {
+      setTagError('Mỗi dự án tối đa 8 thẻ.')
+      return
+    }
+    if (tags.includes(value)) {
+      setTagDraft('')
+      return
+    }
+    setTagDraft('')
+    void saveTags([...tags, value])
+  }
+
+  const removeTag = (tag: string) => {
+    void saveTags(tags.filter((value) => value !== tag))
+  }
+
+  const removeProject = async () => {
+    if (!(await run(() => deleteProject(project.id)))) return
+    setConfirming(false)
+    toast.undo(`Đã chuyển “${project.title}” vào thùng rác`, async () => {
+      try {
+        await restoreProject(project.id)
+        onChanged()
+        toast.show({ message: `Đã khôi phục “${project.title}”`, tone: 'success' })
+      } catch {
+        toast.show({ message: 'Không khôi phục được dự án', tone: 'error' })
+      }
+    })
   }
 
   return (
@@ -515,6 +657,65 @@ function ProjectRow({
             </span>
           </Link>
         )}
+
+        {tags.length > 0 && (
+          <ul className="dash-item__tags" aria-label="Thẻ của dự án">
+            {tags.map((tag) => (
+              <li key={tag} className="dash-item__tag">{tag}</li>
+            ))}
+          </ul>
+        )}
+
+        {tagging && (
+          <div className="dash-tag-editor">
+            <form
+              className="dash-tag-editor__add"
+              onSubmit={(event) => {
+                event.preventDefault()
+                addTag()
+              }}
+            >
+              <label className="sr-only" htmlFor={`tag-${project.id}`}>
+                Thêm thẻ
+              </label>
+              <input
+                id={`tag-${project.id}`}
+                value={tagDraft}
+                maxLength={32}
+                placeholder="Thêm thẻ, ví dụ: giải tích"
+                onChange={(event) => {
+                  setTagDraft(event.target.value)
+                  if (tagError) setTagError('')
+                }}
+              />
+              <button className="dash-mini" type="submit" disabled={!tagDraft.trim()}>
+                Thêm
+              </button>
+            </form>
+            {tags.length > 0 && (
+              <ul className="dash-tag-editor__list">
+                {tags.map((tag) => (
+                  <li key={tag}>
+                    <button
+                      type="button"
+                      className="dash-tag-chip dash-tag-chip--removable"
+                      aria-label={`Bỏ thẻ ${tag}`}
+                      onClick={() => void removeTag(tag)}
+                    >
+                      {tag}
+                      <span aria-hidden="true">×</span>
+                    </button>
+                  </li>
+                ))}
+              </ul>
+            )}
+            <p className="dash-tag-editor__hint">
+              Thẻ được chuẩn hoá (không dấu, chữ thường) để lọc dễ hơn.
+            </p>
+            {tagError && <p className="dash-item__error" role="alert">{tagError}</p>}
+          </div>
+        )}
+
         {error && <span className="dash-item__error">{error}</span>}
       </div>
 
@@ -526,9 +727,7 @@ function ProjectRow({
               className="dash-mini dash-mini--danger"
               type="button"
               disabled={busy}
-              onClick={async () => {
-                if (await run(() => deleteProject(project.id))) setConfirming(false)
-              }}
+              onClick={() => void removeProject()}
             >
               Xoá
             </button>
@@ -543,6 +742,14 @@ function ProjectRow({
             </Link>
             <button className="dash-mini" type="button" onClick={() => setEditing(true)}>
               Đổi tên
+            </button>
+            <button
+              className="dash-mini"
+              type="button"
+              aria-expanded={tagging}
+              onClick={() => setTagging((value) => !value)}
+            >
+              Thẻ
             </button>
             {project.is_draft ? (
               <button className="dash-mini" type="button" disabled={busy} onClick={() => void promote()}>
@@ -579,6 +786,279 @@ function ProjectRow({
         )}
       </div>
     </li>
+  )
+}
+
+/* ---------------------------------------------------------------- */
+/* Search                                                            */
+/* ---------------------------------------------------------------- */
+
+const MATCH_LABEL: Record<SearchMatch['kind'], string> = {
+  title: 'Tên dự án',
+  node: 'Nhánh',
+  note: 'Ghi chú',
+  summary: 'Tóm tắt',
+  transcript: 'Phụ đề',
+}
+
+function SearchSection() {
+  const [query, setQuery] = useState('')
+  const [results, setResults] = useState<SearchResult[]>([])
+  const [loading, setLoading] = useState(false)
+  const [error, setError] = useState('')
+  const trimmed = query.trim()
+  // A one-character query is not sent to the API; hide stale results instead of
+  // clearing state inside the effect.
+  const active = trimmed.length >= 2
+  const shown = active ? results : []
+  const busy = active && loading
+
+  useEffect(() => {
+    if (!active) return
+    let cancelled = false
+    const timer = setTimeout(() => {
+      setLoading(true)
+      searchProjects(trimmed)
+        .then((data) => {
+          if (cancelled) return
+          setResults(data.items)
+          setError('')
+        })
+        .catch(() => {
+          if (!cancelled) setError(API_MESSAGE)
+        })
+        .finally(() => {
+          if (!cancelled) setLoading(false)
+        })
+    }, 300)
+    return () => {
+      cancelled = true
+      clearTimeout(timer)
+    }
+  }, [active, trimmed])
+
+  return (
+    <section className="dash-panel">
+      <header className="dash-panel-header">
+        <h2>Tìm trong nội dung</h2>
+        <span className="dash-panel-note">
+          {busy ? 'Đang tìm…' : active ? `${shown.length} dự án` : 'Toàn bộ dự án'}
+        </span>
+      </header>
+
+      <div className="dash-toolbar">
+        <input
+          className="dash-search"
+          type="search"
+          value={query}
+          autoFocus
+          placeholder="Tìm trong nhãn, ghi chú, phụ đề, tóm tắt…"
+          aria-label="Tìm trong nội dung dự án"
+          onChange={(event) => setQuery(event.target.value)}
+        />
+      </div>
+
+      <p className="dash-search-hint">
+        Không cần gõ dấu: “dao ham” vẫn tìm thấy “đạo hàm”. Kết quả hiện kèm đoạn khớp để
+        bạn mở đúng chỗ.
+      </p>
+
+      {error && <p className="dash-error" role="alert">{error}</p>}
+
+      {!active ? (
+        <p className="dash-empty-inline">Gõ ít nhất 2 ký tự để bắt đầu tìm.</p>
+      ) : busy ? (
+        <SkeletonList rows={2} label="Đang tìm…" />
+      ) : shown.length === 0 ? (
+        <p className="dash-empty-inline">Không tìm thấy nội dung nào khớp “{trimmed}”.</p>
+      ) : (
+        <ul className="dash-list">
+          {shown.map((project) => (
+            <li key={project.id} className="dash-item">
+              <div className="dash-item__main">
+                <Link className="dash-item__link" to={`/app/${project.id}`}>
+                  <span className="dash-item__title">{project.title}</span>
+                  <span className="dash-item__meta">
+                    {project.match_count} đoạn khớp · cập nhật {formatWhen(project.updated_at)}
+                  </span>
+                </Link>
+                <ul className="dash-match-list">
+                  {project.matches.map((match, index) => (
+                    <li key={`${match.kind}-${index}`} className="dash-match">
+                      <span className="dash-match__kind">{MATCH_LABEL[match.kind]}</span>
+                      {match.time !== null && (
+                        <span className="dash-match__time">{formatClock(match.time)}</span>
+                      )}
+                      <span className="dash-match__text">{match.text}</span>
+                    </li>
+                  ))}
+                </ul>
+              </div>
+              <div className="dash-item__actions">
+                <Link className="dash-mini dash-mini--link" to={`/app/${project.id}`}>
+                  Mở
+                </Link>
+              </div>
+            </li>
+          ))}
+        </ul>
+      )}
+    </section>
+  )
+}
+
+/* ---------------------------------------------------------------- */
+/* Trash                                                             */
+/* ---------------------------------------------------------------- */
+
+function TrashSection({
+  revision,
+  onChanged,
+}: {
+  revision: number
+  onChanged: () => void
+}) {
+  const toast = useToast()
+  const [items, setItems] = useState<TrashedProject[]>([])
+  const [loading, setLoading] = useState(true)
+  const [error, setError] = useState('')
+  const [busyId, setBusyId] = useState<string | null>(null)
+  const [confirmingId, setConfirmingId] = useState<string | null>(null)
+  const [reloadTick, setReloadTick] = useState(0)
+
+  // Initial state is already "loading"; a manual refresh sets it before bumping
+  // the tick, so the effect itself never calls setState synchronously.
+  const reload = useCallback(() => {
+    setLoading(true)
+    setReloadTick((value) => value + 1)
+  }, [])
+
+  useEffect(() => {
+    let cancelled = false
+    listTrash()
+      .then((data) => {
+        if (cancelled) return
+        setItems(data.items)
+        setError('')
+      })
+      .catch(() => {
+        if (!cancelled) setError(API_MESSAGE)
+      })
+      .finally(() => {
+        if (!cancelled) setLoading(false)
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [revision, reloadTick])
+
+  const restore = async (project: TrashedProject) => {
+    setBusyId(project.id)
+    try {
+      await restoreProject(project.id)
+      toast.show({ message: `Đã khôi phục “${project.title}”`, tone: 'success' })
+      reload()
+      onChanged()
+    } catch {
+      toast.show({ message: 'Không khôi phục được dự án', tone: 'error' })
+    } finally {
+      setBusyId(null)
+    }
+  }
+
+  const purge = async (project: TrashedProject) => {
+    setBusyId(project.id)
+    try {
+      await purgeProject(project.id)
+      toast.show({ message: `Đã xoá vĩnh viễn “${project.title}”`, tone: 'success' })
+      setConfirmingId(null)
+      reload()
+      onChanged()
+    } catch {
+      toast.show({ message: 'Không xoá được dự án', tone: 'error' })
+    } finally {
+      setBusyId(null)
+    }
+  }
+
+  return (
+    <section className="dash-panel">
+      <header className="dash-panel-header">
+        <h2>Thùng rác</h2>
+        <span className="dash-panel-note">
+          {loading ? 'Đang tải…' : `${items.length} mục · giữ 30 ngày`}
+        </span>
+      </header>
+
+      <p className="dash-empty-inline">
+        Dự án đã xoá nằm đây 30 ngày rồi tự xoá vĩnh viễn. Link chia sẻ của dự án trong
+        thùng rác cũng ngừng hoạt động cho tới khi bạn khôi phục.
+      </p>
+
+      {error && <p className="dash-error" role="alert">{error}</p>}
+
+      {loading ? (
+        <SkeletonList rows={2} label="Đang tải thùng rác…" />
+      ) : items.length === 0 ? (
+        <p className="dash-empty-inline">Thùng rác đang trống.</p>
+      ) : (
+        <ul className="dash-list">
+          {items.map((project) => (
+            <li key={project.id} className="dash-item">
+              <div className="dash-item__main">
+                <span className="dash-item__title">{project.title}</span>
+                <span className="dash-item__meta">
+                  {project.node_count} nhánh · xoá {formatWhen(project.deleted_at)}
+                  {project.days_left > 0
+                    ? ` · còn ${project.days_left} ngày`
+                    : ' · sắp bị xoá vĩnh viễn'}
+                </span>
+              </div>
+              <div className="dash-item__actions">
+                {confirmingId === project.id ? (
+                  <>
+                    <span className="dash-item__confirm">Xoá vĩnh viễn?</span>
+                    <button
+                      className="dash-mini dash-mini--danger"
+                      type="button"
+                      disabled={busyId === project.id}
+                      onClick={() => void purge(project)}
+                    >
+                      Xoá vĩnh viễn
+                    </button>
+                    <button
+                      className="dash-mini"
+                      type="button"
+                      onClick={() => setConfirmingId(null)}
+                    >
+                      Huỷ
+                    </button>
+                  </>
+                ) : (
+                  <>
+                    <button
+                      className="dash-mini"
+                      type="button"
+                      disabled={busyId === project.id}
+                      onClick={() => void restore(project)}
+                    >
+                      Khôi phục
+                    </button>
+                    <button
+                      className="dash-mini dash-mini--danger"
+                      type="button"
+                      onClick={() => setConfirmingId(project.id)}
+                    >
+                      Xoá vĩnh viễn
+                    </button>
+                  </>
+                )}
+              </div>
+            </li>
+          ))}
+        </ul>
+      )}
+    </section>
   )
 }
 

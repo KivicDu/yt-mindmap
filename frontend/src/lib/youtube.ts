@@ -210,6 +210,24 @@ export class TranscriptLanguagesError extends Error {
   }
 }
 
+async function transcriptErrorDetail(
+  response: Response,
+  fallback: string,
+): Promise<{ code?: string; message: string }> {
+  const body = await response.json().catch(() => null)
+  const detail =
+    body && typeof body === 'object' && 'detail' in body ? body.detail : undefined
+  const code =
+    detail && typeof detail === 'object' && 'code' in detail && typeof detail.code === 'string'
+      ? detail.code
+      : undefined
+  const message =
+    detail && typeof detail === 'object' && 'message' in detail && typeof detail.message === 'string'
+      ? detail.message
+      : fallback
+  return { code, message }
+}
+
 /**
  * Caption tracks available for a video. Called only when the learner opens the
  * language picker, so the extra YouTube listing never sits on the load path.
@@ -219,21 +237,41 @@ export async function listTranscriptLanguages(url: string): Promise<TranscriptLa
     `${API_BASE}/transcript/languages?url=${encodeURIComponent(url)}`,
   )
   if (!response.ok) {
-    const body = await response.json().catch(() => null)
-    const detail =
-      body && typeof body === 'object' && 'detail' in body ? body.detail : undefined
-    const code =
-      detail && typeof detail === 'object' && 'code' in detail && typeof detail.code === 'string'
-        ? detail.code
-        : undefined
-    const message =
-      detail && typeof detail === 'object' && 'message' in detail && typeof detail.message === 'string'
-        ? detail.message
-        : 'Không tải được danh sách phụ đề'
+    const { code, message } = await transcriptErrorDetail(
+      response,
+      'Không tải được danh sách phụ đề',
+    )
     throw new TranscriptLanguagesError(message, code)
   }
   const data = (await response.json()) as { items?: TranscriptLanguage[] }
   return Array.isArray(data.items) ? data.items : []
+}
+
+export interface TranscriptTrack {
+  language: string
+  transcript: { start: number; duration: number; text: string }[]
+}
+
+/** Read one caption track without changing the session's primary language. */
+export async function fetchTranscriptTrack(
+  url: string,
+  language: string,
+): Promise<TranscriptTrack> {
+  const response = await fetch(
+    `${API_BASE}/transcript/track?url=${encodeURIComponent(url)}&language=${encodeURIComponent(language)}`,
+  )
+  if (!response.ok) {
+    const { code, message } = await transcriptErrorDetail(
+      response,
+      'Không tải được phụ đề song ngữ',
+    )
+    throw new TranscriptLanguagesError(message, code)
+  }
+  const data = (await response.json()) as Partial<TranscriptTrack>
+  return {
+    language: typeof data.language === 'string' ? data.language : language,
+    transcript: Array.isArray(data.transcript) ? data.transcript : [],
+  }
 }
 
 export interface VideoInfo {

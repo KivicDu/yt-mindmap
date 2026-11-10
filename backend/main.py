@@ -13,7 +13,7 @@ import uuid
 from typing import Any
 
 import httpx
-from fastapi import Depends, FastAPI, HTTPException
+from fastapi import Depends, FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
@@ -543,6 +543,28 @@ async def get_transcript_languages(url: str):
     return {"items": items}
 
 
+@app.get("/transcript/track")
+async def get_transcript_track(
+    url: str, language: str = Query(min_length=2, max_length=20)
+):
+    """Read one caption track without switching the session's primary track.
+
+    The bilingual view needs a second transcript next to the one the map was
+    built from, so this endpoint deliberately leaves the live session alone.
+    """
+
+    try:
+        entries, resolved = await run_in_threadpool(
+            fetch_transcript, url, language
+        )
+    except TranscriptError as error:
+        raise HTTPException(
+            status_code=error.status_code,
+            detail={"code": error.code, "message": error.message},
+        ) from error
+    return {"language": resolved, "transcript": entries}
+
+
 @app.post("/transcript")
 async def get_transcript(
     request: TranscriptRequest,
@@ -771,7 +793,7 @@ async def update_map(
         }
 
     session = sessions[session_id]
-    assert_can_edit_session(db, session, user)
+    project = assert_can_edit_session(db, session, user)
     session["last_active"] = time.time()
 
     # One AI call per session at a time. Every collaborator polls while the
@@ -857,6 +879,12 @@ async def update_map(
             session["summary_so_far"] = ai_result["summary"]
 
         if ai_result.get("should_update") and ai_result.get("markdown_diff"):
+            # Keep the state the AI is about to replace, so the user can roll
+            # back a chunk that derails the map. Throttled inside snapshot().
+            if project is not None:
+                project_service.snapshot(
+                    db, project, author_id=user.id if user else None
+                )
             new_nodes = normalize_nodes(
                 ai_result.get("new_nodes") or [],
                 default_time=float(time_range[0]),
@@ -1014,12 +1042,14 @@ def autosave_project(
         # and later editors are still checked against the same project.
         session["owner_id"] = project.user_id
         session["project_id"] = project.id
+        session["editor_id"] = user.id
         saved = project_service.save_session(
             db,
             project,
             session,
             # Only the owner may rename the project.
             title=request.title if role == sharing_service.ROLE_OWNER else None,
+            author_id=user.id,
         )
         return project_service.summary(saved)
 
@@ -1032,6 +1062,7 @@ def autosave_project(
 
     # A guest map becomes the signed-in user's project on the first autosave.
     session["owner_id"] = user.id
+    session["editor_id"] = user.id
 
     project = project_service.autosave(
         db,
@@ -1044,3 +1075,87 @@ def autosave_project(
     if project is None:
         raise HTTPException(status_code=404, detail="project_not_found")
     return project_service.summary(project)
+
+
+def _project_for_user(db: Session, user: User, project_id: str) -> tuple[Project, str]:
+    """Resolve a project the caller can at least read, plus their role."""
+    project = db.get(Project, project_id)
+    if project is None or project.deleted_at is not None:
+        raise HTTPException(status_code=404, detail="project_not_found")
+    role = sharing_service.role_for(db, project, user)
+    if role is None:
+        raise HTTPException(status_code=404, detail="project_not_found")
+    return project, role
+
+
+@app.get("/api/projects/{project_id}/versions")
+def list_project_versions(
+    project_id: str,
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    project, _ = _project_for_user(db, user, project_id)
+    return {
+        "items": [
+            project_service.version_payload(version)
+            for version in project_service.list_versions(db, project.id)
+        ]
+    }
+
+
+@app.get("/api/projects/{project_id}/versions/{version_id}")
+def get_project_version(
+    project_id: str,
+    version_id: str,
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    project, _ = _project_for_user(db, user, project_id)
+    version = project_service.get_version(db, project.id, version_id)
+    if version is None:
+        raise HTTPException(status_code=404, detail="version_not_found")
+    return project_service.version_payload(version, with_nodes=True)
+
+
+@app.post("/api/projects/{project_id}/versions/{version_id}/restore")
+def restore_project_version(
+    project_id: str,
+    version_id: str,
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """Roll the map back and push the restored tree to every open tab."""
+    project, role = _project_for_user(db, user, project_id)
+    if not sharing_service.can_edit(role):
+        raise HTTPException(status_code=403, detail="project_read_only")
+    version = project_service.get_version(db, project.id, version_id)
+    if version is None:
+        raise HTTPException(status_code=404, detail="version_not_found")
+
+    project_service.restore_version(db, project, version, author_id=user.id)
+
+    session_id = find_project_session(project.id)
+    if session_id:
+        session = sessions[session_id]
+        session["nodes"] = project.nodes
+        session["markdown"] = tree_to_markdown(project.nodes or [])
+        session["summary_so_far"] = project.summary_so_far or ""
+        session["consumed_until"] = float(project.consumed_until or 0.0)
+        session["last_active"] = time.time()
+        session.setdefault("events", []).append(
+            {
+                "type": "restore",
+                "data": {
+                    "type": "restore",
+                    "nodes": session["nodes"],
+                    "markdown": session["markdown"],
+                    "summary": session["summary_so_far"],
+                },
+            }
+        )
+
+    return {
+        **project_service.detail(project),
+        "restored_version_id": version.id,
+        "session_id": session_id,
+    }
