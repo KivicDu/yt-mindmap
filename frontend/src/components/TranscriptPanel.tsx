@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
+import { cueTextAt } from '../lib/bilingual'
 import { formatTime } from '../lib/mindmapTree'
 import type { TranscriptLanguage } from '../lib/youtube'
 
@@ -22,6 +23,14 @@ interface TranscriptPanelProps {
   canEdit: boolean
   /** False for file-upload sessions, which have no video to list tracks for. */
   canChangeLanguage: boolean
+  /** A second caption track shown under the primary one. */
+  bilingual: boolean
+  onToggleBilingual: () => void
+  secondary: TranscriptCue[]
+  secondaryLanguage: string | null
+  secondaryBusy: boolean
+  secondaryError: string
+  onSelectSecondary: (code: string) => void
 }
 
 /** Diacritic-insensitive search: "tong quan" still finds "Tổng quan". */
@@ -53,6 +62,13 @@ function TranscriptPanel({
   languageBusy,
   canEdit,
   canChangeLanguage,
+  bilingual,
+  onToggleBilingual,
+  secondary,
+  secondaryLanguage,
+  secondaryBusy,
+  secondaryError,
+  onSelectSecondary,
 }: TranscriptPanelProps) {
   const [query, setQuery] = useState('')
   const listRef = useRef<HTMLOListElement>(null)
@@ -86,6 +102,11 @@ function TranscriptPanel({
 
   const currentName =
     languages.find((item) => item.code === language)?.name || language || 'Tự động'
+  const secondaryName =
+    languages.find((item) => item.code === secondaryLanguage)?.name ||
+    secondaryLanguage ||
+    'Chọn ngôn ngữ'
+  const secondaryOptions = languages.filter((item) => item.code !== language)
 
   return (
     <div className="transcript">
@@ -135,11 +156,56 @@ function TranscriptPanel({
             {languagesLoading && <option value="">Đang tải…</option>}
           </select>
         </label>
+
+        <button
+          className={`transcript__bilingual${bilingual ? ' is-active' : ''}`}
+          type="button"
+          aria-pressed={bilingual}
+          disabled={!canChangeLanguage || entries.length === 0}
+          title="Hiện thêm một track phụ đề khác bên dưới"
+          onClick={onToggleBilingual}
+        >
+          Song ngữ
+        </button>
+
+        {bilingual && (
+          <label className="transcript__lang" title="Chọn ngôn ngữ phụ đề thứ hai">
+            <span className="sr-only">Ngôn ngữ phụ đề thứ hai</span>
+            <select
+              value={secondaryLanguage ?? ''}
+              disabled={secondaryBusy || secondaryOptions.length === 0}
+              onFocus={onLoadLanguages}
+              onMouseDown={onLoadLanguages}
+              onChange={(event) => {
+                const code = event.target.value
+                if (code) onSelectSecondary(code)
+              }}
+            >
+              {!secondaryLanguage && <option value="">Chọn ngôn ngữ</option>}
+              {secondaryLanguage && !secondaryOptions.some((item) => item.code === secondaryLanguage) && (
+                <option value={secondaryLanguage}>{secondaryName}</option>
+              )}
+              {secondaryOptions.map((item) => (
+                <option key={item.code} value={item.code}>
+                  {item.name}
+                  {item.generated ? ' (tự động)' : ''}
+                </option>
+              ))}
+              {secondaryBusy && <option value="">Đang tải…</option>}
+            </select>
+          </label>
+        )}
       </div>
 
       {languagesError && (
         <p className="transcript__error" role="alert">
           {languagesError}
+        </p>
+      )}
+
+      {bilingual && secondaryError && (
+        <p className="transcript__error" role="alert">
+          {secondaryError}
         </p>
       )}
 
@@ -153,6 +219,7 @@ function TranscriptPanel({
         <ol className="transcript__list" ref={listRef}>
           {filtered.map(({ entry, index }) => {
             const active = index === activeIndex
+            const translation = bilingual ? cueTextAt(secondary, entry.start) : ''
             return (
               <li key={`${entry.start}-${index}`}>
                 <button
@@ -163,7 +230,14 @@ function TranscriptPanel({
                   onClick={() => onSeek(entry.start)}
                 >
                   <span className="transcript__time">{formatTime(entry.start)}</span>
-                  <span className="transcript__text">{entry.text}</span>
+                  <span className="transcript__body">
+                    <span className="transcript__text">{entry.text}</span>
+                    {bilingual && (
+                      <span className="transcript__text transcript__text--secondary">
+                        {translation || (secondaryBusy ? 'Đang tải bản dịch…' : '—')}
+                      </span>
+                    )}
+                  </span>
                 </button>
               </li>
             )
@@ -175,7 +249,9 @@ function TranscriptPanel({
         <p className="transcript__meta">
           {searching
             ? `${filtered.length} / ${entries.length} đoạn khớp`
-            : `${entries.length} đoạn · ${currentName}`}
+            : bilingual
+              ? `${entries.length} đoạn · ${currentName} + ${secondaryName}`
+              : `${entries.length} đoạn · ${currentName}`}
         </p>
       )}
     </div>

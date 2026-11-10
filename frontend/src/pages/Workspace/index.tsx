@@ -37,6 +37,7 @@ import { useToast } from '../../components/ui/useToast'
 import { activeChapter, buildChapters } from '../../lib/chapters'
 import {
   extractVideoId,
+  fetchTranscriptTrack,
   isCaptionOnlyProblem,
   listTranscriptLanguages,
   playerErrorMessage,
@@ -158,6 +159,11 @@ function App() {
   const [languagesLoading, setLanguagesLoading] = useState(false)
   const [languagesError, setLanguagesError] = useState('')
   const [languageBusy, setLanguageBusy] = useState(false)
+  const [bilingual, setBilingual] = useState(false)
+  const [secondaryEntries, setSecondaryEntries] = useState<TranscriptEntry[]>([])
+  const [secondaryLang, setSecondaryLang] = useState<string | null>(null)
+  const [secondaryBusy, setSecondaryBusy] = useState(false)
+  const [secondaryError, setSecondaryError] = useState('')
   const [exporting, setExporting] = useState<ExportFormat | null>(null)
 
   const urlInputRef = useRef<HTMLInputElement>(null)
@@ -289,6 +295,11 @@ function App() {
     setLanguages([])
     setLanguagesError('')
     languagesLoadedRef.current = false
+    setBilingual(false)
+    setSecondaryEntries([])
+    setSecondaryLang(null)
+    setSecondaryBusy(false)
+    setSecondaryError('')
 
     const resolvedTitle = data.title || vid || DEFAULT_TITLE
     titleRef.current = resolvedTitle
@@ -396,6 +407,11 @@ function App() {
     setLanguagesError('')
     setLanguagesLoading(false)
     setLanguageBusy(false)
+    setBilingual(false)
+    setSecondaryEntries([])
+    setSecondaryLang(null)
+    setSecondaryBusy(false)
+    setSecondaryError('')
     setExporting(null)
     languagesLoadedRef.current = false
     languagesRequestRef.current = false
@@ -695,10 +711,10 @@ function App() {
   )
 
   /** Caption tracks are fetched only when the picker is opened. */
-  const loadLanguages = useCallback(async () => {
-    if (languagesLoadedRef.current || languagesRequestRef.current) return
+  const loadLanguages = useCallback(async (): Promise<TranscriptLanguage[]> => {
+    if (languagesLoadedRef.current || languagesRequestRef.current) return []
     const id = videoId || extractVideoId(url)
-    if (!id) return
+    if (!id) return []
     languagesRequestRef.current = true
     setLanguagesLoading(true)
     setLanguagesError('')
@@ -706,9 +722,11 @@ function App() {
       const items = await listTranscriptLanguages(watchUrl(id))
       setLanguages(items)
       languagesLoadedRef.current = true
+      return items
     } catch (error: unknown) {
       const code = error instanceof TranscriptLanguagesError ? error.code : undefined
       setLanguagesError(transcriptErrorMessage(code))
+      return []
     } finally {
       languagesRequestRef.current = false
       setLanguagesLoading(false)
@@ -748,6 +766,45 @@ function App() {
       setStatus(`Không đổi được ngôn ngữ: ${error.message}`, 'error')
     } finally {
       setLanguageBusy(false)
+    }
+  }
+
+  /** Load a second caption track for the bilingual view, without switching. */
+  const loadSecondary = async (code: string) => {
+    const id = videoId || extractVideoId(url)
+    if (!id) return
+    setSecondaryLang(code)
+    setSecondaryBusy(true)
+    setSecondaryError('')
+    try {
+      const data = await fetchTranscriptTrack(watchUrl(id), code)
+      setSecondaryEntries(data.transcript)
+      setSecondaryLang(data.language || code)
+    } catch (error: unknown) {
+      const message =
+        error instanceof TranscriptLanguagesError
+          ? transcriptErrorMessage(error.code)
+          : 'Không tải được phụ đề song ngữ.'
+      setSecondaryEntries([])
+      setSecondaryError(message)
+    } finally {
+      setSecondaryBusy(false)
+    }
+  }
+
+  const toggleBilingual = async () => {
+    if (bilingual) {
+      setBilingual(false)
+      return
+    }
+    setBilingual(true)
+    if (secondaryEntries.length > 0) return
+    const items = languagesLoadedRef.current ? languages : await loadLanguages()
+    const candidate = items.find((item) => item.code !== transcriptLang)
+    if (candidate) {
+      await loadSecondary(candidate.code)
+    } else if (items.length > 0) {
+      setSecondaryError('Video chỉ có một track phụ đề, chưa thể hiện song ngữ.')
     }
   }
 
@@ -1443,6 +1500,13 @@ function App() {
                 languageBusy={languageBusy}
                 canEdit={canEdit}
                 canChangeLanguage={Boolean(videoId || extractVideoId(url))}
+                bilingual={bilingual}
+                onToggleBilingual={() => void toggleBilingual()}
+                secondary={secondaryEntries}
+                secondaryLanguage={secondaryLang}
+                secondaryBusy={secondaryBusy}
+                secondaryError={secondaryError}
+                onSelectSecondary={(code) => void loadSecondary(code)}
               />
             ) : detailTab === 'history' ? (
               <div className="version-history">
