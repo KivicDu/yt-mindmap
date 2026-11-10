@@ -21,13 +21,19 @@ import {
 import {
   autosaveProject,
   clearLocalDraft,
+  formatWhen,
+  listProjectVersions,
   readLocalDraft,
+  restoreProjectVersion,
   updateProject,
   writeLocalDraft,
   type LocalDraft,
+  type ProjectVersionSummary,
 } from '../../lib/projects'
 import { getAccessToken, refreshSession } from '../../lib/api'
 import { exportMap, type ExportFormat } from '../../lib/mapExport'
+import { SkeletonList } from '../../components/ui/Skeleton'
+import { useToast } from '../../components/ui/useToast'
 import {
   extractVideoId,
   isCaptionOnlyProblem,
@@ -107,6 +113,7 @@ async function sessionRequest(
 
 function App() {
   const { status: authStatus } = useAuth()
+  const toast = useToast()
   const { projectId: routeProjectId } = useParams<{ projectId?: string }>()
   const navigate = useNavigate()
   const [url, setUrl] = useState('')
@@ -141,7 +148,11 @@ function App() {
   const [role, setRole] = useState<SessionRole | null>(null)
   const [ownerName, setOwnerName] = useState<string | null>(null)
   const [summary, setSummary] = useState('')
-  const [detailTab, setDetailTab] = useState<'session' | 'transcript'>('session')
+  const [detailTab, setDetailTab] = useState<'session' | 'transcript' | 'history'>('session')
+  const [versions, setVersions] = useState<ProjectVersionSummary[]>([])
+  const [versionsLoading, setVersionsLoading] = useState(false)
+  const [versionsError, setVersionsError] = useState('')
+  const [restoringVersion, setRestoringVersion] = useState<string | null>(null)
   const [languages, setLanguages] = useState<TranscriptLanguage[]>([])
   const [languagesLoading, setLanguagesLoading] = useState(false)
   const [languagesError, setLanguagesError] = useState('')
@@ -377,6 +388,9 @@ function App() {
     setTranscriptLang(null)
     setSummary('')
     setDetailTab('session')
+    setVersions([])
+    setVersionsError('')
+    setVersionsLoading(false)
     setLanguages([])
     setLanguagesError('')
     setLanguagesLoading(false)
@@ -552,6 +566,8 @@ function App() {
     setProjectId(routeProjectId)
     projectIdRef.current = routeProjectId
     setIsDraft(false)
+    setDetailTab('session')
+    setVersions([])
     fetchTranscript({ projectId: routeProjectId })
       .then((data) => {
         if (token !== loadTokenRef.current) return
@@ -753,6 +769,50 @@ function App() {
       setStatus(error?.message || 'Không xuất được sơ đồ', 'error')
     } finally {
       setExporting(null)
+    }
+  }
+
+  const loadVersions = useCallback(async () => {
+    const id = projectIdRef.current
+    if (!id) return
+    setVersionsLoading(true)
+    setVersionsError('')
+    try {
+      const data = await listProjectVersions(id)
+      setVersions(data.items)
+    } catch {
+      setVersionsError('Không tải được lịch sử phiên bản.')
+    } finally {
+      setVersionsLoading(false)
+    }
+  }, [])
+
+  const openHistory = () => {
+    setDetailTab('history')
+    void loadVersions()
+  }
+
+  const restoreVersion = async (version: ProjectVersionSummary) => {
+    const id = projectIdRef.current
+    if (!id || restoringVersion) return
+    setRestoringVersion(version.id)
+    setStatus('Đang khôi phục phiên bản…', 'busy')
+    try {
+      const data = await restoreProjectVersion(id, version.id)
+      applyNodes(data.nodes, false)
+      setSummary(typeof data.summary_so_far === 'string' ? data.summary_so_far : '')
+      titleRef.current = data.title
+      setMapTitle(data.title)
+      setConsumedUntil(Number(data.consumed_until || 0))
+      lastTriggerRef.current = Number(data.consumed_until || 0)
+      setStatus('Đã khôi phục phiên bản sơ đồ', 'ok')
+      toast.show({ message: 'Đã khôi phục phiên bản sơ đồ', tone: 'success' })
+      await loadVersions()
+    } catch {
+      setStatus('Không khôi phục được phiên bản', 'error')
+      toast.show({ message: 'Không khôi phục được phiên bản', tone: 'error' })
+    } finally {
+      setRestoringVersion(null)
     }
   }
 
@@ -1218,9 +1278,13 @@ function App() {
                   ? transcript.length > 0
                     ? `${transcript.length} đoạn`
                     : 'Trống'
-                  : nodeCount > 0
-                    ? `${nodeCount} ý`
-                    : 'Trống'}
+                  : detailTab === 'history'
+                    ? versions.length > 0
+                      ? `${versions.length} bản`
+                      : 'Trống'
+                    : nodeCount > 0
+                      ? `${nodeCount} ý`
+                      : 'Trống'}
               </span>
             )}
           </header>
@@ -1248,6 +1312,17 @@ function App() {
                   <span className="detail-tabs__count">{transcript.length}</span>
                 )}
               </button>
+              {projectId && canEdit && (
+                <button
+                  type="button"
+                  role="tab"
+                  aria-selected={detailTab === 'history'}
+                  className={`detail-tabs__item${detailTab === 'history' ? ' is-active' : ''}`}
+                  onClick={openHistory}
+                >
+                  Lịch sử
+                </button>
+              )}
             </div>
           )}
 
@@ -1334,6 +1409,54 @@ function App() {
                 canEdit={canEdit}
                 canChangeLanguage={Boolean(videoId || extractVideoId(url))}
               />
+            ) : detailTab === 'history' ? (
+              <div className="version-history">
+                <p className="version-history__hint">
+                  Mỗi lần AI cập nhật hoặc bạn lưu đè sơ đồ, bản trước được giữ lại. Khôi
+                  phục sẽ tạo thêm một bản an toàn, nên bạn vẫn quay lại được.
+                </p>
+
+                {versionsError && (
+                  <p className="dash-error" role="alert">{versionsError}</p>
+                )}
+
+                {versionsLoading ? (
+                  <SkeletonList rows={3} label="Đang tải lịch sử…" />
+                ) : versions.length === 0 ? (
+                  <p className="version-history__empty">
+                    Chưa có bản nào. Lịch sử bắt đầu từ lần cập nhật sơ đồ tiếp theo.
+                  </p>
+                ) : (
+                  <ol className="version-list">
+                    {versions.map((version) => (
+                      <li key={version.id} className="version-item">
+                        <div className="version-item__main">
+                          <span className="version-item__time">
+                            {formatWhen(version.created_at)}
+                          </span>
+                          <span className="version-item__meta">
+                            {version.node_count} nhánh
+                            {version.consumed_until > 0
+                              ? ` · tới ${formatTime(version.consumed_until)}`
+                              : ''}
+                          </span>
+                          {version.summary && (
+                            <p className="version-item__summary">{version.summary}</p>
+                          )}
+                        </div>
+                        <button
+                          className="btn btn--outline btn--sm"
+                          type="button"
+                          disabled={restoringVersion !== null}
+                          onClick={() => void restoreVersion(version)}
+                        >
+                          {restoringVersion === version.id ? 'Đang khôi phục…' : 'Khôi phục'}
+                        </button>
+                      </li>
+                    ))}
+                  </ol>
+                )}
+              </div>
             ) : (
               <div className="session">
                 <div className="session__title">

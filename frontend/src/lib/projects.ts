@@ -221,6 +221,48 @@ export function fetchProjectStats(): Promise<ProjectStats> {
 }
 
 /* ---------------------------------------------------------------- */
+/* Version history                                                  */
+/* ---------------------------------------------------------------- */
+
+export interface ProjectVersionSummary {
+  id: string
+  title: string
+  node_count: number
+  consumed_until: number
+  summary: string
+  created_at: string | null
+}
+
+export interface ProjectVersionDetail extends ProjectVersionSummary {
+  nodes: MapNode[]
+  summary_so_far: string
+}
+
+export function listProjectVersions(
+  projectId: string,
+): Promise<{ items: ProjectVersionSummary[] }> {
+  return apiFetch<{ items: ProjectVersionSummary[] }>(`/projects/${projectId}/versions`)
+}
+
+export function getProjectVersion(
+  projectId: string,
+  versionId: string,
+): Promise<ProjectVersionDetail> {
+  return apiFetch<ProjectVersionDetail>(`/projects/${projectId}/versions/${versionId}`)
+}
+
+/** Roll the map back; the response also carries the restored project. */
+export function restoreProjectVersion(
+  projectId: string,
+  versionId: string,
+): Promise<ProjectDetail & { restored_version_id: string; session_id: string | null }> {
+  return apiFetch<ProjectDetail & { restored_version_id: string; session_id: string | null }>(
+    `/projects/${projectId}/versions/${versionId}/restore`,
+    { method: 'POST', body: {} },
+  )
+}
+
+/* ---------------------------------------------------------------- */
 /* Sharing                                                          */
 /* ---------------------------------------------------------------- */
 

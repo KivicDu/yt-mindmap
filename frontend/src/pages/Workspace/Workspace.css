@@ -1213,3 +1213,76 @@
     bottom: 8px;
   }
 }
+
+/* ============================================================
+   Version history
+   ============================================================ */
+
+.version-history {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.version-history__hint {
+  color: var(--ink-3);
+  font-size: 11.5px;
+  line-height: 1.55;
+}
+
+.version-history__empty {
+  padding: 14px 0;
+  color: var(--ink-3);
+  font-size: 12.5px;
+}
+
+.version-list {
+  display: flex;
+  flex-direction: column;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.version-item {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 10px 0;
+  border-bottom: 1px dashed var(--line);
+}
+
+.version-item:last-child {
+  border-bottom: 0;
+}
+
+.version-item__main {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.version-item__time {
+  color: var(--ink);
+  font-size: 12.5px;
+  font-weight: 550;
+}
+
+.version-item__meta {
+  color: var(--ink-3);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+}
+
+.version-item__summary {
+  display: -webkit-box;
+  overflow: hidden;
+  margin-top: 2px;
+  color: var(--ink-2);
+  font-size: 11.5px;
+  line-height: 1.45;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+}
