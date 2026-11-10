@@ -5,6 +5,8 @@ from typing import Any
 from pydantic import BaseModel, Field
 
 TITLE_FIELD = Field(min_length=1, max_length=200)
+LAYOUT_FIELD = Field(default="tree", pattern="^(tree|spider|bubble|circle)$")
+PALETTE_FIELD = Field(default="paper", pattern="^(paper|sage|sky|blush|lilac|sand)$")
 
 
 class ProjectCreate(BaseModel):
@@ -17,6 +19,8 @@ class ProjectCreate(BaseModel):
     consumed_until: float = 0.0
     is_draft: bool = False
     tags: list[str] = Field(default_factory=list, max_length=8)
+    map_layout: str = LAYOUT_FIELD
+    map_palette: str = PALETTE_FIELD
 
 
 class ProjectUpdate(BaseModel):
@@ -31,6 +35,12 @@ class ProjectUpdate(BaseModel):
     is_draft: bool | None = None
     visibility: str | None = Field(default=None, pattern="^(private|unlisted)$")
     tags: list[str] | None = Field(default=None, max_length=8)
+    map_layout: str | None = Field(
+        default=None, pattern="^(tree|spider|bubble|circle)$"
+    )
+    map_palette: str | None = Field(
+        default=None, pattern="^(paper|sage|sky|blush|lilac|sand)$"
+    )
 
 
 class AutosaveRequest(BaseModel):
@@ -44,3 +54,9 @@ class AutosaveRequest(BaseModel):
     project_id: str | None = None
     title: str | None = Field(default=None, min_length=1, max_length=200)
     is_draft: bool = True
+    map_layout: str | None = Field(
+        default=None, pattern="^(tree|spider|bubble|circle)$"
+    )
+    map_palette: str | None = Field(
+        default=None, pattern="^(paper|sage|sky|blush|lilac|sand)$"
+    )
