@@ -47,7 +47,7 @@ describe('nodeToMarkmap', () => {
   it('turns a timestamped node into a seek link that carries the node id', () => {
     const data = nodeToMarkmap(node('abc', 'Recursion', { time: 12.34 }))
     expect(data.content).toContain(
-      '<a href="#seek-12.3" data-node-id="abc" title="Recursion">Recursion</a>',
+      '<a href="#seek-12.3" data-node-id="abc" title="Recursion" aria-label="Recursion">Recursion</a>',
     )
     expect(data.content).toContain('<span class="mm-time" title="Nhảy đến 0:12">[0:12]</span>')
     expect(data.children).toEqual([])
@@ -60,7 +60,13 @@ describe('nodeToMarkmap', () => {
 
   it('renders a plain span when the node has no time', () => {
     expect(nodeToMarkmap(node('abc', 'Overview')).content).toBe(
-      '<span class="mm-row mm-d1"><span data-node-id="abc" title="Overview">Overview</span></span>',
+      '<span class="mm-row mm-d1"><span data-node-id="abc" title="Overview" aria-label="Overview" role="button" tabindex="0" aria-keyshortcuts="Enter Space">Overview</span></span>',
+    )
+  })
+
+  it('keeps timestamped nodes keyboard-focusable and names them accessibly', () => {
+    expect(nodeToMarkmap(node('abc', 'Recursion', { time: 12.34 })).content).toContain(
+      'data-node-id="abc" title="Recursion" aria-label="Recursion"',
     )
   })
 

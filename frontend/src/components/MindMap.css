@@ -87,6 +87,12 @@
   border-bottom-color: var(--accent-line);
 }
 
+.mindmap [data-node-id]:focus-visible {
+  border-radius: var(--r-xs);
+  outline: 2px solid var(--accent);
+  outline-offset: 3px;
+}
+
 /* Timestamp: reads like a footnote, not like a link. */
 .mindmap .mm-time {
   display: inline-block;

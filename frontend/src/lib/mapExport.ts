@@ -128,7 +128,7 @@ function collectMapCss(): string {
  * learner happens to be looking at.
  */
 export function buildMapSvg(source: MapExportSource): string {
-  const { svg, bounds, title } = source
+  const { svg, bounds } = source
   if (!svg || !bounds) {
     throw new Error('Sơ đồ chưa sẵn sàng để xuất.')
   }
@@ -178,7 +178,7 @@ export function buildMapSvg(source: MapExportSource): string {
   clone.appendChild(style)
 
   const serialized = new XMLSerializer().serializeToString(clone)
-  return `<?xml version="1.0" encoding="UTF-8"?>\n<!-- ${title || 'Mind map'} -->\n${serialized}`
+  return `<?xml version="1.0" encoding="UTF-8"?>\n${serialized}`
 }
 
 function download(blob: Blob, filename: string): void {

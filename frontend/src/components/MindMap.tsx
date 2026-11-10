@@ -422,7 +422,13 @@ const MindMap = forwardRef<MindMapHandle, MindMapProps>(
     }
 
     const handleKeyDown = (event: KeyboardEvent<SVGSVGElement>) => {
-      if (event.key === '+' || event.key === '=') {
+      const target = event.target
+      const nodeTarget =
+        target instanceof HTMLElement ? target.closest<HTMLElement>('[data-node-id]') : null
+      if (nodeTarget && (event.key === 'Enter' || event.key === ' ')) {
+        event.preventDefault()
+        nodeTarget.click()
+      } else if (event.key === '+' || event.key === '=') {
         event.preventDefault()
         zoom(1.2)
       } else if (event.key === '-' || event.key === '_') {
@@ -431,6 +437,24 @@ const MindMap = forwardRef<MindMapHandle, MindMapProps>(
       } else if (event.key === '0') {
         event.preventDefault()
         fit()
+      } else if (
+        event.key === 'ArrowRight' ||
+        event.key === 'ArrowDown' ||
+        event.key === 'ArrowLeft' ||
+        event.key === 'ArrowUp'
+      ) {
+        const nodes = Array.from(
+          refSvg.current?.querySelectorAll<HTMLElement>(
+            '[data-node-id][tabindex="0"], a[data-node-id]',
+          ) ?? [],
+        )
+        const index = nodes.indexOf(target as HTMLElement)
+        const direction = event.key === 'ArrowRight' || event.key === 'ArrowDown' ? 1 : -1
+        const nextIndex = index + direction
+        if (index >= 0 && nextIndex >= 0 && nextIndex < nodes.length) {
+          event.preventDefault()
+          nodes[nextIndex].focus()
+        }
       }
     }
 
@@ -443,7 +467,7 @@ const MindMap = forwardRef<MindMapHandle, MindMapProps>(
         style={SVG_STYLE}
         tabIndex={0}
         role="group"
-        aria-label="Sơ đồ tư duy. Dùng phím + và − để phóng to thu nhỏ, phím 0 để vừa khung."
+        aria-label="Sơ đồ tư duy. Dùng Tab hoặc phím mũi tên để duyệt nhánh, Enter hoặc Space để chọn; phím + và − để phóng to thu nhỏ, phím 0 để vừa khung."
         onKeyDown={handleKeyDown}
         onDoubleClick={fit}
       />
