@@ -24,11 +24,36 @@ export interface ProjectSummary {
   share_slug: string | null
   link_role: ShareRole
   node_count: number
+  tags: string[]
   transcript_language: string | null
   consumed_until: number
   created_at: string | null
   updated_at: string | null
   last_opened_at: string | null
+}
+
+/** A soft-deleted project, plus how long the owner can still restore it. */
+export interface TrashedProject extends ProjectSummary {
+  deleted_at: string | null
+  days_left: number
+}
+
+export type SearchMatchKind = 'title' | 'node' | 'note' | 'summary' | 'transcript'
+
+export interface SearchMatch {
+  kind: SearchMatchKind
+  text: string
+  time: number | null
+}
+
+export interface SearchResult extends ProjectSummary {
+  match_count: number
+  matches: SearchMatch[]
+}
+
+export interface TagCount {
+  tag: string
+  count: number
 }
 
 export type ShareRole = 'viewer' | 'editor'
@@ -135,13 +160,53 @@ export function getSharedBySlug(slug: string): Promise<SharedProjectView> {
 
 export function updateProject(
   id: string,
-  patch: { title?: string; is_draft?: boolean; visibility?: 'private' | 'unlisted' },
+  patch: {
+    title?: string
+    is_draft?: boolean
+    visibility?: 'private' | 'unlisted'
+    tags?: string[]
+  },
 ): Promise<ProjectDetail> {
   return apiFetch<ProjectDetail>(`/projects/${id}`, { method: 'PATCH', body: patch })
 }
 
 export function deleteProject(id: string): Promise<void> {
   return apiFetch<void>(`/projects/${id}`, { method: 'DELETE' })
+}
+
+export function restoreProject(id: string): Promise<ProjectDetail> {
+  return apiFetch<ProjectDetail>(`/projects/${id}/restore`, { method: 'POST', body: {} })
+}
+
+export function purgeProject(id: string): Promise<void> {
+  return apiFetch<void>(`/projects/${id}/purge`, { method: 'DELETE' })
+}
+
+export function listTrash(
+  params: { limit?: number; offset?: number } = {},
+): Promise<{ items: TrashedProject[]; total: number; limit: number; offset: number }> {
+  const search = new URLSearchParams()
+  if (params.limit) search.set('limit', String(params.limit))
+  if (params.offset) search.set('offset', String(params.offset))
+  const query = search.toString()
+  return apiFetch<{
+    items: TrashedProject[]
+    total: number
+    limit: number
+    offset: number
+  }>(`/projects/trash${query ? `?${query}` : ''}`)
+}
+
+export function listTags(): Promise<{ items: TagCount[] }> {
+  return apiFetch<{ items: TagCount[] }>('/projects/tags')
+}
+
+export function searchProjects(
+  q: string,
+  limit = 30,
+): Promise<{ items: SearchResult[] }> {
+  const search = new URLSearchParams({ q: q.trim(), limit: String(limit) })
+  return apiFetch<{ items: SearchResult[] }>(`/projects/search?${search.toString()}`)
 }
 
 export function duplicateProject(id: string): Promise<ProjectSummary> {

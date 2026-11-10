@@ -13,7 +13,7 @@ import uuid
 from typing import Any
 
 import httpx
-from fastapi import Depends, FastAPI, HTTPException
+from fastapi import Depends, FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
@@ -541,6 +541,28 @@ async def get_transcript_languages(url: str):
             detail={"code": error.code, "message": error.message},
         ) from error
     return {"items": items}
+
+
+@app.get("/transcript/track")
+async def get_transcript_track(
+    url: str, language: str = Query(min_length=2, max_length=20)
+):
+    """Read one caption track without switching the session's primary track.
+
+    The bilingual view needs a second transcript next to the one the map was
+    built from, so this endpoint deliberately leaves the live session alone.
+    """
+
+    try:
+        entries, resolved = await run_in_threadpool(
+            fetch_transcript, url, language
+        )
+    except TranscriptError as error:
+        raise HTTPException(
+            status_code=error.status_code,
+            detail={"code": error.code, "message": error.message},
+        ) from error
+    return {"language": resolved, "transcript": entries}
 
 
 @app.post("/transcript")

@@ -286,3 +286,38 @@ def test_switching_language_requires_a_live_session():
 
     assert response.status_code == 404
     assert response.json()["detail"]["code"] == "session_lost"
+
+
+def test_track_endpoint_reads_a_second_language_without_a_session(monkeypatch):
+    calls: list[str | None] = []
+
+    def fake_fetch(_url, lang=None):
+        calls.append(lang)
+        return ([{"start": 0.0, "duration": 2.0, "text": "hello"}], "en")
+
+    monkeypatch.setattr(main_module, "fetch_transcript", fake_fetch)
+
+    response = client.get(
+        "/transcript/track",
+        params={"url": "https://youtu.be/abcdefghijk", "language": "en"},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["language"] == "en"
+    assert response.json()["transcript"][0]["text"] == "hello"
+    assert calls == ["en"]
+
+
+def test_track_endpoint_reports_a_caption_failure(monkeypatch):
+    def fail(_url, _lang=None):
+        raise TranscriptError("no_transcript", "No captions.", 404)
+
+    monkeypatch.setattr(main_module, "fetch_transcript", fail)
+
+    response = client.get(
+        "/transcript/track",
+        params={"url": "https://youtu.be/abcdefghijk", "language": "en"},
+    )
+
+    assert response.status_code == 404
+    assert response.json()["detail"]["code"] == "no_transcript"
