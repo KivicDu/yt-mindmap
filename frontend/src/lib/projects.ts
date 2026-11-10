@@ -74,6 +74,7 @@ export interface ProjectStats {
   saved: number
   drafts: number
   shared: number
+  trashed: number
   shared_with_me: number
   recent: ProjectSummary[]
 }
@@ -121,6 +122,7 @@ export type ProjectSort = 'updated' | 'created' | 'title'
 export function listProjects(params: {
   draft?: boolean
   q?: string
+  tag?: string
   sort?: ProjectSort
   limit?: number
   offset?: number
@@ -128,6 +130,7 @@ export function listProjects(params: {
   const search = new URLSearchParams()
   if (params.draft !== undefined) search.set('draft', String(params.draft))
   if (params.q?.trim()) search.set('q', params.q.trim())
+  if (params.tag) search.set('tag', params.tag)
   if (params.sort) search.set('sort', params.sort)
   if (params.limit) search.set('limit', String(params.limit))
   if (params.offset) search.set('offset', String(params.offset))
