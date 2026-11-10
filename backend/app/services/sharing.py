@@ -56,7 +56,11 @@ def unique_slug(db: Session) -> str:
 
 
 def get_by_slug(db: Session, slug: str) -> Project | None:
-    return db.scalar(select(Project).where(Project.share_slug == slug))
+    return db.scalar(
+        select(Project).where(
+            Project.share_slug == slug, Project.deleted_at.is_(None)
+        )
+    )
 
 
 def member_for(db: Session, project_id: str, email: str | None) -> ProjectMember | None:
@@ -72,6 +76,8 @@ def member_for(db: Session, project_id: str, email: str | None) -> ProjectMember
 
 def role_for(db: Session, project: Project, user: User | None) -> str | None:
     """The caller's effective role, or None when the project is not visible."""
+    if project.deleted_at is not None:
+        return None
     if user is not None and project.user_id == user.id:
         return ROLE_OWNER
     if project.visibility == "private":
@@ -87,6 +93,8 @@ def role_for(db: Session, project: Project, user: User | None) -> str | None:
 
 def role_for_anonymous(project: Project) -> str | None:
     """What a visitor without an account gets from a public link."""
+    if project.deleted_at is not None:
+        return None
     if project.visibility == "unlisted" and project.share_slug:
         return project.link_role
     return None
@@ -210,6 +218,7 @@ def list_shared(
     conditions = [
         ProjectMember.email == normalize_email(user.email),
         Project.visibility != "private",
+        Project.deleted_at.is_(None),
     ]
     if query:
         pattern = f"%{query.strip()}%"
@@ -248,6 +257,7 @@ def count_shared_with_me(db: Session, user: User) -> int:
             .where(
                 ProjectMember.email == normalize_email(user.email),
                 Project.visibility != "private",
+                Project.deleted_at.is_(None),
             )
         )
         or 0

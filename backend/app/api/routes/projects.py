@@ -31,6 +31,7 @@ def _owned_or_404(db: Session, user: User, project_id: str):
 def list_projects(
     draft: bool | None = Query(default=None),
     q: str | None = Query(default=None, max_length=120),
+    tag: str | None = Query(default=None, max_length=32),
     sort: str = Query(default="updated", pattern="^(updated|created|title)$"),
     limit: int = Query(default=50, ge=1, le=200),
     offset: int = Query(default=0, ge=0),
@@ -42,6 +43,7 @@ def list_projects(
         user.id,
         is_draft=draft,
         query=q,
+        tag=tag,
         sort=sort,
         limit=limit,
         offset=offset,
@@ -91,6 +93,40 @@ def shared_projects(
     }
 
 
+@router.get("/trash")
+def trashed_projects(
+    limit: int = Query(default=50, ge=1, le=200),
+    offset: int = Query(default=0, ge=0),
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    rows, total = project_service.list_trash(db, user.id, limit=limit, offset=offset)
+    return {
+        "items": [project_service.trash_payload(project) for project in rows],
+        "total": total,
+        "limit": limit,
+        "offset": offset,
+    }
+
+
+@router.get("/tags")
+def project_tags(
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    return {"items": project_service.list_tags(db, user.id)}
+
+
+@router.get("/search")
+def search_projects(
+    q: str = Query(min_length=2, max_length=120),
+    limit: int = Query(default=30, ge=1, le=100),
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    return {"items": project_service.search(db, user.id, q, limit=limit)}
+
+
 @router.post("", status_code=status.HTTP_201_CREATED)
 def create_project(
     body: ProjectCreate,
@@ -132,7 +168,40 @@ def delete_project(
     user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
-    project_service.delete(db, _owned_or_404(db, user, project_id))
+    """Move the project to the trash; ``/restore`` brings it back."""
+    project_service.soft_delete(db, _owned_or_404(db, user, project_id))
+
+
+@router.post("/{project_id}/restore")
+def restore_project(
+    project_id: str,
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    project = project_service.get_owned(
+        db, user.id, project_id, include_deleted=True
+    )
+    if project is None:
+        raise _NOT_FOUND
+    project_service.restore(db, project)
+    return project_service.detail(project)
+
+
+@router.delete("/{project_id}/purge", status_code=status.HTTP_204_NO_CONTENT)
+def purge_project(
+    project_id: str,
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """Permanently delete a project that is already in the trash."""
+    project = project_service.get_owned(
+        db, user.id, project_id, include_deleted=True
+    )
+    if project is None:
+        raise _NOT_FOUND
+    if project.deleted_at is None:
+        raise HTTPException(status_code=409, detail="project_not_in_trash")
+    project_service.purge(db, project)
 
 
 @router.post("/{project_id}/duplicate", status_code=status.HTTP_201_CREATED)
