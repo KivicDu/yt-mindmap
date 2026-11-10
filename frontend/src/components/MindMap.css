@@ -152,3 +152,67 @@
   fill: var(--accent-soft);
   stroke: var(--accent);
 }
+
+/* ============================================================
+   Radial families: spider / bubble / circle
+   ============================================================ */
+
+.mindmap--radial .radial-ring {
+  fill: none;
+  stroke: var(--line);
+  stroke-width: 1;
+  stroke-dasharray: 3 7;
+  opacity: 0.5;
+}
+
+.mindmap--radial .radial-edge {
+  fill: none;
+  stroke-linecap: round;
+  opacity: 0.55;
+}
+
+/*
+ * The label box is estimated from the text length, never measured from the
+ * DOM, so it can come out a few pixels short. Letting the HTML overflow beats
+ * clipping a line — the same failure the tree map had with negative margins.
+ */
+.mindmap--radial .radial-node foreignObject {
+  overflow: visible;
+}
+
+.mindmap--radial .radial-frame {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  box-sizing: border-box;
+}
+
+.mindmap--radial .radial-node .mm-row {
+  display: block;
+  padding: 4px 10px;
+  border-radius: 12px;
+  background: color-mix(in srgb, var(--branch, var(--line)) 12%, var(--paper));
+  border: 1px solid color-mix(in srgb, var(--branch, var(--line)) 30%, transparent);
+  text-align: center;
+}
+
+.mindmap--radial .radial-node.is-root .mm-row {
+  border-radius: 16px;
+  background: color-mix(in srgb, var(--ink-3) 10%, var(--paper));
+  border-color: var(--line-strong);
+}
+
+.mindmap--radial .radial-node:hover .mm-row {
+  background: color-mix(in srgb, var(--branch, var(--line)) 22%, var(--paper));
+}
+
+.mindmap--radial .radial-node.mm-selected .mm-row {
+  background: var(--accent-soft);
+  border-color: var(--accent-line);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 32%, transparent);
+}
+
+.mindmap--radial .radial-node.mm-selected .mm-row,
+.mindmap--radial .radial-node.mm-selected .mm-row a {
+  color: var(--accent-ink);
+}
