@@ -1,4 +1,4 @@
-import { lazy, Suspense, useState, useRef, useEffect, useCallback } from 'react'
+import { lazy, Suspense, useState, useRef, useEffect, useCallback, useMemo } from 'react'
 import type { ChangeEvent } from 'react'
 import { Link, useNavigate, useParams } from 'react-router-dom'
 import YouTube from 'react-youtube'
@@ -34,6 +34,7 @@ import { getAccessToken, refreshSession } from '../../lib/api'
 import { exportMap, type ExportFormat } from '../../lib/mapExport'
 import { SkeletonList } from '../../components/ui/Skeleton'
 import { useToast } from '../../components/ui/useToast'
+import { activeChapter, buildChapters } from '../../lib/chapters'
 import {
   extractVideoId,
   isCaptionOnlyProblem,
@@ -982,6 +983,10 @@ function App() {
   const totalSeconds = lastEntry ? lastEntry.start + (lastEntry.duration || 0) : 0
   const progress = totalSeconds > 0 ? Math.min(100, (currentTime / totalSeconds) * 100) : 0
   const playbackError = playerError
+  // `mapVersion` is the render trigger for the mutable tree in `nodesRef`.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  const chapters = useMemo(() => buildChapters(nodesRef.current), [mapVersion])
+  const currentChapter = activeChapter(chapters, currentTime)
 
   return (
     <div className="app-shell">
@@ -1251,6 +1256,36 @@ function App() {
               {totalSeconds > 0 ? formatTime(totalSeconds) : '—:—'}
             </span>
           </div>
+
+          {chapters.length > 0 && (
+            <nav className="chapter-rail" aria-label="Chương theo chủ đề">
+              <div className="chapter-rail__head">
+                <span className="chapter-rail__title">Chương</span>
+                <span className="chapter-rail__now">
+                  {currentChapter ? currentChapter.label : 'Chưa tới chương đầu'}
+                </span>
+              </div>
+              <ol className="chapter-rail__list">
+                {chapters.map((chapter) => {
+                  const isActive = currentChapter?.id === chapter.id
+                  return (
+                    <li key={chapter.id}>
+                      <button
+                        type="button"
+                        className={`chapter-rail__item${isActive ? ' is-active' : ''}`}
+                        aria-current={isActive ? 'true' : undefined}
+                        title={`Tua tới ${formatTime(chapter.start)}`}
+                        onClick={() => handleSeek(chapter.start)}
+                      >
+                        <span className="chapter-rail__time">{formatTime(chapter.start)}</span>
+                        <span className="chapter-rail__label">{chapter.label}</span>
+                      </button>
+                    </li>
+                  )
+                })}
+              </ol>
+            </nav>
+          )}
         </section>
 
         <section className="panel panel--details" aria-label="Chi tiết phiên học">
