@@ -264,6 +264,13 @@ const TreeMap = forwardRef<MindMapHandle, TreeMapProps>(
           // update shrinks the text below the readable floor.
           autoFit: false,
           duration: window.matchMedia('(prefers-reduced-motion: reduce)').matches ? 0 : 260,
+          // markmap turns the wheel into panning on a Mac (`scrollForPan` is
+          // true for "Macintosh" user agents) and only zooms with ctrl+wheel.
+          // A trackpad scroll then looks like the map jumping around while the
+          // zoom never changes. The wheel zooms here, like everywhere else in
+          // the app, and panning stays on drag.
+          scrollForPan: false,
+          pan: false,
           fitRatio: 0.9,
           maxInitialScale: 1.5,
           maxWidth: 280,

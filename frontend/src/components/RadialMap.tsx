@@ -171,19 +171,32 @@ const RadialMap = forwardRef<MindMapHandle, RadialMapProps>(
       }
     }
 
-    const handleWheel = (event: React.WheelEvent<SVGSVGElement>) => {
+    const handleWheel = useCallback((event: WheelEvent) => {
+      // React attaches `wheel` to the root as a passive listener, so calling
+      // preventDefault there is ignored and the browser still scrolls or
+      // pinch-zooms the whole page. This handler is bound natively instead.
       event.preventDefault()
       const rect = refSvg.current?.getBoundingClientRect()
       if (!rect) return
       const px = event.clientX - rect.left
       const py = event.clientY - rect.top
+      // A trackpad pinch arrives as ctrl+wheel with tiny deltas, so it needs a
+      // stronger factor than a normal scroll to feel the same.
+      const step = event.ctrlKey ? 0.01 : 0.0015
       setView((current) => {
-        const next = current.k * Math.exp(-event.deltaY * 0.0015)
+        const next = current.k * Math.exp(-event.deltaY * step)
         const k = Math.min(MAX_SCALE, Math.max(MIN_SCALE, next))
         const ratio = k / current.k
         return { k, x: px - (px - current.x) * ratio, y: py - (py - current.y) * ratio }
       })
-    }
+    }, [])
+
+    useEffect(() => {
+      const svg = refSvg.current
+      if (!svg) return
+      svg.addEventListener('wheel', handleWheel, { passive: false })
+      return () => svg.removeEventListener('wheel', handleWheel)
+    }, [handleWheel])
 
     const handleClick = (event: React.MouseEvent<SVGSVGElement>) => {
       if (drag.current?.moved) return
@@ -254,7 +267,6 @@ const RadialMap = forwardRef<MindMapHandle, RadialMapProps>(
         onPointerMove={handlePointerMove}
         onPointerUp={handlePointerUp}
         onPointerCancel={handlePointerUp}
-        onWheel={handleWheel}
         onClick={handleClick}
       >
         <g transform={`translate(${view.x} ${view.y}) scale(${view.k})`}>
