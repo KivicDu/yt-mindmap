@@ -35,7 +35,6 @@
 .mindmap .mm-row {
   display: inline-block;
   padding: 2px 5px;
-  margin: -2px -5px;
   border-radius: var(--r-sm);
   text-align: left;
   transition: background-color var(--t-fast) var(--ease);

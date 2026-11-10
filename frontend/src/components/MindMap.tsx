@@ -272,11 +272,11 @@ const MindMap = forwardRef<MindMapHandle, MindMapProps>(
           duration: window.matchMedia('(prefers-reduced-motion: reduce)').matches ? 0 : 260,
           fitRatio: 0.9,
           maxInitialScale: 1.5,
-          maxWidth: 260,
+          maxWidth: 280,
           nodeMinHeight: 20,
           paddingX: 10,
           spacingHorizontal: 72,
-          spacingVertical: 6,
+          spacingVertical: 10,
           color: (node: any) => {
             const depth = node?.state?.depth ?? 0
             return depth <= 1
