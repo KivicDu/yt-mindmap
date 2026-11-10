@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from 'react'
 import type { FormEvent } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
 import ThemeToggle from '../../components/ThemeToggle'
+import NewProjectButton from '../../components/NewProjectButton'
 import { SkeletonList } from '../../components/ui/Skeleton'
 import { useToast } from '../../components/ui/useToast'
 import { useAuth } from '../../context/AuthContext'
@@ -254,7 +255,7 @@ function Overview({
           bất kỳ dự án nào để tiếp tục đúng chỗ đang học — phụ đề, ghi chú và ghim vẫn còn nguyên.
         </p>
         <div className="dash-actions">
-          <Link className="dash-cta" to="/app">Tạo mindmap mới</Link>
+          <NewProjectButton className="dash-cta">Tạo mindmap mới</NewProjectButton>
           <button
             className="dash-cta dash-cta--ghost"
             type="button"
@@ -440,9 +441,9 @@ function ProjectList({
               setOffset(0)
             }}
           />
-          <Link className="dash-cta dash-cta--ghost" to="/app">
+          <NewProjectButton className="dash-cta dash-cta--ghost">
             {draft ? 'Tạo bản nháp mới' : 'Tạo dự án mới'}
-          </Link>
+          </NewProjectButton>
         </div>
 
         {tags.length > 0 && (
