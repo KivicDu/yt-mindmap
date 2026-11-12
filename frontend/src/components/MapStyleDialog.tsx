@@ -44,6 +44,42 @@ function LayoutPreview({ layout, colors }: { layout: MapLayout; colors: readonly
     )
   }
 
+  if (layout === 'tree-down') {
+    // The same tree as above, rotated a quarter turn: root at the top, one row
+    // per level. It is what the picker promises, so the preview has to show
+    // the direction rather than just "a tree".
+    const leaves = [
+      { x: 26, color: a },
+      { x: 60, color: b },
+      { x: 94, color: c },
+    ]
+    return (
+      <svg className="mstyle-preview" viewBox="0 0 120 76" aria-hidden="true">
+        {leaves.map((leaf) => (
+          <path
+            key={`line-${leaf.x}`}
+            d={`M 60 22 C 60 32 ${leaf.x} 32 ${leaf.x} 44`}
+            fill="none"
+            stroke={leaf.color}
+            strokeWidth="1.5"
+            opacity="0.65"
+          />
+        ))}
+        {leaves.map((leaf) => (
+          <circle
+            key={`leaf-${leaf.x}`}
+            cx={leaf.x}
+            cy={46}
+            r="4.5"
+            fill={leaf.color}
+            opacity="0.9"
+          />
+        ))}
+        <circle cx="60" cy="16" r="7" fill={a} />
+      </svg>
+    )
+  }
+
   if (layout === 'spider') {
     const spokes = [0, 1, 2, 3, 4, 5]
     return (

@@ -8,7 +8,7 @@
  * share, so a new palette is one entry, not a hunt through stylesheets.
  */
 
-export type MapLayout = 'tree' | 'spider' | 'bubble' | 'circle'
+export type MapLayout = 'tree' | 'tree-down' | 'spider' | 'bubble' | 'circle'
 export type MapPalette = 'paper' | 'sage' | 'sky' | 'blush' | 'lilac' | 'sand'
 
 export interface MapStyle {
@@ -74,6 +74,11 @@ export const MAP_LAYOUTS: readonly LayoutDef[] = [
     id: 'tree',
     name: 'Tree map',
     hint: 'Cây trái → phải, quen thuộc và dễ đọc nhất',
+  },
+  {
+    id: 'tree-down',
+    name: 'Tree map dọc',
+    hint: 'Cây trên → xuống như sơ đồ tổ chức, hợp bài ít nhánh',
   },
   {
     id: 'spider',

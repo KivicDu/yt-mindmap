@@ -14,11 +14,11 @@ import {
 } from './mapStyle'
 
 describe('map style catalog', () => {
-  it('offers six pastel palettes and four layouts, all with unique ids', () => {
+  it('offers six pastel palettes and five layouts, all with unique ids', () => {
     expect(MAP_PALETTES).toHaveLength(6)
-    expect(MAP_LAYOUTS).toHaveLength(4)
+    expect(MAP_LAYOUTS).toHaveLength(5)
     expect(new Set(MAP_PALETTES.map((item) => item.id)).size).toBe(6)
-    expect(new Set(MAP_LAYOUTS.map((item) => item.id)).size).toBe(4)
+    expect(new Set(MAP_LAYOUTS.map((item) => item.id)).size).toBe(5)
   })
 
   it('gives every palette six distinct branch colours', () => {
