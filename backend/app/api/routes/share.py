@@ -5,16 +5,66 @@ A slug is a capability, but a capability alone is not always enough: an
 role so the SPA can render a read-only map or offer the workspace.
 """
 
-from fastapi import APIRouter, Depends, HTTPException, status
+import html
+import re
+from urllib.parse import quote
+
+from fastapi import APIRouter, Depends, HTTPException, Response, status
 from sqlalchemy.orm import Session
 
 from app.api.deps import get_optional_user
+from app.core.config import get_settings
 from app.db.session import get_db
 from app.models.user import User
 from app.services import projects as project_service
 from app.services import sharing as sharing_service
 
 router = APIRouter(prefix="/share", tags=["share"])
+
+GENERIC_SHARE_TITLE = "Sơ đồ tư duy được chia sẻ | yt-mindmap"
+GENERIC_SHARE_DESCRIPTION = (
+    "Xem sơ đồ tư duy và nội dung học tập được chia sẻ bằng yt-mindmap."
+)
+
+
+@router.get("/meta", response_class=Response, include_in_schema=False)
+def shared_project_metadata(
+    slug: str,
+    db: Session = Depends(get_db),
+) -> Response:
+    """Render safe social metadata for public share URLs during nginx SSI."""
+    project = sharing_service.get_by_slug(db, slug)
+    if project and project.visibility == "unlisted":
+        title = f"{project.title} — sơ đồ tư duy | yt-mindmap"
+        description = f"Xem sơ đồ tư duy “{project.title}” được chia sẻ bằng yt-mindmap."
+    else:
+        title = GENERIC_SHARE_TITLE
+        description = GENERIC_SHARE_DESCRIPTION
+
+    frontend_url = get_settings().FRONTEND_URL.rstrip("/")
+    share_url = f"{frontend_url}/s/{quote(slug, safe='')}"
+    tags = [
+        f'<title>{html.escape(title)}</title>',
+        f'<meta name="description" content="{html.escape(description, quote=True)}">',
+        '<meta name="robots" content="noindex,nofollow">',
+        '<meta property="og:type" content="website">',
+        '<meta property="og:site_name" content="yt-mindmap">',
+        f'<meta property="og:title" content="{html.escape(title, quote=True)}">',
+        f'<meta property="og:description" content="{html.escape(description, quote=True)}">',
+        f'<meta property="og:url" content="{html.escape(share_url, quote=True)}">',
+    ]
+
+    if project and project.visibility == "unlisted" and re.fullmatch(
+        r"[A-Za-z0-9_-]{11}", project.video_id or ""
+    ):
+        thumbnail_url = (
+            f"https://i.ytimg.com/vi/{project.video_id}/hqdefault.jpg"
+        )
+        tags.append(
+            f'<meta property="og:image" content="{html.escape(thumbnail_url, quote=True)}">'
+        )
+
+    return Response(content="\n".join(tags), media_type="text/html")
 
 
 @router.get("/{slug}")

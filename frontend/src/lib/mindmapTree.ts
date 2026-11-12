@@ -91,8 +91,8 @@ export function nodeToMarkmap(node: MapNode, depth = 1): MarkmapNode {
     ? `<span class="mm-time" title="Nhảy đến ${formatTime(node.time)}">[${escapeHtml(formatTime(node.time))}]</span>`
     : ''
   const title = hasTime(node.time)
-    ? `<a href="${SEEK_PREFIX}${node.time.toFixed(1)}" data-node-id="${id}" title="${escapeHtml(label)}">${label}</a>`
-    : `<span data-node-id="${id}" title="${escapeHtml(label)}">${label}</span>`
+    ? `<a href="${SEEK_PREFIX}${node.time.toFixed(1)}" data-node-id="${id}" title="${escapeHtml(label)}" aria-label="${escapeHtml(cleanLabel(node.label))}">${label}</a>`
+    : `<span data-node-id="${id}" title="${escapeHtml(label)}" aria-label="${escapeHtml(cleanLabel(node.label))}" role="button" tabindex="0" aria-keyshortcuts="Enter Space">${label}</span>`
 
   const pin = node.pinned
     ? '<span class="mm-pin" title="Đã ghim" aria-hidden="true">📌</span>'

@@ -7,6 +7,7 @@ import './Workspace.css'
 import ThemeToggle from '../../components/ThemeToggle'
 import ExportMenu from '../../components/ExportMenu'
 import ShortcutHelp from '../../components/ShortcutHelp'
+import ChapterRail from '../../components/ChapterRail'
 import TranscriptPanel, {
   type TranscriptCue as TranscriptEntry,
 } from '../../components/TranscriptPanel'
@@ -35,8 +36,10 @@ import { getAccessToken, refreshSession } from '../../lib/api'
 import { exportMap, type ExportFormat } from '../../lib/mapExport'
 import { SkeletonList } from '../../components/ui/Skeleton'
 import { useToast } from '../../components/ui/useToast'
-import { activeChapter, buildChapters } from '../../lib/chapters'
+import { buildChapters } from '../../lib/chapters'
 import { isTypingTarget, shortcutFor } from '../../lib/shortcuts'
+import { PlaybackClock } from '../../lib/playbackClock'
+import { PlaybackProgress, PlaybackTime } from '../../components/PlaybackTime'
 import {
   extractVideoId,
   fetchTranscriptTrack,
@@ -129,7 +132,7 @@ function App() {
   const [nodeCount, setNodeCount] = useState(0)
   const [player, setPlayer] = useState<any>(null)
   const [isPlaying, setIsPlaying] = useState(false)
-  const [currentTime, setCurrentTime] = useState(0)
+  const [playbackClock] = useState(() => new PlaybackClock())
   const [autoUpdate, setAutoUpdate] = useState(true)
   const [focusRecent, setFocusRecent] = useState(false)
   const [status, setStatusState] = useState<Status>({ kind: 'idle', text: 'Sẵn sàng' })
@@ -141,6 +144,7 @@ function App() {
   const [isUpdating, setIsUpdating] = useState(false)
   const [isLoading, setIsLoading] = useState(false)
   const [editor, setEditor] = useState<NodeDraft | null>(null)
+  const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null)
   const [isSaving, setIsSaving] = useState(false)
   const [mapVersion, setMapVersion] = useState(0)
   const [consumedUntil, setConsumedUntil] = useState(0)
@@ -436,7 +440,7 @@ function App() {
     setMapTitle(DEFAULT_TITLE)
     applyNodes([], false)
     setEditor(null)
-    setCurrentTime(0)
+    playbackClock.set(0, true)
     currentTimeRef.current = 0
     lastTriggerRef.current = 0
     setIsLoading(true)
@@ -701,6 +705,7 @@ function App() {
 
   const onPlayerError: YouTubeProps['onError'] = (event) => {
     const error = playerErrorMessage(event.data)
+    setIsPlaying(false)
     setPlayerError(error)
     setStatus(error.title, 'error')
   }
@@ -710,10 +715,10 @@ function App() {
       if (!player || typeof player.seekTo !== 'function') return
       player.seekTo(seconds, true)
       currentTimeRef.current = seconds
-      setCurrentTime(seconds)
+      playbackClock.set(seconds, true)
       setStatus(`Đã tua đến ${formatTime(seconds)}`, 'idle')
     },
-    [player, setStatus],
+    [player, playbackClock, setStatus],
   )
 
   /** Caption tracks are fetched only when the picker is opened. */
@@ -888,6 +893,9 @@ function App() {
     } else if (event.data === YT.PlayerState.PAUSED) {
       setIsPlaying(false)
       setStatus('Tạm dừng', 'idle')
+    } else if (event.data === YT.PlayerState.ENDED) {
+      setIsPlaying(false)
+      setStatus('Đã phát xong', 'idle')
     }
   }
 
@@ -897,7 +905,7 @@ function App() {
     const interval = setInterval(() => {
       const time = player.getCurrentTime()
       currentTimeRef.current = time
-      setCurrentTime(time)
+      playbackClock.set(time)
       if (autoUpdate && canEdit && videoId && transcript.length > 0 && !isUpdatingRef.current) {
         if (time - lastTriggerRef.current >= AUTO_UPDATE_SECONDS) {
           lastTriggerRef.current = time
@@ -907,7 +915,7 @@ function App() {
     }, 1000)
 
     return () => clearInterval(interval)
-  }, [player, isPlaying, autoUpdate, canEdit, videoId, transcript.length])
+  }, [player, isPlaying, autoUpdate, canEdit, videoId, transcript.length, playbackClock])
 
   useEffect(() => {
     eventSourceRef.current?.close()
@@ -946,6 +954,7 @@ function App() {
   }, [])
 
   const handleSelectNode = useCallback((nodeId: string) => {
+    setSelectedNodeId(nodeId)
     if (!canEdit) return
     const node = findNodeById(nodesRef.current, nodeId)
     if (!node) return
@@ -1143,12 +1152,10 @@ function App() {
 
   const lastEntry = transcript[transcript.length - 1]
   const totalSeconds = lastEntry ? lastEntry.start + (lastEntry.duration || 0) : 0
-  const progress = totalSeconds > 0 ? Math.min(100, (currentTime / totalSeconds) * 100) : 0
   const playbackError = playerError
   // `mapVersion` is the render trigger for the mutable tree in `nodesRef`.
   // eslint-disable-next-line react-hooks/exhaustive-deps
   const chapters = useMemo(() => buildChapters(nodesRef.current), [mapVersion])
-  const currentChapter = activeChapter(chapters, currentTime)
 
   return (
     <div className="app-shell">
@@ -1247,6 +1254,7 @@ function App() {
             <button
               className="btn btn--ghost btn--sm app-topbar__upload"
               type="button"
+              aria-label="Tải file phụ đề .srt hoặc .vtt"
               onClick={() => fileInputRef.current?.click()}
               disabled={isLoading}
             >
@@ -1355,7 +1363,7 @@ function App() {
           <span className="app-status__text">{status.text}</span>
           <span className="app-status__meta">
             {transcript.length > 0 && <span>{transcript.length} mục phụ đề</span>}
-            {videoId && <span className="app-status__time">{formatTime(currentTime)}</span>}
+            {videoId && <PlaybackTime clock={playbackClock} className="app-status__time" />}
           </span>
         </div>
       </header>
@@ -1424,9 +1432,9 @@ function App() {
           </div>
 
           <div className="player__foot">
-            <span className="player__clock">{formatTime(currentTime)}</span>
+            <PlaybackTime clock={playbackClock} className="player__clock" />
             <span className="player__track" aria-hidden="true">
-              <span className="player__track-fill" style={{ width: `${progress}%` }} />
+              <PlaybackProgress clock={playbackClock} totalSeconds={totalSeconds} />
             </span>
             <span className="player__clock player__clock--muted">
               {totalSeconds > 0 ? formatTime(totalSeconds) : '—:—'}
@@ -1434,33 +1442,7 @@ function App() {
           </div>
 
           {chapters.length > 0 && (
-            <nav className="chapter-rail" aria-label="Chương theo chủ đề">
-              <div className="chapter-rail__head">
-                <span className="chapter-rail__title">Chương</span>
-                <span className="chapter-rail__now">
-                  {currentChapter ? currentChapter.label : 'Chưa tới chương đầu'}
-                </span>
-              </div>
-              <ol className="chapter-rail__list">
-                {chapters.map((chapter) => {
-                  const isActive = currentChapter?.id === chapter.id
-                  return (
-                    <li key={chapter.id}>
-                      <button
-                        type="button"
-                        className={`chapter-rail__item${isActive ? ' is-active' : ''}`}
-                        aria-current={isActive ? 'true' : undefined}
-                        title={`Tua tới ${formatTime(chapter.start)}`}
-                        onClick={() => handleSeek(chapter.start)}
-                      >
-                        <span className="chapter-rail__time">{formatTime(chapter.start)}</span>
-                        <span className="chapter-rail__label">{chapter.label}</span>
-                      </button>
-                    </li>
-                  )
-                })}
-              </ol>
-            </nav>
+            <ChapterRail chapters={chapters} clock={playbackClock} onSeek={handleSeek} />
           )}
         </section>
 
@@ -1639,7 +1621,7 @@ function App() {
             ) : detailTab === 'transcript' ? (
               <TranscriptPanel
                 entries={transcript}
-                currentTime={currentTime}
+                playbackClock={playbackClock}
                 onSeek={handleSeek}
                 language={transcriptLang}
                 languages={languages}
@@ -1743,15 +1725,16 @@ function App() {
                   </div>
                   <div>
                     <dt>Thời điểm</dt>
-                    <dd>{videoId ? formatTime(currentTime) : '—'}</dd>
+                    <dd>{videoId ? <PlaybackTime clock={playbackClock} /> : '—'}</dd>
                   </div>
                 </dl>
 
                 <div className="session__hint">
                   <span className="session__hint-title">Mẹo</span>
                   <p>
-                    Nhấn vào một nhánh có mốc thời gian để tua video tới đúng đoạn. Nhấn vào
-                    nhãn (không phải mốc giờ) để sửa nội dung.
+                    Dùng Tab hoặc phím mũi tên để duyệt nhánh, rồi Enter hoặc Space để chọn.
+                    Dùng +/− để thu phóng và 0 để vừa khung. Nhánh có mốc thời gian sẽ tua
+                    video; nhãn node sẽ mở chỉnh sửa.
                   </p>
                 </div>
 
@@ -1845,7 +1828,7 @@ function App() {
                 ref={mindmapRef}
                 onSeek={handleSeek}
                 onSelect={handleSelectNode}
-                selectedId={editor?.id ?? null}
+                selectedId={selectedNodeId}
                 collapseOld={focusRecent}
                 onReady={handleMindMapReady}
               />

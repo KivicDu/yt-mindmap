@@ -5,8 +5,15 @@
  * SVG/PNG come from the live markmap SVG. The live SVG already carries
  * markmap's own stylesheet, so the export only has to add this app's node
  * styles and resolve the theme custom properties to literal values.
+ *
+ * PNG needs one extra step. The map draws its labels as HTML inside
+ * `<foreignObject>`, and rasterising that taints the canvas in every browser
+ * ("Tainted canvases may not be exported" / "The operation is insecure"), so
+ * the PNG path replaces those frames with real `<text>` lines measured from
+ * the live DOM. The SVG path keeps the HTML, which browsers render perfectly.
  */
 
+import mindMapCss from '../components/MindMap.css?raw'
 import { formatTime, type MapNode } from './mindmapTree'
 
 export type ExportFormat = 'svg' | 'png' | 'markdown'
@@ -29,6 +36,7 @@ export interface MapExportSource {
 
 const EXPORT_PADDING = 28
 const PNG_SCALE = 2
+const SVG_NS = 'http://www.w3.org/2000/svg'
 
 /**
  * Theme variables the SVG and its foreignObject HTML read. Resolving them up
@@ -101,23 +109,162 @@ export function mapToMarkdown({ title, nodes }: Pick<MapExportSource, 'title' | 
   return `${lines.join('\n')}\n`
 }
 
-/** CSS rules that style map nodes. Markmap's base sheet is already in the SVG. */
-function collectMapCss(): string {
-  const parts: string[] = []
-  for (const sheet of Array.from(document.styleSheets)) {
-    let rules: CSSRuleList
-    try {
-      rules = sheet.cssRules
-    } catch {
-      // A cross-origin sheet cannot be read; it never contains map styles.
-      continue
+interface TextFragment {
+  text: string
+  x: number
+  y: number
+  size: number
+  weight: string
+  family: string
+  fill: string
+}
+
+interface BadgeBox {
+  x: number
+  y: number
+  width: number
+  height: number
+  fill: string
+  stroke: string
+}
+
+function toMap(inverse: DOMMatrix, x: number, y: number): { x: number; y: number } {
+  const point = new DOMPoint(x, y).matrixTransform(inverse)
+  return { x: point.x, y: point.y }
+}
+
+/**
+ * One HTML node box turned into text lines in map coordinates.
+ *
+ * A text node can wrap across several lines, so every word is measured on its
+ * own and words that share a line box are joined back together. This keeps the
+ * line breaks the learner sees instead of re-implementing the wrapping.
+ */
+function fragmentsFromFrame(frame: Element, inverse: DOMMatrix): TextFragment[] {
+  const fragments: TextFragment[] = []
+  const walker = document.createTreeWalker(frame, NodeFilter.SHOW_TEXT)
+
+  for (let node = walker.nextNode(); node; node = walker.nextNode()) {
+    const value = node.nodeValue ?? ''
+    if (!value.trim()) continue
+    const parent = node.parentElement
+    if (!parent) continue
+
+    const style = getComputedStyle(parent)
+    const size = Number.parseFloat(style.fontSize) || 13
+    const weight = style.fontWeight || '400'
+    const family = style.fontFamily || 'sans-serif'
+    const fill = style.color || '#333'
+
+    const tokens: { text: string; rect: DOMRect }[] = []
+    const wordPattern = /\S+/g
+    let match: RegExpExecArray | null
+    while ((match = wordPattern.exec(value))) {
+      const range = document.createRange()
+      range.setStart(node, match.index)
+      range.setEnd(node, match.index + match[0].length)
+      const rect = Array.from(range.getClientRects()).find(
+        (candidate) => candidate.width > 0 && candidate.height > 0,
+      )
+      if (rect) tokens.push({ text: match[0], rect })
     }
-    for (const rule of Array.from(rules)) {
-      const text = rule.cssText
-      if (text.includes('.mindmap') || text.includes('.mm-')) parts.push(text)
+
+    const lines: { top: number; bottom: number; left: number; text: string }[] = []
+    for (const token of tokens) {
+      const line = lines.find((candidate) => Math.abs(candidate.top - token.rect.top) < 2)
+      if (line) {
+        line.left = Math.min(line.left, token.rect.left)
+        line.bottom = Math.max(line.bottom, token.rect.bottom)
+        line.text = `${line.text} ${token.text}`
+      } else {
+        lines.push({
+          top: token.rect.top,
+          bottom: token.rect.bottom,
+          left: token.rect.left,
+          text: token.text,
+        })
+      }
+    }
+
+    for (const line of lines) {
+      const height = line.bottom - line.top
+      // Centre the font box inside the line box, then sit the baseline at ~80%
+      // of the em, which is close enough for a raster export.
+      const baseline = line.top + (height - size) / 2 + size * 0.8
+      const start = toMap(inverse, line.left, baseline)
+      fragments.push({ text: line.text, x: start.x, y: start.y, size, weight, family, fill })
     }
   }
-  return parts.join('\n')
+
+  return fragments
+}
+
+/** Timestamp pills are drawn with a border, so the raster needs their box too. */
+function badgesFromFrame(frame: Element, inverse: DOMMatrix): BadgeBox[] {
+  return Array.from(frame.querySelectorAll('.mm-time')).map((element) => {
+    const rect = element.getBoundingClientRect()
+    const style = getComputedStyle(element)
+    const topLeft = toMap(inverse, rect.left, rect.top)
+    const bottomRight = toMap(inverse, rect.right, rect.bottom)
+    return {
+      x: topLeft.x,
+      y: topLeft.y,
+      width: bottomRight.x - topLeft.x,
+      height: bottomRight.y - topLeft.y,
+      fill: style.backgroundColor || 'transparent',
+      stroke: style.borderTopColor || 'transparent',
+    }
+  })
+}
+
+/**
+ * Swap every `<foreignObject>` for measured `<text>` so the SVG can be drawn
+ * into a canvas without tainting it.
+ */
+function replaceFramesWithText(svg: SVGSVGElement, clone: SVGSVGElement): void {
+  const matrix = svg.getScreenCTM()
+  if (!matrix) return
+  const inverse = matrix.inverse()
+
+  const frames = Array.from(svg.querySelectorAll('foreignObject'))
+  const fragments: TextFragment[] = []
+  const badges: BadgeBox[] = []
+  for (const frame of frames) {
+    fragments.push(...fragmentsFromFrame(frame, inverse))
+    badges.push(...badgesFromFrame(frame, inverse))
+  }
+
+  clone.querySelectorAll('foreignObject').forEach((node) => node.remove())
+  if (fragments.length === 0) return
+
+  const layer = document.createElementNS(SVG_NS, 'g')
+  layer.setAttribute('class', 'mm-export-text')
+
+  for (const badge of badges) {
+    const rect = document.createElementNS(SVG_NS, 'rect')
+    rect.setAttribute('x', String(badge.x))
+    rect.setAttribute('y', String(badge.y))
+    rect.setAttribute('width', String(badge.width))
+    rect.setAttribute('height', String(badge.height))
+    rect.setAttribute('rx', '3')
+    rect.setAttribute('fill', badge.fill)
+    rect.setAttribute('stroke', badge.stroke)
+    layer.appendChild(rect)
+  }
+
+  for (const fragment of fragments) {
+    const text = document.createElementNS(SVG_NS, 'text')
+    text.setAttribute('x', String(fragment.x))
+    text.setAttribute('y', String(fragment.y))
+    text.setAttribute('font-size', String(fragment.size))
+    text.setAttribute('font-weight', fragment.weight)
+    text.setAttribute('font-family', fragment.family)
+    text.setAttribute('fill', fragment.fill)
+    text.textContent = fragment.text
+    layer.appendChild(text)
+  }
+
+  clone.appendChild(layer)
 }
 
 /**
@@ -127,8 +274,11 @@ function collectMapCss(): string {
  * export frames the whole map at its native size rather than the viewport the
  * learner happens to be looking at.
  */
-export function buildMapSvg(source: MapExportSource): string {
-  const { svg, bounds, title } = source
+export function buildMapSvg(
+  source: MapExportSource,
+  options: { rasterSafe?: boolean } = {},
+): string {
+  const { svg, bounds } = source
   if (!svg || !bounds) {
     throw new Error('Sơ đồ chưa sẵn sàng để xuất.')
   }
@@ -165,7 +315,7 @@ export function buildMapSvg(source: MapExportSource): string {
   clone.querySelectorAll('g.markmap-highlight').forEach((node) => node.remove())
   clone.querySelectorAll('.mm-selected').forEach((node) => node.classList.remove('mm-selected'))
 
-  const background = document.createElementNS('http://www.w3.org/2000/svg', 'rect')
+  const background = document.createElementNS(SVG_NS, 'rect')
   background.setAttribute('x', String(viewX))
   background.setAttribute('y', String(viewY))
   background.setAttribute('width', String(viewWidth))
@@ -173,12 +323,18 @@ export function buildMapSvg(source: MapExportSource): string {
   background.setAttribute('fill', computed.getPropertyValue('--paper').trim() || '#ffffff')
   clone.insertBefore(background, clone.firstChild)
 
-  const style = document.createElementNS('http://www.w3.org/2000/svg', 'style')
-  style.textContent = collectMapCss()
+  // Rasterising an SVG that still holds foreignObject HTML taints the canvas,
+  // so the PNG path gets measured text lines instead.
+  if (options.rasterSafe) {
+    replaceFramesWithText(svg, clone)
+  }
+
+  const style = document.createElementNS(SVG_NS, 'style')
+  style.textContent = mindMapCss
   clone.appendChild(style)
 
   const serialized = new XMLSerializer().serializeToString(clone)
-  return `<?xml version="1.0" encoding="UTF-8"?>\n<!-- ${title || 'Mind map'} -->\n${serialized}`
+  return `<?xml version="1.0" encoding="UTF-8"?>\n${serialized}`
 }
 
 function download(blob: Blob, filename: string): void {
@@ -213,9 +369,16 @@ async function svgToPngBlob(markup: string, width: number, height: number): Prom
     context.scale(PNG_SCALE, PNG_SCALE)
     context.drawImage(image, 0, 0, width, height)
 
-    const blob = await new Promise<Blob | null>((resolve) =>
-      canvas.toBlob(resolve, 'image/png'),
-    )
+    let blob: Blob | null = null
+    try {
+      blob = await new Promise<Blob | null>((resolve) => canvas.toBlob(resolve, 'image/png'))
+    } catch {
+      // A tainted canvas throws here; the text-only SVG should never cause it,
+      // but a clear message beats a raw SecurityError in the status bar.
+      throw new Error(
+        'Trình duyệt chặn xuất PNG cho sơ đồ này. Hãy thử xuất SVG hoặc Markdown.',
+      )
+    }
     if (!blob) throw new Error('Không tạo được file PNG.')
     return blob
   } finally {
@@ -233,7 +396,7 @@ export async function exportMap(format: ExportFormat, source: MapExportSource): 
     return
   }
 
-  const markup = buildMapSvg(source)
+  const markup = buildMapSvg(source, { rasterSafe: format === 'png' })
   if (format === 'svg') {
     download(new Blob([markup], { type: 'image/svg+xml;charset=utf-8' }), `${base}.svg`)
     return

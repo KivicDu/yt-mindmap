@@ -14,12 +14,15 @@ import ThemeToggle from '../../components/ThemeToggle'
 import type { MindMapHandle } from '../../components/MindMap'
 import { useAuth } from '../../context/AuthContext'
 import { API_BASE, ApiError } from '../../lib/api'
+import { applyRouteMetadata, getRouteMetadata } from '../../lib/seo'
 import {
   getSharedBySlug,
   type SharedProjectView,
 } from '../../lib/projects'
-import { formatTime, normalizeTree, type MapNode } from '../../lib/mindmapTree'
+import { normalizeTree, type MapNode } from '../../lib/mindmapTree'
 import { watchUrl, playerErrorMessage, type PlayerErrorInfo } from '../../lib/youtube'
+import { PlaybackClock } from '../../lib/playbackClock'
+import { PlaybackTime } from '../../components/PlaybackTime'
 import '../Workspace/Workspace.css'
 import './SharedProject.css'
 
@@ -78,7 +81,9 @@ function SharedProject() {
   const [loading, setLoading] = useState(true)
   const [player, setPlayer] = useState<any>(null)
   const [playerError, setPlayerError] = useState<PlayerErrorInfo | null>(null)
-  const [currentTime, setCurrentTime] = useState(0)
+  const [isPlaying, setIsPlaying] = useState(false)
+  const [playbackClock] = useState(() => new PlaybackClock())
+  const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null)
 
   const mindmapRef = useRef<MindMapHandle>(null)
   const nodesRef = useRef<MapNode[]>([])
@@ -118,6 +123,19 @@ function SharedProject() {
     }
   }, [slug, authStatus, applyNodes])
 
+  useEffect(() => {
+    if (!data) return
+    const routeMetadata = getRouteMetadata(location.pathname)
+    applyRouteMetadata(
+      {
+        ...routeMetadata,
+        title: `${data.project.title} — sơ đồ tư duy | yt-mindmap`,
+        description: `Xem sơ đồ tư duy “${data.project.title}” được chia sẻ bằng yt-mindmap.`,
+      },
+      location.pathname,
+    )
+  }, [data, location.pathname])
+
   // The project row is the initial snapshot; the shared live session adds
   // edits from collaborators as they happen.
   useEffect(() => {
@@ -145,11 +163,16 @@ function SharedProject() {
     applyNodes(nodesRef.current, false)
   }, [applyNodes])
 
+  const handleSelectNode = useCallback((nodeId: string) => {
+    setSelectedNodeId(nodeId)
+  }, [])
+
   const onPlayerReady: YouTubeProps['onReady'] = (event) => {
     setPlayer(event.target)
   }
 
   const onPlayerError: YouTubeProps['onError'] = (event) => {
+    setIsPlaying(false)
     setPlayerError(playerErrorMessage(event.data))
   }
 
@@ -157,27 +180,33 @@ function SharedProject() {
     (seconds: number) => {
       if (!player || typeof player.seekTo !== 'function') return
       player.seekTo(seconds, true)
-      setCurrentTime(seconds)
+      playbackClock.set(seconds, true)
     },
-    [player],
+    [player, playbackClock],
   )
 
   const onPlayerStateChange: YouTubeProps['onStateChange'] = (event: any) => {
     const YT = (window as any).YT
     if (event.data === YT?.PlayerState?.PLAYING) {
+      setIsPlaying(true)
       setPlayerError(null)
+    } else if (
+      event.data === YT?.PlayerState?.PAUSED ||
+      event.data === YT?.PlayerState?.ENDED
+    ) {
+      setIsPlaying(false)
     }
   }
 
   useEffect(() => {
-    if (!player) return
+    if (!player || !isPlaying) return
     const interval = window.setInterval(() => {
       if (typeof player.getCurrentTime === 'function') {
-        setCurrentTime(player.getCurrentTime())
+        playbackClock.set(player.getCurrentTime())
       }
     }, 1000)
     return () => window.clearInterval(interval)
-  }, [player])
+  }, [player, isPlaying, playbackClock])
 
   if (loading) {
     return (
@@ -278,9 +307,7 @@ function SharedProject() {
           </span>
           <span className="app-status__meta">
             <span>{project.node_count} ý</span>
-            {videoId && (
-              <span className="app-status__time">{formatTime(currentTime)}</span>
-            )}
+            {videoId && <PlaybackTime clock={playbackClock} className="app-status__time" />}
           </span>
         </div>
       </header>
@@ -370,7 +397,8 @@ function SharedProject() {
               <div className="session__hint">
                 <span className="session__hint-title">Mẹo</span>
                 <p>
-                  Nhấn vào mốc thời gian trên một nhánh để tua video tới đúng đoạn.
+                  Dùng Tab hoặc phím mũi tên để duyệt nhánh, Enter hoặc Space để chọn;
+                  nhánh có mốc thời gian sẽ tua video tới đúng đoạn.
                   {data.can_edit ? ' Nút “Mở để chỉnh sửa” ở thanh trên mở workspace đầy đủ.' : ''}
                 </p>
               </div>
@@ -392,7 +420,13 @@ function SharedProject() {
 
           <div className="panel__body panel__body--canvas">
             <Suspense fallback={<div className="canvas-loading">Đang tải sơ đồ…</div>}>
-              <MindMap ref={mindmapRef} onSeek={handleSeek} onReady={handleReady} />
+              <MindMap
+                ref={mindmapRef}
+                onSeek={handleSeek}
+                onSelect={handleSelectNode}
+                selectedId={selectedNodeId}
+                onReady={handleReady}
+              />
             </Suspense>
 
             <div className="canvas-toolbar" role="group" aria-label="Điều khiển sơ đồ">
