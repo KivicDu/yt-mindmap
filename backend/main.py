@@ -20,7 +20,7 @@ from sqlalchemy.orm import Session
 from sse_starlette.sse import EventSourceResponse
 from starlette.concurrency import run_in_threadpool
 
-from ai_engine import ai_engine
+from ai_engine import MAX_RESTRUCTURE_CHARS, ai_engine, normalize_mode
 from app.api.deps import get_current_user, get_optional_user
 from app.api.router import api_router
 from app.db.base import utcnow
@@ -96,6 +96,12 @@ class TranscriptRequest(BaseModel):
     # the map. `session_id` is required for that path.
     session_id: str | None = None
     language: str | None = Field(default=None, max_length=20)
+    # The thinking mode the map is built for (ADR 0013). `tree-down` is a
+    # drawing of `tree`, so it never changes what the AI extracts.
+    map_layout: str | None = Field(default=None, max_length=20)
+
+class RestructureRequest(BaseModel):
+    map_layout: str = Field(max_length=20)
 
 class UpdateMapRequest(BaseModel):
     video_id: str
@@ -259,6 +265,9 @@ def cache_video_map(video_id: str | None, session: dict[str, Any]) -> None:
         "markdown": session.get("markdown", ""),
         "summary_so_far": session.get("summary_so_far", ""),
         "consumed_until": float(session.get("consumed_until", 0.0)),
+        # The same video can be mapped in four modes; a session may only reuse
+        # an entry built for its own mode (ADR 0013).
+        "map_mode": session.get("map_mode", "tree"),
         "updated_at": time.time(),
     }
     if len(video_cache) > MAX_CACHED_VIDEOS:
@@ -290,6 +299,15 @@ def restore_nodes(
     return markdown_to_tree(cached.get("markdown", ""))
 
 
+def cache_mode(cached: dict[str, Any] | None) -> str:
+    """The mode a cache entry was built for.
+
+    Entries written before ADR 0013 have no field and are trees, which is what
+    they are; `normalize_mode` also folds `tree-down` into `tree`.
+    """
+    return normalize_mode((cached or {}).get("map_mode") or "tree")
+
+
 def create_session(
     video_id: str | None,
     transcript: list[dict[str, Any]],
@@ -302,8 +320,14 @@ def create_session(
     owner_id: str | None = None,
     project_id: str | None = None,
     use_cache: bool = True,
+    map_layout: str | None = None,
 ) -> tuple:
+    mode = normalize_mode(map_layout)
     cached = video_cache.get(video_id) if (video_id and use_cache) else None
+    # Content from another mode is not a partial map of this one: ignore it and
+    # let the session rebuild from the playhead.
+    if cached is not None and cache_mode(cached) != mode:
+        cached = None
 
     nodes = restore_nodes(initial_nodes, initial_markdown, cached)
     markdown = tree_to_markdown(nodes) if nodes else ""
@@ -332,6 +356,10 @@ def create_session(
         "summary_so_far": summary_so_far,
         "nodes": nodes,
         "markdown": markdown,
+        # The content mode the AI builds for, and the tree each visited mode
+        # held, so switching back and forth is free and lossless (ADR 0013).
+        "map_mode": mode,
+        "maps": {mode: nodes} if nodes else {},
         "events": [],
         "last_active": time.time(),
         # Present only for signed-in sessions; autosave and resume use them.
@@ -353,6 +381,7 @@ def session_payload(session_id: str) -> dict[str, Any]:
         "consumed_until": float(session.get("consumed_until", 0.0)),
         "title": session.get("title"),
         "summary": session.get("summary_so_far", ""),
+        "map_mode": session.get("map_mode", "tree"),
     }
 
 @app.get("/")
@@ -632,6 +661,7 @@ async def get_transcript(
                 owner_id=project.user_id,
                 project_id=project.id,
                 use_cache=False,
+                map_layout=project.map_layout,
             )
         else:
             touch_session(session_id)
@@ -671,6 +701,7 @@ async def get_transcript(
                 initial_nodes=request.initial_nodes,
                 title=title,
                 language=None,
+                map_layout=request.map_layout,
             )
             return {
                 "transcript": transcript,
@@ -726,6 +757,7 @@ async def get_transcript(
                 initial_nodes=request.initial_nodes,
                 title=title,
                 language=language,
+                map_layout=request.map_layout,
             )
             return {
                 "transcript": transcript,
@@ -860,6 +892,7 @@ async def update_map(
             transcript_chunk=chunk,
             summary_so_far=summary_so_far,
             time_range=time_range,
+            mode=session.get("map_mode", "tree"),
         )
 
         # On AI failure, keep the pointer so the chunk is retried later.
@@ -893,6 +926,7 @@ async def update_map(
             )
             session["nodes"] = merge_nodes(session.get("nodes", []), new_nodes)
             session["markdown"] = tree_to_markdown(session["nodes"])
+            session.setdefault("maps", {})[session.get("map_mode", "tree")] = session["nodes"]
             cache_video_map(session.get("video_id"), session)
             event_data = {
                 "type": "diff",
@@ -926,6 +960,123 @@ async def update_map(
         }
     finally:
         lock.release()
+
+@app.post("/session/{session_id}/restructure")
+async def restructure_map(
+    session_id: str,
+    request: RestructureRequest,
+    user: User | None = Depends(get_optional_user),
+    db: Session = Depends(get_db),
+):
+    """Rewrite the map for another thinking mode (ADR 0013).
+
+    One AI call reorganises what the map already holds. Modes the session has
+    visited before are restored from memory, and a mode that is only a drawing
+    of the current one (`tree` ↔ `tree-down`) changes nothing.
+    """
+    cleanup_sessions()
+    session = sessions.get(session_id)
+    if not session:
+        raise HTTPException(status_code=404, detail="session_lost")
+
+    project = assert_can_edit_session(db, session, user)
+    session["last_active"] = time.time()
+    target = normalize_mode(request.map_layout)
+    current = session.get("map_mode", "tree")
+    maps = session.setdefault("maps", {})
+
+    def payload(changed: bool, **extra: Any) -> dict[str, Any]:
+        return {
+            "nodes": session.get("nodes", []),
+            "markdown": session.get("markdown", ""),
+            "map_mode": session.get("map_mode", "tree"),
+            "changed": changed,
+            **extra,
+        }
+
+    if target == current:
+        return payload(False, reason="same_mode")
+
+    def adopt(nodes: list[dict[str, Any]], restored: bool) -> dict[str, Any]:
+        session["nodes"] = nodes
+        session["markdown"] = tree_to_markdown(nodes)
+        session["map_mode"] = target
+        maps[target] = nodes
+        cache_video_map(session.get("video_id"), session)
+        event = {
+            "type": "restructure",
+            "nodes": nodes,
+            "markdown": session["markdown"],
+            "map_mode": target,
+        }
+        session.setdefault("events", []).append({"type": "restructure", "data": event})
+        return payload(True, restored=restored)
+
+    # A mode visited earlier is still in memory, so switching back is free and
+    # loses nothing. Only the persisted project keeps the current mode.
+    remembered = maps.get(target)
+    if remembered is not None:
+        return adopt(remembered, restored=True)
+
+    markdown = (session.get("markdown") or "").strip()
+    if not markdown:
+        # Nothing has been extracted yet: the next chunk is already built for
+        # the new mode, so this costs nothing.
+        session["map_mode"] = target
+        maps[target] = session.get("nodes", [])
+        return payload(True, restored=False)
+
+    if len(markdown) > MAX_RESTRUCTURE_CHARS:
+        raise HTTPException(
+            status_code=413,
+            detail={
+                "code": "map_too_large",
+                "message": "Sơ đồ này quá lớn để tạo lại nội dung trong một lần.",
+            },
+        )
+
+    lock = session.get("update_lock")
+    if lock is None:
+        lock = threading.Lock()
+        session["update_lock"] = lock
+    if not lock.acquire(blocking=False):
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "code": "busy",
+                "message": "Đang cập nhật sơ đồ, thử lại sau vài giây.",
+            },
+        )
+    try:
+        outcome = await asyncio.to_thread(ai_engine.restructure, markdown, target)
+    finally:
+        lock.release()
+
+    if outcome.get("error") or outcome.get("note"):
+        raise HTTPException(
+            status_code=502,
+            detail={
+                "code": "ai_error",
+                "message": "Không tạo lại được nội dung. Sơ đồ vẫn giữ nguyên.",
+            },
+        )
+
+    nodes = normalize_nodes(outcome.get("nodes") or [])
+    if not nodes:
+        # An empty reply must never replace a map the learner already has.
+        raise HTTPException(
+            status_code=502,
+            detail={
+                "code": "ai_error",
+                "message": "Không tạo lại được nội dung. Sơ đồ vẫn giữ nguyên.",
+            },
+        )
+
+    if project is not None:
+        project_service.snapshot(db, project, author_id=user.id if user else None)
+
+    maps[current] = session.get("nodes", [])
+    return adopt(nodes, restored=False)
 
 @app.patch("/node")
 async def edit_node(

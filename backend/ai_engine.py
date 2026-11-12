@@ -18,6 +18,9 @@ logger = logging.getLogger(__name__)
 MAX_MARKDOWN_CHARS = 4000
 MAX_CHUNK_CHARS = 8000
 MAX_SUMMARY_CHARS = 1200
+# A rewrite sends the whole map, not a tail. Past this size the caller is told
+# to refuse instead of silently losing nodes to truncation.
+MAX_RESTRUCTURE_CHARS = 12000
 MAX_RETRIES = 3
 RETRY_BASE_DELAY = 1.0
 REQUEST_TIMEOUT = 60
@@ -78,23 +81,157 @@ def describe_error(error: BaseException) -> str:
 
 
 
-def parse_ai_payload(
-    text: str,
-    summary_so_far: str,
-    default_time: float,
-) -> dict[str, Any]:
-    """Turn a raw Gemini reply into a normalised incremental-update result.
+# The map type is a thinking operation, not a drawing (ADR 0013). Each block
+# below is the contract for one mode: it says what the levels mean. The tree
+# shape can express all four, so only the prompt changes.
+TREE_MODE = """MODE: TREE MAP (classifying)
+The centre is a topic and the map answers "what kinds of this are there?".
+- Level 1 nodes are categories of the topic; level 2 nodes are members of a
+  category; a level 3 node only explains a member.
+- Labels are noun phrases (2-6 words), never sentences.
+- Put an example under the category it exemplifies, never beside it."""
 
-    Models sometimes wrap JSON in markdown fences or add prose around it, so
-    the payload is unwrapped before parsing. Raises on invalid JSON; callers
-    keep the previous summary and retry the same chunk later.
+SPIDER_MODE = """MODE: SPIDER MAP (supporting ideas)
+The centre is a topic and the map answers "which main points hold this up?".
+- Level 1 nodes are the main points, each understandable on its own.
+- Stay flat: at most one child under a point, and only for a concrete detail.
+- Labels are short claims ("The lungs take oxygen from the water"), not
+  category names ("Respiratory organs").
+- Never group points into sub-categories."""
+
+BUBBLE_MODE = """MODE: BUBBLE MAP (describing)
+The centre is a topic and the map answers "what is it like?".
+- Level 1 nodes describe a property, a part, a function or a behaviour of the
+  topic, not a kind of it.
+- A level 1 label must finish the sentence "<topic> ..." ("has a mucous
+  membrane", "carries electrical impulses").
+- Children of an attribute are the evidence or the example the lecture gave,
+  at most one level deep.
+- No chronology, no categories, no facts that do not describe the topic."""
+
+CIRCLE_MODE = """MODE: CIRCLE MAP (defining in context)
+The centre is a topic and the map answers "what do I know around this?".
+- Level 1 nodes are frames of context, one line each: definition, example,
+  use, link to earlier knowledge, formula, sign or symbol.
+- Open the label with the frame, in the language of the lecture
+  ("Definition: ...", "Định nghĩa: ...", "Example: ...").
+- Only add a frame the lecture actually covers; never invent a definition the
+  speaker did not give.
+- Flat: no nesting under a frame."""
+
+CONTENT_MODES = {
+    "tree": TREE_MODE,
+    "spider": SPIDER_MODE,
+    "bubble": BUBBLE_MODE,
+    "circle": CIRCLE_MODE,
+}
+DEFAULT_MODE = "tree"
+# Layouts that are only a different drawing of an existing mode.
+MODE_ALIASES = {"tree-down": "tree"}
+
+
+def normalize_mode(value: Any) -> str:
+    """Map a layout name to the content mode it asks for.
+
+    Unknown values fall back to `tree`: a map built with the wrong contract is
+    worse than a map built with the default one.
+    """
+    raw = str(value or "").strip().lower()
+    raw = MODE_ALIASES.get(raw, raw)
+    return raw if raw in CONTENT_MODES else DEFAULT_MODE
+
+
+def build_incremental_prompt(
+    mode: str,
+    markdown_context: str,
+    summary_so_far: str,
+    chunk_text: str,
+    time_range: tuple,
+) -> str:
+    return f"""You build a mind map incrementally from a lecture transcript.
+
+{CONTENT_MODES[normalize_mode(mode)]}
+
+EXISTING MIND MAP (markdown already shown to the user):
+{markdown_context}
+
+SUMMARY OF EARLIER CONTENT:
+{summary_so_far or "(none)"}
+
+NEW TRANSCRIPT SEGMENT ({time_range[0]:.1f}s to {time_range[1]:.1f}s):
+{chunk_text}
+
+TASK:
+Extract ONLY genuinely new, substantive content from the NEW segment, shaped
+by the mode above.
+- Do NOT repeat anything already in the existing mind map or covered by the summary.
+- Ignore filler, greetings, jokes, music, transitions ("so", "okay", "let's move on").
+- Keep titles short (2-6 words).
+- If the segment has no substantive content, set should_update to false.
+- Keep "summary" under 800 characters; it is the compact memory for later segments.
+- Add "time" (seconds from the start of the video) for when each concept is first mentioned.
+
+Return ONLY this JSON object (no markdown fences, no extra text):
+{{
+  "should_update": true,
+  "new_nodes": [
+    {{"name": "Parent Topic", "time": 123.4, "children": [{{"name": "Sub Point", "time": 130.0}}]}}
+  ],
+  "summary": "compact summary of the whole map so far"
+}}"""
+
+
+def build_restructure_prompt(mode: str, markdown: str) -> str:
+    return f"""You rewrite an existing mind map so that it follows a different mode.
+
+{CONTENT_MODES[normalize_mode(mode)]}
+
+EXISTING MAP (markdown, timestamps in the links):
+{markdown}
+
+TASK:
+Rewrite the map above for the mode described. Hard rules:
+- Use ONLY content already present in the existing map. Do not add concepts,
+  examples or definitions that are not there.
+- Keep every "time" value on the node it belongs to. Never invent a time.
+- Drop a node when it does not fit the mode.
+- Keep the root topic as the first node.
+
+Return ONLY this JSON object (no markdown fences, no extra text):
+{{
+  "nodes": [
+    {{"name": "Topic", "time": 0.0, "children": [{{"name": "Point", "time": 12.0}}]}}
+  ]
+}}"""
+
+
+def _load_json_object(text: str) -> dict[str, Any]:
+    """Unwrap a JSON object from a model reply.
+
+    Models sometimes wrap JSON in markdown fences or add prose around it.
+    Raises on invalid JSON; callers keep the previous state and retry later.
     """
     cleaned = (text or "").strip()
     cleaned = cleaned.replace("```json", "").replace("```JSON", "").replace("```", "")
     if "{" in cleaned and "}" in cleaned:
         cleaned = cleaned[cleaned.find("{") : cleaned.rfind("}") + 1]
-
     data = json.loads(cleaned)
+    return data if isinstance(data, dict) else {}
+
+
+def parse_restructure_payload(text: str) -> list[dict[str, Any]]:
+    """Read the rewritten tree from a restructure reply."""
+    nodes = _load_json_object(text).get("nodes")
+    return nodes if isinstance(nodes, list) else []
+
+
+def parse_ai_payload(
+    text: str,
+    summary_so_far: str,
+    default_time: float,
+) -> dict[str, Any]:
+    """Turn a raw Gemini reply into a normalised incremental-update result."""
+    data = _load_json_object(text)
     nodes = data.get("new_nodes") or []
     if not isinstance(nodes, list):
         nodes = []
@@ -236,6 +373,7 @@ class MindMapAI:
         transcript_chunk: list[dict[str, Any]],
         summary_so_far: str = "",
         time_range: tuple = (0, 0),
+        mode: str = DEFAULT_MODE,
     ) -> dict[str, Any]:
         if not transcript_chunk:
             return {
@@ -256,34 +394,13 @@ class MindMapAI:
                 + markdown_context[-MAX_MARKDOWN_CHARS:]
             )
 
-        prompt = f"""You build a mind map incrementally from a lecture transcript.
-
-EXISTING MIND MAP (markdown already shown to the user):
-{markdown_context}
-
-SUMMARY OF EARLIER CONTENT:
-{summary_so_far or "(none)"}
-
-NEW TRANSCRIPT SEGMENT ({time_range[0]:.1f}s to {time_range[1]:.1f}s):
-{chunk_text}
-
-TASK:
-Extract ONLY genuinely new, substantive concepts / definitions / relationships from the NEW segment.
-- Do NOT repeat anything already in the existing mind map or covered by the summary.
-- Ignore filler, greetings, jokes, music, transitions ("so", "okay", "let's move on").
-- Keep titles short (2-6 words). Nest sub-points under a parent when they belong together.
-- If the segment has no substantive content, set should_update to false.
-- Keep "summary" under 800 characters; it is the compact memory for later segments.
-- Add "time" (seconds from the start of the video) for when each concept is first mentioned.
-
-Return ONLY this JSON object (no markdown fences, no extra text):
-{{
-  "should_update": true,
-  "new_nodes": [
-    {{"name": "Parent Topic", "time": 123.4, "children": [{{"name": "Sub Point", "time": 130.0}}]}}
-  ],
-  "summary": "compact summary of the whole map so far"
-}}"""
+        prompt = build_incremental_prompt(
+            mode=mode,
+            markdown_context=markdown_context,
+            summary_so_far=summary_so_far,
+            chunk_text=chunk_text,
+            time_range=time_range,
+        )
 
         if not self.client:
             return {
@@ -312,6 +429,28 @@ Return ONLY this JSON object (no markdown fences, no extra text):
                 "summary": summary_so_far,
                 "error": str(e),
             }
+
+    def restructure(self, markdown: str, mode: str) -> dict[str, Any]:
+        """Rewrite an existing map into another content mode.
+
+        This reorganises what the map already holds; it never re-reads the
+        transcript, so it cannot recover detail an earlier mode discarded.
+        """
+        mode = normalize_mode(mode)
+        text = (markdown or "").strip()
+        if not text:
+            return {"nodes": [], "mode": mode}
+
+        if not self.client:
+            return {"nodes": [], "mode": mode, "note": "AI not configured"}
+
+        try:
+            response = self._generate_with_retry(build_restructure_prompt(mode, text))
+            self._record_usage(response)
+            return {"nodes": parse_restructure_payload(response.text or ""), "mode": mode}
+        except Exception as e:
+            logger.warning("Mind map restructure failed: %s", describe_error(e))
+            return {"nodes": [], "mode": mode, "error": str(e)}
 
 
 ai_engine = MindMapAI()
