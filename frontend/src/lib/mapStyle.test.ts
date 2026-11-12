@@ -3,8 +3,12 @@ import {
   DEFAULT_STYLE,
   MAP_LAYOUTS,
   MAP_PALETTES,
+  MODE_LABELS,
   branchColor,
+  contentMode,
   hasStoredStyle,
+  isContentMode,
+  modeSwitch,
   normalizeStyle,
   readStoredStyle,
   storeStyle,
@@ -140,5 +144,57 @@ describe('remembering the chosen look', () => {
     storage.setItem('yt-mindmap:map-style', '{"layout":"nope"}')
     expect(hasStoredStyle()).toBe(true)
     expect(readStoredStyle()).toEqual(DEFAULT_STYLE)
+  })
+})
+
+describe('content modes', () => {
+  it('asks for a different thinking operation per layout', () => {
+    expect(contentMode('tree')).toBe('tree')
+    expect(contentMode('spider')).toBe('spider')
+    expect(contentMode('bubble')).toBe('bubble')
+    expect(contentMode('circle')).toBe('circle')
+  })
+
+  it('treats the top-down tree as the same content as the tree', () => {
+    // Only the drawing changes, so switching between them must never rebuild.
+    expect(contentMode('tree-down')).toBe(contentMode('tree'))
+  })
+
+  it('names every mode the UI can offer', () => {
+    for (const layout of MAP_LAYOUTS) {
+      expect(MODE_LABELS[contentMode(layout.id)]).toBeTruthy()
+    }
+  })
+
+  it('recognises a mode from a server payload and rejects anything else', () => {
+    expect(isContentMode('bubble')).toBe(true)
+    expect(isContentMode('tree-down')).toBe(false)
+    expect(isContentMode('')).toBe(false)
+    expect(isContentMode(undefined)).toBe(false)
+  })
+})
+
+describe('modeSwitch', () => {
+  const content = { hasContent: true, canEdit: true }
+
+  it('does nothing when only the drawing changes', () => {
+    expect(modeSwitch('tree-down', 'tree', content)).toBeNull()
+    expect(modeSwitch('tree', 'tree', content)).toBeNull()
+  })
+
+  it('offers a rebuild when the mode changes and there is content', () => {
+    expect(modeSwitch('bubble', 'tree', content)).toEqual({ mode: 'bubble', offer: true })
+    expect(modeSwitch('circle', 'bubble', content)).toEqual({ mode: 'circle', offer: true })
+  })
+
+  it('switches an empty map for free, without asking', () => {
+    expect(modeSwitch('spider', 'tree', { hasContent: false, canEdit: true })).toEqual({
+      mode: 'spider',
+      offer: false,
+    })
+  })
+
+  it('never offers a rewrite to a reader', () => {
+    expect(modeSwitch('bubble', 'tree', { hasContent: true, canEdit: false })).toBeNull()
   })
 })

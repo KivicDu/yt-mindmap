@@ -434,3 +434,219 @@ def test_edits_survive_the_next_ai_update(monkeypatch):
     assert parent["note"] == "n"
     assert parent["pinned"] is True
     assert [c["label"] for c in parent["children"]] == ["Base case"]
+
+
+# --- Thinking modes (ADR 0013) ---------------------------------------------
+
+
+def test_session_records_the_mode_from_the_request():
+    session_id, _ = main_module.create_session("vid", TRANSCRIPT, map_layout="bubble")
+    assert main_module.sessions[session_id]["map_mode"] == "bubble"
+
+    session_id, _ = main_module.create_session("vid", TRANSCRIPT, map_layout="tree-down")
+    assert main_module.sessions[session_id]["map_mode"] == "tree"
+
+    session_id, _ = main_module.create_session("vid", TRANSCRIPT)
+    assert main_module.sessions[session_id]["map_mode"] == "tree"
+
+
+def test_transcript_response_reports_the_mode():
+    body = client.post(
+        "/transcript",
+        json={"url": "https://youtu.be/abcdefghijk", "file_content": SRT, "map_layout": "circle"},
+    ).json()
+    assert body["map_mode"] == "circle"
+
+
+def test_update_map_sends_the_session_mode_to_the_ai(monkeypatch):
+    seen = {}
+
+    def fake_update(**kwargs):
+        seen.update(kwargs)
+        return {"new_nodes": [], "should_update": False, "summary": ""}
+
+    monkeypatch.setattr(main_module.ai_engine, "generate_incremental_update", fake_update)
+    session_id, _ = main_module.create_session("vid", TRANSCRIPT, map_layout="spider")
+
+    client.post("/update-map", json={"video_id": "vid", "last_time": 20, "session_id": session_id})
+
+    assert seen["mode"] == "spider"
+
+
+def test_cache_from_another_mode_is_ignored():
+    main_module.video_cache["vid"] = {
+        "nodes": [_node()],
+        "markdown": "- [Recursion](#seek-6.0)",
+        "summary_so_far": "bubble summary",
+        "consumed_until": 90.0,
+        "map_mode": "bubble",
+        "updated_at": 0.0,
+    }
+
+    session_id, cached = main_module.create_session("vid", TRANSCRIPT, map_layout="tree")
+
+    session = main_module.sessions[session_id]
+    assert cached is False
+    assert session["nodes"] == []
+    assert session["consumed_until"] == 0.0
+    assert session["summary_so_far"] == ""
+
+
+def test_cache_without_a_mode_counts_as_tree():
+    main_module.video_cache["vid"] = {
+        "nodes": [_node()],
+        "markdown": "- [Recursion](#seek-6.0)",
+        "consumed_until": 30.0,
+        "updated_at": 0.0,
+    }
+
+    session_id, cached = main_module.create_session("vid", TRANSCRIPT, map_layout="tree-down")
+
+    assert cached is True
+    assert main_module.sessions[session_id]["map_mode"] == "tree"
+
+
+def test_restructure_rewrites_the_tree_and_switches_mode(monkeypatch):
+    session_id, _ = _session_with_nodes([_node()])
+
+    def fake_restructure(markdown, mode):
+        assert "[Recursion](#seek-6.0)" in markdown
+        assert mode == "bubble"
+        return {"nodes": [{"name": "Recursion", "time": 6.0, "children": [{"name": "calls itself"}]}], "mode": mode}
+
+    monkeypatch.setattr(main_module.ai_engine, "restructure", fake_restructure)
+
+    body = client.post(
+        f"/session/{session_id}/restructure", json={"map_layout": "bubble"}
+    ).json()
+
+    assert body["changed"] is True
+    assert body["restored"] is False
+    assert body["map_mode"] == "bubble"
+    assert body["nodes"][0]["label"] == "Recursion"
+    assert body["nodes"][0]["children"][0]["label"] == "calls itself"
+    session = main_module.sessions[session_id]
+    assert session["map_mode"] == "bubble"
+    assert session["markdown"] == body["markdown"]
+    assert main_module.video_cache["vid"]["map_mode"] == "bubble"
+    assert session["events"][-1]["type"] == "restructure"
+    assert session["events"][-1]["data"]["map_mode"] == "bubble"
+
+
+def test_restructure_of_a_drawing_only_change_costs_nothing(monkeypatch):
+    def explode(*args, **kwargs):
+        raise AssertionError("tree-down must not rebuild content")
+
+    monkeypatch.setattr(main_module.ai_engine, "restructure", explode)
+    session_id, _ = _session_with_nodes([_node()])
+
+    body = client.post(
+        f"/session/{session_id}/restructure", json={"map_layout": "tree-down"}
+    ).json()
+
+    assert body["changed"] is False
+    assert body["reason"] == "same_mode"
+    assert main_module.sessions[session_id]["nodes"][0]["label"] == "Recursion"
+
+
+def test_restructure_restores_a_visited_mode_without_a_call(monkeypatch):
+    session_id, session = _session_with_nodes([_node()])
+    tree_nodes = session["nodes"]
+    bubble_nodes = [_node(id="b1", label="Recursion", children=[_node(id="b2", label="calls itself")])]
+    session["maps"]["bubble"] = bubble_nodes
+
+    def explode(*args, **kwargs):
+        raise AssertionError("a visited mode is restored from memory")
+
+    monkeypatch.setattr(main_module.ai_engine, "restructure", explode)
+
+    body = client.post(
+        f"/session/{session_id}/restructure", json={"map_layout": "bubble"}
+    ).json()
+
+    assert body["restored"] is True
+    assert body["nodes"] == bubble_nodes
+    assert session["maps"]["tree"] is tree_nodes
+    assert session["map_mode"] == "bubble"
+
+
+def test_restructure_keeps_the_map_when_the_ai_fails(monkeypatch):
+    monkeypatch.setattr(
+        main_module.ai_engine, "restructure", lambda markdown, mode: {"nodes": [], "error": "boom"}
+    )
+    session_id, session = _session_with_nodes([_node()])
+
+    response = client.post(
+        f"/session/{session_id}/restructure", json={"map_layout": "bubble"}
+    )
+
+    assert response.status_code == 502
+    assert response.json()["detail"]["code"] == "ai_error"
+    assert session["map_mode"] == "tree"
+    assert session["nodes"][0]["label"] == "Recursion"
+
+
+def test_restructure_refuses_an_empty_reply(monkeypatch):
+    monkeypatch.setattr(
+        main_module.ai_engine, "restructure", lambda markdown, mode: {"nodes": [], "mode": mode}
+    )
+    session_id, session = _session_with_nodes([_node()])
+
+    response = client.post(
+        f"/session/{session_id}/restructure", json={"map_layout": "circle"}
+    )
+
+    assert response.status_code == 502
+    assert session["nodes"][0]["label"] == "Recursion"
+
+
+def test_restructure_refuses_a_map_that_is_too_large(monkeypatch):
+    def explode(*args, **kwargs):
+        raise AssertionError("a too-large map must not be truncated and sent")
+
+    monkeypatch.setattr(main_module.ai_engine, "restructure", explode)
+    session_id, session = _session_with_nodes([_node()])
+    session["markdown"] = "- filler\n" * (main_module.MAX_RESTRUCTURE_CHARS // 5)
+
+    response = client.post(
+        f"/session/{session_id}/restructure", json={"map_layout": "bubble"}
+    )
+
+    assert response.status_code == 413
+    assert response.json()["detail"]["code"] == "map_too_large"
+    assert session["map_mode"] == "tree"
+
+
+def test_restructure_on_an_empty_map_just_switches_the_mode(monkeypatch):
+    def explode(*args, **kwargs):
+        raise AssertionError("there is nothing to rewrite")
+
+    monkeypatch.setattr(main_module.ai_engine, "restructure", explode)
+    session_id, _ = main_module.create_session("vid", TRANSCRIPT, map_layout="tree")
+    session = main_module.sessions[session_id]
+
+    body = client.post(
+        f"/session/{session_id}/restructure", json={"map_layout": "bubble"}
+    ).json()
+
+    assert body["changed"] is True
+    assert session["map_mode"] == "bubble"
+
+
+def test_restructure_reports_a_lost_session():
+    response = client.post("/session/missing/restructure", json={"map_layout": "bubble"})
+    assert response.status_code == 404
+
+
+def test_restructure_rejects_a_concurrent_update(monkeypatch):
+    session_id, session = _session_with_nodes([_node()])
+    session["update_lock"].acquire()
+    try:
+        response = client.post(
+            f"/session/{session_id}/restructure", json={"map_layout": "bubble"}
+        )
+    finally:
+        session["update_lock"].release()
+
+    assert response.status_code == 409
+    assert response.json()["detail"]["code"] == "busy"

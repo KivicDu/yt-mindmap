@@ -246,6 +246,40 @@
   outline: none;
 }
 
+/* --- content mode bar --- */
+
+/* The content mode lags the drawing when the learner changes the map type:
+   the drawing is free, rewriting the content is one click (ADR 0013). */
+.rebuild-bar {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin: 6px clamp(12px, 1.6vw, 22px) 0;
+  padding: 8px 10px 8px 12px;
+  border: 1px solid var(--line);
+  border-radius: var(--r-md);
+  background: var(--paper-2);
+  color: var(--ink-2);
+  font-size: 12.5px;
+  line-height: 1.45;
+}
+
+.rebuild-bar__text {
+  margin-right: auto;
+}
+
+.rebuild-bar__text strong {
+  color: var(--ink);
+  font-weight: 600;
+}
+
+.rebuild-bar__actions {
+  display: flex;
+  flex: none;
+  gap: 6px;
+}
+
 /* --- status strip --- */
 
 .app-status {

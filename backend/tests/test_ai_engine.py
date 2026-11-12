@@ -238,6 +238,106 @@ class TestGenerateIncrementalUpdate:
         assert result["should_update"] is False
 
 
+class TestContentModes:
+    def test_each_layout_maps_to_its_thinking_mode(self):
+        assert ai_module.normalize_mode("tree") == "tree"
+        assert ai_module.normalize_mode("spider") == "spider"
+        assert ai_module.normalize_mode("bubble") == "bubble"
+        assert ai_module.normalize_mode("circle") == "circle"
+
+    def test_tree_down_is_only_a_drawing_of_the_tree_mode(self):
+        assert ai_module.normalize_mode("tree-down") == "tree"
+
+    def test_unknown_or_empty_values_fall_back_to_tree(self):
+        assert ai_module.normalize_mode("") == "tree"
+        assert ai_module.normalize_mode(None) == "tree"
+        assert ai_module.normalize_mode("flowchart") == "tree"
+
+    def test_mode_is_read_case_insensitively(self):
+        assert ai_module.normalize_mode(" Bubble ") == "bubble"
+
+    def test_incremental_prompt_carries_the_mode_block(self, engine):
+        engine.generate_incremental_update(
+            current_markdown="",
+            transcript_chunk=[{"start": 1.0, "text": "the heart has four chambers"}],
+            time_range=(1.0, 2.0),
+            mode="bubble",
+        )
+        prompt = engine.client.models.calls[0]["contents"]
+        assert ai_module.BUBBLE_MODE in prompt
+        assert ai_module.TREE_MODE not in prompt
+        assert "what is it like" in prompt
+
+    def test_incremental_prompt_defaults_to_the_tree_block(self, engine):
+        engine.generate_incremental_update(
+            current_markdown="",
+            transcript_chunk=[{"start": 1.0, "text": "text"}],
+            time_range=(1.0, 2.0),
+        )
+        prompt = engine.client.models.calls[0]["contents"]
+        assert ai_module.TREE_MODE in prompt
+
+    def test_unknown_mode_never_reaches_the_model(self, engine):
+        engine.generate_incremental_update(
+            current_markdown="",
+            transcript_chunk=[{"start": 1.0, "text": "text"}],
+            time_range=(1.0, 2.0),
+            mode="flowchart",
+        )
+        prompt = engine.client.models.calls[0]["contents"]
+        assert ai_module.TREE_MODE in prompt
+
+
+class TestRestructure:
+    def test_prompt_carries_the_map_and_the_mode(self, engine):
+        engine.client = FakeClient(
+            [FakeResponse('{"nodes": [{"name": "Topic", "time": 1.0}]}')]
+        )
+        engine.restructure("- [Topic](#seek-1.0)\n  - [Detail](#seek-2.0)", "circle")
+        prompt = engine.client.models.calls[0]["contents"]
+        assert "- [Topic](#seek-1.0)" in prompt
+        assert ai_module.CIRCLE_MODE in prompt
+        assert "Use ONLY content already present" in prompt
+
+    def test_reply_is_parsed_into_nodes(self, engine):
+        engine.client = FakeClient(
+            [
+                FakeResponse(
+                    '```json\n{"nodes": [{"name": "Topic", "time": 1.0, '
+                    '"children": [{"name": "Point", "time": 2.0}]}]}\n```'
+                )
+            ]
+        )
+        result = engine.restructure("- [Topic](#seek-1.0)", "spider")
+        assert result["mode"] == "spider"
+        assert result["nodes"][0]["name"] == "Topic"
+        assert result["nodes"][0]["children"][0]["name"] == "Point"
+
+    def test_empty_map_costs_no_call(self, engine):
+        result = engine.restructure("   ", "bubble")
+        assert result == {"nodes": [], "mode": "bubble"}
+        assert engine.client.models.calls == []
+
+    def test_unconfigured_engine_reports_a_note(self, monkeypatch):
+        monkeypatch.setenv("GEMINI_API_KEY", "")
+        result = MindMapAI().restructure("- [Topic](#seek-1.0)", "bubble")
+        assert result["note"] == "AI not configured"
+        assert result["nodes"] == []
+
+    def test_bad_json_is_reported_not_raised(self, engine):
+        engine.client = FakeClient([FakeResponse("not json")])
+        result = engine.restructure("- [Topic](#seek-1.0)", "bubble")
+        assert "error" in result
+        assert result["nodes"] == []
+
+    def test_usage_is_recorded(self, engine):
+        engine.client = FakeClient(
+            [FakeResponse('{"nodes": []}', FakeUsage(80, 10))]
+        )
+        engine.restructure("- [Topic](#seek-1.0)", "bubble")
+        assert engine.usage_totals["calls"] == 1
+
+
 class TestTokenUsage:
     def test_usage_is_accumulated_across_calls(self, engine):
         payload = json.dumps({"should_update": False, "new_nodes": [], "summary": "s"})

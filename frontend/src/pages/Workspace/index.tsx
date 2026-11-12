@@ -36,12 +36,18 @@ import {
 import { getAccessToken, refreshSession } from '../../lib/api'
 import { exportMap, type ExportFormat } from '../../lib/mapExport'
 import {
+  contentMode,
   hasStoredStyle,
+  isContentMode,
+  isMapLayout,
+  MODE_LABELS,
+  modeSwitch,
   normalizeStyle,
   readStoredStyle,
   storeStyle,
   styleFromSearch,
   stripStyleFromSearch,
+  type ContentMode,
   type MapStyle,
 } from '../../lib/mapStyle'
 import { SkeletonList } from '../../components/ui/Skeleton'
@@ -83,12 +89,12 @@ interface Status {
   text: string
 }
 
-class TranscriptRequestError extends Error {
+class RequestError extends Error {
   readonly code?: string
 
   constructor(message: string, code?: string) {
     super(message)
-    this.name = 'TranscriptRequestError'
+    this.name = 'RequestError'
     this.code = code
   }
 }
@@ -202,6 +208,14 @@ function App() {
   // True only while the dialog is the "choose before you start" step, so it can
   // say "Bắt đầu" instead of "Áp dụng" the way the dashboard picker does.
   const [styleIntro, setStyleIntro] = useState(styleOpen)
+  // The thinking mode the current content was built for (ADR 0013). Changing
+  // the drawing (`tree` ↔ `tree-down`) does not change it; changing the mode
+  // offers a rebuild instead of spending tokens behind the learner's back.
+  const [builtMode, setBuiltMode] = useState<ContentMode>(() =>
+    contentMode((styleFromSearch(window.location.search) ?? readStoredStyle()).layout),
+  )
+  const [rebuildOffer, setRebuildOffer] = useState<ContentMode | null>(null)
+  const [rebuilding, setRebuilding] = useState(false)
 
   const urlInputRef = useRef<HTMLInputElement>(null)
   const fileInputRef = useRef<HTMLInputElement>(null)
@@ -221,6 +235,7 @@ function App() {
   const languagesRequestRef = useRef(false)
   const tabRefs = useRef<Record<string, HTMLButtonElement | null>>({})
   const styleRef = useRef(mapStyle)
+  const builtModeRef = useRef(builtMode)
 
   const setStatus = useCallback((text: string, kind: StatusKind = 'idle') => {
     setStatusState({ kind, text })
@@ -236,6 +251,10 @@ function App() {
   useEffect(() => {
     styleRef.current = mapStyle
   }, [mapStyle])
+
+  useEffect(() => {
+    builtModeRef.current = builtMode
+  }, [builtMode])
 
   // The picker hands its choice over as a query param. Once the state above
   // has read it, drop it so a refresh or a shared link does not keep forcing
@@ -354,6 +373,18 @@ function App() {
       )
     }
 
+    // The content mode is not the drawing: a project saved as "bubble" may
+    // still hold tree content from before ADR 0013, which is what the rebuild
+    // bar is for.
+    const layout = isMapLayout(data.map_layout) ? data.map_layout : styleRef.current.layout
+    const mode = isContentMode(data.map_mode) ? data.map_mode : contentMode(layout)
+    setBuiltMode(mode)
+    const change = modeSwitch(layout, mode, {
+      hasContent: Array.isArray(data.nodes) && data.nodes.length > 0,
+      canEdit: data.can_edit !== false,
+    })
+    setRebuildOffer(change?.offer ? change.mode : null)
+
     if (Array.isArray(data.transcript)) {
       setTranscript(data.transcript)
     }
@@ -403,6 +434,46 @@ function App() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [url, videoId, setStatus])
 
+  /**
+   * POST to a session endpoint. These live outside `/api`, so the access token
+   * is attached by hand; a guest call simply goes without one.
+   */
+  const postJson = async (path: string, body: unknown, fallback: string) => {
+    const send = () => {
+      const headers: Record<string, string> = { 'Content-Type': 'application/json' }
+      const token = getAccessToken()
+      if (token) headers.Authorization = `Bearer ${token}`
+      return fetch(`${API_BASE}${path}`, {
+        method: 'POST',
+        headers,
+        body: JSON.stringify(body),
+      })
+    }
+
+    let response = await send()
+    if (response.status === 401 && getAccessToken()) {
+      if (await refreshSession()) response = await send()
+    }
+
+    if (!response.ok) {
+      const payload = await response.json().catch(() => null)
+      const detail =
+        payload && typeof payload === 'object' && 'detail' in payload ? payload.detail : undefined
+      const code =
+        detail && typeof detail === 'object' && 'code' in detail && typeof detail.code === 'string'
+          ? detail.code
+          : undefined
+      const message =
+        detail && typeof detail === 'object' && 'message' in detail && typeof detail.message === 'string'
+          ? detail.message
+          : typeof detail === 'string'
+            ? detail
+            : fallback
+      throw new RequestError(message, code ?? (typeof detail === 'string' ? detail : undefined))
+    }
+    return response.json()
+  }
+
   const fetchTranscript = async (payload: {
     url?: string
     fileContent?: string
@@ -418,42 +489,11 @@ function App() {
     if (payload.initialNodes) body.initial_nodes = payload.initialNodes
     if (payload.resumeAt !== undefined) body.resume_at = payload.resumeAt
     if (payload.title) body.title = payload.title
+    // The first chunk should already be extracted for the chosen mode; the
+    // backend ignores this for saved projects, which carry their own.
+    body.map_layout = styleRef.current.layout
 
-    const send = () => {
-      const headers: Record<string, string> = { 'Content-Type': 'application/json' }
-      // Saved projects are owner-only, so reopening one needs the access token.
-      // Guests have none and the endpoint still works for them.
-      const token = getAccessToken()
-      if (token) headers.Authorization = `Bearer ${token}`
-      return fetch(`${API_BASE}/transcript`, {
-        method: 'POST',
-        headers,
-        body: JSON.stringify(body),
-      })
-    }
-
-    let response = await send()
-    if (response.status === 401 && getAccessToken()) {
-      if (await refreshSession()) response = await send()
-    }
-
-    if (!response.ok) {
-      const body = await response.json().catch(() => null)
-      const detail =
-        body && typeof body === 'object' && 'detail' in body ? body.detail : undefined
-      const code =
-        detail && typeof detail === 'object' && 'code' in detail && typeof detail.code === 'string'
-          ? detail.code
-          : undefined
-      const message =
-        detail && typeof detail === 'object' && 'message' in detail && typeof detail.message === 'string'
-          ? detail.message
-          : typeof detail === 'string'
-            ? detail
-            : 'Không thể tải phụ đề'
-      throw new TranscriptRequestError(message, code ?? (typeof detail === 'string' ? detail : undefined))
-    }
-    return response.json()
+    return postJson('/transcript', body, 'Không thể tải phụ đề')
   }
 
   const loadVideo = async (id: string) => {
@@ -527,7 +567,7 @@ function App() {
       applyLoadResult(data, id, 'Đã tải phụ đề')
     } catch (error: unknown) {
       if (token === loadTokenRef.current) {
-        const code = error instanceof TranscriptRequestError ? error.code : undefined
+        const code = error instanceof RequestError ? error.code : undefined
         console.warn('[transcript]', code || error)
         setStatus(
           transcriptStatusText(code),
@@ -610,7 +650,7 @@ function App() {
       setPendingDraft(null)
     } catch (error: unknown) {
       if (token === loadTokenRef.current) {
-        const code = error instanceof TranscriptRequestError ? error.code : undefined
+        const code = error instanceof RequestError ? error.code : undefined
         setStatus(transcriptStatusText(code), 'error')
         setUrlError(transcriptErrorMessage(code))
       }
@@ -667,7 +707,7 @@ function App() {
       })
       .catch((error: unknown) => {
         if (token !== loadTokenRef.current) return
-        const code = error instanceof TranscriptRequestError ? error.code : undefined
+        const code = error instanceof RequestError ? error.code : undefined
         setStatus('Không mở được dự án', 'error')
         setUrlError(
           code === 'project_not_found'
@@ -904,9 +944,46 @@ function App() {
   }
 
   /**
+   * Ask the session to rewrite its content for `mode`.
+   *
+   * `offer` is false for the free cases (an empty map), where the call only
+   * records the mode and never reaches the model.
+   */
+  const adoptMode = async (mode: ContentMode, offer: boolean) => {
+    const session = sessionIdRef.current
+    if (!session || rebuilding) return
+    setRebuilding(true)
+    if (offer) setStatus('Đang tạo lại nội dung…', 'busy')
+    try {
+      const data = await postJson(
+        `/session/${session}/restructure`,
+        { map_layout: mode },
+        'Không tạo lại được nội dung',
+      )
+      if (Array.isArray(data.nodes)) applyNodes(data.nodes, false)
+      const applied: ContentMode = isContentMode(data.map_mode) ? data.map_mode : mode
+      setBuiltMode(applied)
+      setRebuildOffer(null)
+      if (offer) {
+        setStatus(`Đã tạo lại nội dung theo kiểu ${MODE_LABELS[applied]}`, 'ok')
+        // Persist the rewritten tree so reopening the project shows it.
+        void saveRef.current()
+      }
+    } catch (error: any) {
+      // The map is untouched server-side, so only the message is lost.
+      setStatus(error?.message || 'Không tạo lại được nội dung', 'error')
+    } finally {
+      setRebuilding(false)
+    }
+  }
+
+  /**
    * Apply a look chosen in the dialog. The style is presentation, so it is
    * remembered per project and per browser; a viewer keeps it local because
    * they cannot write to the row.
+   *
+   * A different mode is a different *content*, so it is offered rather than
+   * spent: the drawing changes now, the rebuild is one click (ADR 0013).
    */
   const handleStyleConfirm = async (style: MapStyle) => {
     setMapStyle(style)
@@ -916,6 +993,15 @@ function App() {
     // The renderer only reads the style on mount/update, so nudge it to
     // repaint the palette without waiting for the next AI update.
     mindmapRef.current?.updateTree(titleRef.current, nodesRef.current, { focusNew: false })
+
+    const change = modeSwitch(style.layout, builtModeRef.current, {
+      hasContent: nodesRef.current.length > 0,
+      canEdit,
+    })
+    setRebuildOffer(change?.offer ? change.mode : null)
+    // Nothing extracted yet, so switching costs nothing: the next chunk is
+    // already built for the new mode. Do it quietly.
+    if (change && !change.offer) void adoptMode(change.mode, false)
 
     const id = projectIdRef.current
     if (id && canEdit) {
@@ -1020,6 +1106,11 @@ function App() {
           es.close()
           recreateSession()
           return
+        }
+        if (data?.type === 'restructure' && isContentMode(data.map_mode)) {
+          // Another tab rewrote the map for a new mode; this one is up to date.
+          setBuiltMode(data.map_mode)
+          setRebuildOffer(null)
         }
         if (data && Array.isArray(data.nodes) && mindmapRef.current) {
           applyNodes(data.nodes, data?.type === 'diff')
@@ -1447,6 +1538,35 @@ function App() {
               Huỷ
             </button>
           </form>
+        )}
+
+        {rebuildOffer && (
+          <div className="rebuild-bar" role="status">
+            <span className="rebuild-bar__text">
+              Đã đổi cách vẽ. Nội dung vẫn được tạo theo kiểu{' '}
+              <strong>{MODE_LABELS[builtMode]}</strong>.
+            </span>
+            <span className="rebuild-bar__actions">
+              <button
+                type="button"
+                className="btn btn--primary btn--sm"
+                disabled={rebuilding}
+                onClick={() => void adoptMode(rebuildOffer, true)}
+              >
+                {rebuilding
+                  ? 'Đang tạo lại…'
+                  : `Tạo lại theo kiểu ${MODE_LABELS[rebuildOffer]}`}
+              </button>
+              <button
+                type="button"
+                className="btn btn--ghost btn--sm"
+                disabled={rebuilding}
+                onClick={() => setRebuildOffer(null)}
+              >
+                Để sau
+              </button>
+            </span>
+          </div>
         )}
 
         <div className={`app-status app-status--${status.kind}`} role="status" aria-live="polite">
