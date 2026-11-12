@@ -11,42 +11,15 @@
  * a label needs, whether edges curve, and whether the rings are drawn.
  */
 
-import { nodeIdOf, type MarkmapNode } from './mindmapTree'
+import { nodeIdOf, visibleChildren, type MarkmapNode } from './mindmapTree'
+import type { SvgBox, SvgEdge, SvgLayout } from './svgLayout'
 
 export type RadialKind = 'spider' | 'bubble' | 'circle'
 
-export interface RadialBox {
-  id: string
-  depth: number
-  /** Index of the top-level branch this node belongs to; drives its colour. */
-  branch: number
-  content: string
-  x: number
-  y: number
-  width: number
-  height: number
-}
-
-export interface RadialEdge {
-  d: string
-  branch: number
-  depth: number
-}
-
-export interface RadialBounds {
-  x1: number
-  y1: number
-  x2: number
-  y2: number
-}
-
-export interface RadialLayout {
-  boxes: RadialBox[]
-  edges: RadialEdge[]
-  /** Ring radii, drawn as faint guides for the circle family. */
-  rings: number[]
-  bounds: RadialBounds
-}
+/** Radial names are kept for readers of this module; the shape is shared. */
+export type RadialBox = SvgBox
+export type RadialEdge = SvgEdge
+export type RadialLayout = SvgLayout
 
 interface KindConfig {
   /** Minimum distance between two consecutive rings. */
@@ -66,6 +39,15 @@ const CONFIG: Record<RadialKind, KindConfig> = {
   // Circle: tighter, evenly spaced rings you can trace with your eye.
   circle: { ringGap: 200, gapX: 22, curve: 0, showRings: true },
 }
+
+/**
+ * Below this scale the 13px labels stop being words and become texture, so the
+ * automatic framing stops here and lets the map overflow — panning to the rest
+ * beats an unreadable overview. It is deliberately low: for a radial map,
+ * seeing the whole shape matters more than reading every label at once, and a
+ * wheel turn zooms in.
+ */
+const FIT_SCALE = 0.3
 
 /** Rough advance width of the UI sans at 1em, measured against the real font. */
 const CHAR_RATIO = 0.53
@@ -88,15 +70,6 @@ interface Placed {
   width: number
   height: number
   radius: number
-}
-
-/** `fold` is how markmap stores a collapsed branch; the radial map honours it. */
-function isFolded(node: MarkmapNode): boolean {
-  return Boolean((node.payload as Record<string, unknown> | undefined)?.fold)
-}
-
-function visibleChildren(node: MarkmapNode): MarkmapNode[] {
-  return isFolded(node) ? [] : node.children || []
 }
 
 /** Leaves weigh 1, so a branch with ten sub-ideas gets ten times the arc. */
@@ -286,6 +259,7 @@ export function layoutRadial(root: MarkmapNode, kind: RadialKind): RadialLayout 
     edges,
     rings: config.showRings ? radii.slice(1) : [],
     bounds: { x1, y1, x2, y2 },
+    fitScale: FIT_SCALE,
   }
 }
 

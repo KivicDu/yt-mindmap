@@ -178,6 +178,19 @@ export function collapseOlderBranches(
   })
 }
 
+/**
+ * `fold` is how markmap stores a collapsed branch. Every custom renderer has to
+ * honour it, or collapsing in one layout would be ignored in another.
+ */
+export function isFolded(node: MarkmapNode): boolean {
+  return Boolean((node.payload as Record<string, unknown> | undefined)?.fold)
+}
+
+/** The children a renderer should actually draw. */
+export function visibleChildren(node: MarkmapNode): MarkmapNode[] {
+  return isFolded(node) ? [] : node.children || []
+}
+
 /** Depth-first lookup, used by the editor panel. */
 export function findNodeById(nodes: MapNode[], id: string): MapNode | null {
   for (const node of nodes || []) {
