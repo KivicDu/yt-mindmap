@@ -6,6 +6,7 @@ import type { YouTubeProps } from 'react-youtube'
 import './Workspace.css'
 import ThemeToggle from '../../components/ThemeToggle'
 import ExportMenu from '../../components/ExportMenu'
+import MapStyleDialog from '../../components/MapStyleDialog'
 import ShortcutHelp from '../../components/ShortcutHelp'
 import ChapterRail from '../../components/ChapterRail'
 import TranscriptPanel, {
@@ -34,6 +35,15 @@ import {
 } from '../../lib/projects'
 import { getAccessToken, refreshSession } from '../../lib/api'
 import { exportMap, type ExportFormat } from '../../lib/mapExport'
+import {
+  hasStoredStyle,
+  normalizeStyle,
+  readStoredStyle,
+  storeStyle,
+  styleFromSearch,
+  stripStyleFromSearch,
+  type MapStyle,
+} from '../../lib/mapStyle'
 import { SkeletonList } from '../../components/ui/Skeleton'
 import { useToast } from '../../components/ui/useToast'
 import { buildChapters } from '../../lib/chapters'
@@ -174,6 +184,24 @@ function App() {
   const [secondaryError, setSecondaryError] = useState('')
   const [exporting, setExporting] = useState<ExportFormat | null>(null)
   const [showHelp, setShowHelp] = useState(false)
+  // The look chosen in the picker. A URL param wins (the dashboard hands the
+  // choice over that way), then the learner's last choice, then the default.
+  const [mapStyle, setMapStyle] = useState<MapStyle>(
+    () => styleFromSearch(window.location.search) ?? readStoredStyle(),
+  )
+  // A first visit lands on a blank workspace, so the look is asked for before
+  // anything is built — the "choose before you start" step. A saved project
+  // carries its own look, and a returning learner already has a stored choice,
+  // so neither of them is interrupted.
+  const [styleOpen, setStyleOpen] = useState(
+    () =>
+      !routeProjectId &&
+      styleFromSearch(window.location.search) === null &&
+      !hasStoredStyle(),
+  )
+  // True only while the dialog is the "choose before you start" step, so it can
+  // say "Bắt đầu" instead of "Áp dụng" the way the dashboard picker does.
+  const [styleIntro, setStyleIntro] = useState(styleOpen)
 
   const urlInputRef = useRef<HTMLInputElement>(null)
   const fileInputRef = useRef<HTMLInputElement>(null)
@@ -192,6 +220,7 @@ function App() {
   const languagesLoadedRef = useRef(false)
   const languagesRequestRef = useRef(false)
   const tabRefs = useRef<Record<string, HTMLButtonElement | null>>({})
+  const styleRef = useRef(mapStyle)
 
   const setStatus = useCallback((text: string, kind: StatusKind = 'idle') => {
     setStatusState({ kind, text })
@@ -204,6 +233,22 @@ function App() {
     sessionIdRef.current = sessionId
   }, [sessionId])
 
+  useEffect(() => {
+    styleRef.current = mapStyle
+  }, [mapStyle])
+
+  // The picker hands its choice over as a query param. Once the state above
+  // has read it, drop it so a refresh or a shared link does not keep forcing
+  // the style over whatever the learner picks next.
+  useEffect(() => {
+    const search = window.location.search
+    if (!styleFromSearch(search)) return
+    const rest = stripStyleFromSearch(search)
+    navigate(`${window.location.pathname}${rest}`, { replace: true })
+    // Runs once: the params are gone after the first pass.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+
   /** Persist the live session. Returns false when the API refused the write. */
   const saveNow = useCallback(
     async (options?: { title?: string; promote?: boolean }): Promise<boolean> => {
@@ -214,6 +259,8 @@ function App() {
         const summary = await autosaveProject({
           session_id: session,
           project_id: projectIdRef.current,
+          map_layout: styleRef.current.layout,
+          map_palette: styleRef.current.palette,
         })
         projectIdRef.current = summary.id
         setProjectId(summary.id)
@@ -266,6 +313,8 @@ function App() {
         nodes: nodesRef.current,
         consumedUntil,
         language: transcriptLang,
+        mapLayout: styleRef.current.layout,
+        mapPalette: styleRef.current.palette,
         savedAt: new Date().toISOString(),
       })
       setSavedAt(new Date())
@@ -295,6 +344,14 @@ function App() {
     if (data.session_id) {
       setSessionId(data.session_id)
       sessionIdRef.current = data.session_id
+    }
+
+    // A saved project carries its own look, so reopening it looks the way the
+    // learner left it rather than the way the last project happened to look.
+    if (data.map_layout || data.map_palette) {
+      setMapStyle(
+        normalizeStyle({ layout: data.map_layout, palette: data.map_palette }),
+      )
     }
 
     if (Array.isArray(data.transcript)) {
@@ -544,6 +601,11 @@ function App() {
       if (token !== loadTokenRef.current) return
       const id = draft.videoId || extractVideoId(draft.url)
       if (id) setVideoId(id)
+      if (draft.mapLayout || draft.mapPalette) {
+        setMapStyle(
+          normalizeStyle({ layout: draft.mapLayout, palette: draft.mapPalette }),
+        )
+      }
       applyLoadResult(data, id || '', 'Đã khôi phục bản nháp trong trình duyệt')
       setPendingDraft(null)
     } catch (error: unknown) {
@@ -839,6 +901,35 @@ function App() {
     } finally {
       setExporting(null)
     }
+  }
+
+  /**
+   * Apply a look chosen in the dialog. The style is presentation, so it is
+   * remembered per project and per browser; a viewer keeps it local because
+   * they cannot write to the row.
+   */
+  const handleStyleConfirm = async (style: MapStyle) => {
+    setMapStyle(style)
+    styleRef.current = style
+    storeStyle(style)
+    setStyleOpen(false)
+    // The renderer only reads the style on mount/update, so nudge it to
+    // repaint the palette without waiting for the next AI update.
+    mindmapRef.current?.updateTree(titleRef.current, nodesRef.current, { focusNew: false })
+
+    const id = projectIdRef.current
+    if (id && canEdit) {
+      try {
+        await updateProject(id, {
+          map_layout: style.layout,
+          map_palette: style.palette,
+        })
+      } catch {
+        setStatus('Đã đổi kiểu sơ đồ, nhưng chưa lưu được vào dự án', 'error')
+        return
+      }
+    }
+    setStatus('Đã đổi kiểu sơ đồ', 'ok')
   }
 
   const loadVersions = useCallback(async () => {
@@ -1814,6 +1905,24 @@ function App() {
                 {isUpdating ? 'Đang phân tích…' : 'Cập nhật'}
               </button>
 
+              <button
+                type="button"
+                className="btn btn--outline btn--sm"
+                onClick={() => setStyleOpen(true)}
+                title="Đổi bảng màu và kiểu sơ đồ"
+              >
+                <svg viewBox="0 0 20 20" fill="none" aria-hidden="true" width="14" height="14">
+                  <path
+                    d="M4 15.5 12.5 7a1.8 1.8 0 0 0-2.5-2.5L1.5 13v2.5H4ZM11 5l3.5 3.5M14 12.5c1.4 0 2.5 1 2.5 2.3 0 1.2-1.1 2.2-2.5 2.2s-2.5-1-2.5-2.2c0-1.3 1.1-2.3 2.5-2.3Z"
+                    stroke="currentColor"
+                    strokeWidth="1.4"
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                  />
+                </svg>
+                Kiểu sơ đồ
+              </button>
+
               <ExportMenu
                 onExport={(format) => void handleExport(format)}
                 disabled={nodeCount === 0}
@@ -1831,6 +1940,8 @@ function App() {
                 selectedId={selectedNodeId}
                 collapseOld={focusRecent}
                 onReady={handleMindMapReady}
+                layout={mapStyle.layout}
+                palette={mapStyle.palette}
               />
             </Suspense>
 
@@ -1903,6 +2014,24 @@ function App() {
       </main>
 
       {showHelp && <ShortcutHelp onClose={() => setShowHelp(false)} />}
+      <MapStyleDialog
+        open={styleOpen}
+        initial={mapStyle}
+        title={styleIntro ? 'Chọn kiểu sơ đồ' : 'Đổi kiểu sơ đồ'}
+        confirmLabel={styleIntro ? 'Bắt đầu' : 'Áp dụng'}
+        onClose={() => {
+          // Dismissing means "keep what is on screen". Remembering it stops the
+          // first-visit prompt from coming back; the dashboard's own picker
+          // still asks before every new project.
+          storeStyle(styleRef.current)
+          setStyleIntro(false)
+          setStyleOpen(false)
+        }}
+        onConfirm={(style) => {
+          setStyleIntro(false)
+          void handleStyleConfirm(style)
+        }}
+      />
     </div>
   )
 }

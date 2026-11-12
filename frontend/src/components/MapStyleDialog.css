@@ -1,0 +1,289 @@
+/* The "choose a look" dialog: a paper card with two radio groups. */
+.mstyle-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 120;
+  display: grid;
+  place-items: center;
+  padding: 16px;
+  background: rgba(28, 27, 25, 0.34);
+  animation: mstyle-fade var(--t-fast) var(--ease);
+}
+
+.mstyle-dialog {
+  width: min(760px, 100%);
+  max-height: min(88dvh, 760px);
+  overflow-y: auto;
+  padding: 20px 22px 18px;
+  border: 1px solid var(--line-2);
+  border-radius: var(--r-lg);
+  background: var(--surface-raised);
+  box-shadow: var(--shadow-float);
+}
+
+.mstyle-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.mstyle-eyebrow {
+  color: var(--ink-3);
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.mstyle-head h2 {
+  margin: 3px 0 0;
+  color: var(--ink);
+  font-size: 19px;
+  font-weight: 600;
+  letter-spacing: -0.015em;
+}
+
+.mstyle-lede {
+  margin: 6px 0 0;
+  max-width: 52ch;
+  color: var(--ink-2);
+  font-size: 12.5px;
+  line-height: 1.55;
+}
+
+.mstyle-close {
+  display: grid;
+  place-items: center;
+  flex: none;
+  width: 30px;
+  height: 30px;
+  border: 1px solid transparent;
+  border-radius: var(--r-sm);
+  background: transparent;
+  color: var(--ink-3);
+  cursor: pointer;
+}
+
+.mstyle-close:hover {
+  border-color: var(--line-2);
+  background: var(--paper-2);
+  color: var(--ink);
+}
+
+.mstyle-close svg {
+  width: 15px;
+  height: 15px;
+}
+
+.mstyle-section {
+  margin-top: 20px;
+}
+
+.mstyle-section-title {
+  margin: 0 0 10px;
+  color: var(--ink-3);
+  font-size: 10.5px;
+  font-weight: 600;
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+}
+
+/* ---------- palettes ---------- */
+
+.mstyle-palettes {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(158px, 1fr));
+  gap: 8px;
+}
+
+.mstyle-palette {
+  display: grid;
+  gap: 5px;
+  padding: 10px 11px;
+  border: 1px solid var(--line);
+  border-radius: var(--r-md);
+  background: var(--paper);
+  text-align: left;
+  cursor: pointer;
+  transition:
+    border-color var(--t-fast) var(--ease),
+    background-color var(--t-fast) var(--ease);
+}
+
+.mstyle-palette:hover {
+  border-color: var(--line-strong);
+  background: var(--paper-2);
+}
+
+.mstyle-palette.is-active {
+  border-color: var(--accent);
+  background: var(--accent-soft-2);
+  box-shadow: inset 0 0 0 1px var(--accent-line);
+}
+
+.mstyle-swatches {
+  display: flex;
+  gap: 3px;
+}
+
+.mstyle-swatches span {
+  width: 100%;
+  height: 9px;
+  border-radius: 999px;
+}
+
+.mstyle-palette-name {
+  color: var(--ink);
+  font-size: 12.5px;
+  font-weight: 600;
+}
+
+.mstyle-palette-hint {
+  color: var(--ink-3);
+  font-size: 11px;
+  line-height: 1.4;
+}
+
+/* ---------- layouts ---------- */
+
+.mstyle-layouts {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(168px, 1fr));
+  gap: 8px;
+}
+
+.mstyle-layout {
+  display: grid;
+  justify-items: center;
+  gap: 6px;
+  padding: 10px 12px 12px;
+  border: 1px solid var(--line);
+  border-radius: var(--r-md);
+  background: var(--paper);
+  text-align: center;
+  cursor: pointer;
+  transition:
+    border-color var(--t-fast) var(--ease),
+    background-color var(--t-fast) var(--ease);
+}
+
+.mstyle-layout:hover {
+  border-color: var(--line-strong);
+  background: var(--paper-2);
+}
+
+.mstyle-layout.is-active {
+  border-color: var(--accent);
+  background: var(--accent-soft-2);
+  box-shadow: inset 0 0 0 1px var(--accent-line);
+}
+
+.mstyle-preview {
+  width: 100%;
+  max-width: 132px;
+  height: auto;
+}
+
+.mstyle-layout-name {
+  color: var(--ink);
+  font-size: 12.5px;
+  font-weight: 600;
+}
+
+.mstyle-layout-hint {
+  color: var(--ink-3);
+  font-size: 11px;
+  line-height: 1.4;
+}
+
+/* ---------- footer ---------- */
+
+.mstyle-foot {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-top: 20px;
+  padding-top: 14px;
+  border-top: 1px solid var(--line);
+}
+
+.mstyle-summary {
+  color: var(--ink-3);
+  font-size: 11.5px;
+}
+
+.mstyle-actions {
+  display: flex;
+  gap: 8px;
+}
+
+.mstyle-ghost,
+.mstyle-confirm {
+  padding: 8px 14px;
+  border-radius: var(--r-sm);
+  font-size: 12.5px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.mstyle-ghost {
+  border: 1px solid var(--line-2);
+  background: transparent;
+  color: var(--ink-2);
+}
+
+.mstyle-ghost:hover {
+  background: var(--paper-2);
+  color: var(--ink);
+}
+
+.mstyle-confirm {
+  border: 1px solid transparent;
+  background: var(--accent);
+  color: var(--accent-contrast);
+}
+
+.mstyle-confirm:hover {
+  background: var(--accent-hover);
+}
+
+.mstyle-ghost:focus-visible,
+.mstyle-confirm:focus-visible,
+.mstyle-palette:focus-visible,
+.mstyle-layout:focus-visible,
+.mstyle-close:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+@keyframes mstyle-fade {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+@media (max-width: 620px) {
+  .mstyle-dialog {
+    padding: 16px;
+  }
+
+  .mstyle-foot {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .mstyle-actions {
+    justify-content: flex-end;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .mstyle-backdrop {
+    animation: none;
+  }
+}

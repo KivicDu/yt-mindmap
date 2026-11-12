@@ -227,6 +227,8 @@
 
 .dash-cta {
   display: inline-flex;
+  cursor: pointer;
+  font-family: inherit;
   align-items: center;
   justify-content: center;
   height: 36px;

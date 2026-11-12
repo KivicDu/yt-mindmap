@@ -41,6 +41,17 @@ class Project(Base, TimestampMixin):
     # Autosave writes a draft; an explicit "save" promotes it to a project.
     is_draft: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
 
+    # How the map is drawn. `map_layout` picks the renderer (a left-to-right
+    # tree, or a radial family) and `map_palette` picks the branch colours.
+    # Both are validated against a small allowlist so a bad row can never make
+    # the workspace render something unknown; the defaults keep old rows valid.
+    map_layout: Mapped[str] = mapped_column(
+        String(20), default="tree", server_default="tree", nullable=False
+    )
+    map_palette: Mapped[str] = mapped_column(
+        String(20), default="paper", server_default="paper", nullable=False
+    )
+
     # Free-form labels ("math", "ai", "ôn thi") used to group projects.
     # A JSON list keeps tags cheap to read with the row; the list endpoint
     # filters with a portable text match instead of a second join table.

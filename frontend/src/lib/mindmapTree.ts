@@ -133,7 +133,7 @@ export function collectIds(node: MarkmapNode | null | undefined, ids: Set<string
   }
 }
 
-function nodeIdOf(node: MarkmapNode): string | null {
+export function nodeIdOf(node: MarkmapNode): string | null {
   const match = /data-node-id="([^"]+)"/.exec(String(node.content ?? ''))
   return match ? match[1] : null
 }
@@ -176,6 +176,19 @@ export function collapseOlderBranches(
       child.payload = { ...(child.payload || {}), fold: 1 }
     }
   })
+}
+
+/**
+ * `fold` is how markmap stores a collapsed branch. Every custom renderer has to
+ * honour it, or collapsing in one layout would be ignored in another.
+ */
+export function isFolded(node: MarkmapNode): boolean {
+  return Boolean((node.payload as Record<string, unknown> | undefined)?.fold)
+}
+
+/** The children a renderer should actually draw. */
+export function visibleChildren(node: MarkmapNode): MarkmapNode[] {
+  return isFolded(node) ? [] : node.children || []
 }
 
 /** Depth-first lookup, used by the editor panel. */

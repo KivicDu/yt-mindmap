@@ -645,6 +645,8 @@ async def get_transcript(
             "video_id": vid,
             "title": title,
             "language": language,
+            "map_layout": project.map_layout or "tree",
+            "map_palette": project.map_palette or "paper",
             "cached": cached,
             "role": role,
             "can_edit": sharing_service.can_edit(role),
@@ -1051,6 +1053,13 @@ def autosave_project(
             title=request.title if role == sharing_service.ROLE_OWNER else None,
             author_id=user.id,
         )
+        # Style is presentation, not content, so an editor may change it even
+        # though they cannot rename the project.
+        if project_service.apply_style(
+            saved, request.map_layout, request.map_palette
+        ):
+            db.commit()
+            db.refresh(saved)
         return project_service.summary(saved)
 
     if target_id:
@@ -1071,6 +1080,8 @@ def autosave_project(
         project_id=request.project_id,
         title=request.title,
         is_draft=request.is_draft,
+        map_layout=request.map_layout,
+        map_palette=request.map_palette,
     )
     if project is None:
         raise HTTPException(status_code=404, detail="project_not_found")
