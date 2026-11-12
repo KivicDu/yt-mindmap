@@ -11,6 +11,13 @@
 export type MapLayout = 'tree' | 'tree-down' | 'spider' | 'bubble' | 'circle'
 export type MapPalette = 'paper' | 'sage' | 'sky' | 'blush' | 'lilac' | 'sand'
 
+/**
+ * The thinking operation the AI extracts for, which is not the same thing as
+ * the drawing (ADR 0013). A bubble map asks for attributes; drawing those as a
+ * tree would still be a bubble map's content.
+ */
+export type ContentMode = 'tree' | 'spider' | 'bubble' | 'circle'
+
 export interface MapStyle {
   layout: MapLayout
   palette: MapPalette
@@ -98,6 +105,54 @@ export const MAP_LAYOUTS: readonly LayoutDef[] = [
 ]
 
 export const DEFAULT_STYLE: MapStyle = { layout: 'tree', palette: 'paper' }
+
+/** How each mode is named in the UI, matching `MAP_LAYOUTS`. */
+export const MODE_LABELS: Record<ContentMode, string> = {
+  tree: 'Tree map',
+  spider: 'Spider map',
+  bubble: 'Bubble map',
+  circle: 'Circle map',
+}
+
+/**
+ * Which thinking mode a layout asks the AI for.
+ *
+ * `tree-down` is the same content drawn downwards, so it never rebuilds.
+ */
+export function contentMode(layout: MapLayout): ContentMode {
+  return layout === 'tree-down' ? 'tree' : layout
+}
+
+export function isContentMode(value: unknown): value is ContentMode {
+  return typeof value === 'string' && value in MODE_LABELS
+}
+
+export interface ModeSwitch {
+  /** The mode the content should be rewritten for. */
+  mode: ContentMode
+  /** True when it costs an AI call and needs the learner's consent. */
+  offer: boolean
+}
+
+/**
+ * What changing the look means for the content (ADR 0013).
+ *
+ * `null` means nothing to do: the drawing changed, the mode did not. An empty
+ * map is a free switch — the next chunk is already built for the new mode — so
+ * it is adopted without asking. A map with content needs consent because a
+ * rewrite costs a call and only reorganises what is already there.
+ */
+export function modeSwitch(
+  layout: MapLayout,
+  builtMode: ContentMode,
+  options: { hasContent: boolean; canEdit: boolean },
+): ModeSwitch | null {
+  const mode = contentMode(layout)
+  if (mode === builtMode) return null
+  if (!options.hasContent) return { mode, offer: false }
+  if (!options.canEdit) return null
+  return { mode, offer: true }
+}
 
 const LAYOUT_IDS = MAP_LAYOUTS.map((item) => item.id)
 const PALETTE_IDS = MAP_PALETTES.map((item) => item.id)
