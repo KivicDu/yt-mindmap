@@ -77,6 +77,17 @@ def test_style_is_saved_and_updated(client: TestClient):
     assert (renamed["map_layout"], renamed["map_palette"]) == ("bubble", "lilac")
 
 
+def test_the_top_down_tree_is_a_storable_layout(client: TestClient):
+    # `tree-down` is a layout id with a hyphen in it, so it is the one most
+    # likely to be rejected by an allowlist that grew by hand.
+    headers = register(client)
+    project = create_project(client, headers, map_layout="tree-down")
+    assert project["map_layout"] == "tree-down"
+
+    reopened = client.get(f"/api/projects/{project['id']}", headers=headers).json()
+    assert reopened["map_layout"] == "tree-down"
+
+
 def test_unknown_layout_or_palette_is_rejected(client: TestClient):
     headers = register(client)
 
