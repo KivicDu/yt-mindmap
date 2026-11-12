@@ -36,6 +36,7 @@ import {
 import { getAccessToken, refreshSession } from '../../lib/api'
 import { exportMap, type ExportFormat } from '../../lib/mapExport'
 import {
+  hasStoredStyle,
   normalizeStyle,
   readStoredStyle,
   storeStyle,
@@ -188,7 +189,19 @@ function App() {
   const [mapStyle, setMapStyle] = useState<MapStyle>(
     () => styleFromSearch(window.location.search) ?? readStoredStyle(),
   )
-  const [styleOpen, setStyleOpen] = useState(false)
+  // A first visit lands on a blank workspace, so the look is asked for before
+  // anything is built — the "choose before you start" step. A saved project
+  // carries its own look, and a returning learner already has a stored choice,
+  // so neither of them is interrupted.
+  const [styleOpen, setStyleOpen] = useState(
+    () =>
+      !routeProjectId &&
+      styleFromSearch(window.location.search) === null &&
+      !hasStoredStyle(),
+  )
+  // True only while the dialog is the "choose before you start" step, so it can
+  // say "Bắt đầu" instead of "Áp dụng" the way the dashboard picker does.
+  const [styleIntro, setStyleIntro] = useState(styleOpen)
 
   const urlInputRef = useRef<HTMLInputElement>(null)
   const fileInputRef = useRef<HTMLInputElement>(null)
@@ -2004,10 +2017,20 @@ function App() {
       <MapStyleDialog
         open={styleOpen}
         initial={mapStyle}
-        title="Đổi kiểu sơ đồ"
-        confirmLabel="Áp dụng"
-        onClose={() => setStyleOpen(false)}
-        onConfirm={(style) => void handleStyleConfirm(style)}
+        title={styleIntro ? 'Chọn kiểu sơ đồ' : 'Đổi kiểu sơ đồ'}
+        confirmLabel={styleIntro ? 'Bắt đầu' : 'Áp dụng'}
+        onClose={() => {
+          // Dismissing means "keep what is on screen". Remembering it stops the
+          // first-visit prompt from coming back; the dashboard's own picker
+          // still asks before every new project.
+          storeStyle(styleRef.current)
+          setStyleIntro(false)
+          setStyleOpen(false)
+        }}
+        onConfirm={(style) => {
+          setStyleIntro(false)
+          void handleStyleConfirm(style)
+        }}
       />
     </div>
   )

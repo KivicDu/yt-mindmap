@@ -161,6 +161,23 @@ export function storeStyle(style: MapStyle): void {
   }
 }
 
+/**
+ * Whether this browser has ever chosen a look.
+ *
+ * `readStoredStyle` cannot answer that, because it falls back to the default —
+ * "chose the default" and "never chose" would look the same. The picker needs
+ * the difference: a first visit should be asked, a returning one should not.
+ */
+export function hasStoredStyle(): boolean {
+  if (typeof window === 'undefined') return false
+  try {
+    return window.localStorage.getItem(STORAGE_KEY) !== null
+  } catch {
+    // Private mode: treat it as a first visit rather than guessing.
+    return false
+  }
+}
+
 /** `/app?layout=spider&palette=sage` — how the picker hands over its choice. */
 export function styleFromSearch(search: string): MapStyle | null {
   const params = new URLSearchParams(search)

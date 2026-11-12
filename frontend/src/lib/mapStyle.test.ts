@@ -1,10 +1,13 @@
-import { describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import {
   DEFAULT_STYLE,
   MAP_LAYOUTS,
   MAP_PALETTES,
   branchColor,
+  hasStoredStyle,
   normalizeStyle,
+  readStoredStyle,
+  storeStyle,
   styleFromSearch,
   stripStyleFromSearch,
   styleVars,
@@ -87,5 +90,55 @@ describe('style in the URL', () => {
   it('strips only the style params, keeping the rest of the query', () => {
     expect(stripStyleFromSearch('?layout=circle&palette=sand&q=math')).toBe('?q=math')
     expect(stripStyleFromSearch('?layout=circle&palette=sand')).toBe('')
+  })
+})
+
+describe('remembering the chosen look', () => {
+  // The suite runs in Node, so `window.localStorage` has to be faked. The
+  // module's own guard is what a private-mode browser hits, and that is
+  // covered by the "no window" case below.
+  const fakeStorage = () => {
+    const items = new Map<string, string>()
+    const storage = {
+      getItem: (key: string) => items.get(key) ?? null,
+      setItem: (key: string, value: string) => void items.set(key, value),
+      removeItem: (key: string) => void items.delete(key),
+      clear: () => items.clear(),
+    }
+    vi.stubGlobal('window', { localStorage: storage })
+    return storage
+  }
+
+  afterEach(() => {
+    vi.unstubAllGlobals()
+  })
+
+  it('falls back to the default when there is no browser storage', () => {
+    expect(hasStoredStyle()).toBe(false)
+    expect(readStoredStyle()).toEqual(DEFAULT_STYLE)
+  })
+
+  it('tells a first visit apart from a remembered default', () => {
+    fakeStorage()
+    expect(hasStoredStyle()).toBe(false)
+
+    // Choosing the default is still a choice, so the picker stays quiet next
+    // time instead of asking the same question again.
+    storeStyle(DEFAULT_STYLE)
+    expect(hasStoredStyle()).toBe(true)
+    expect(readStoredStyle()).toEqual(DEFAULT_STYLE)
+  })
+
+  it('round-trips a non-default choice', () => {
+    fakeStorage()
+    storeStyle({ layout: 'spider', palette: 'sage' })
+    expect(readStoredStyle()).toEqual({ layout: 'spider', palette: 'sage' })
+  })
+
+  it('keeps a hand-edited value from breaking the map', () => {
+    const storage = fakeStorage()
+    storage.setItem('yt-mindmap:map-style', '{"layout":"nope"}')
+    expect(hasStoredStyle()).toBe(true)
+    expect(readStoredStyle()).toEqual(DEFAULT_STYLE)
   })
 })
