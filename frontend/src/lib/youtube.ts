@@ -68,6 +68,9 @@ export type TranscriptErrorCode =
   | 'invalid_subtitle_file'
   | 'missing_input'
   | 'session_error'
+  | 'video_blocked'
+  | 'content_not_lecture'
+  | 'content_too_short'
   | string
 
 /**
@@ -110,6 +113,12 @@ export function transcriptErrorMessage(code: string | undefined): string {
       return 'Không kết nối được tới YouTube. Kiểm tra mạng rồi thử lại, hoặc tải file .srt/.vtt.'
     case 'invalid_subtitle_file':
       return 'File phụ đề không đọc được. Kiểm tra lại định dạng .srt hoặc .vtt.'
+    case 'video_blocked':
+      return 'Video này nằm trong danh sách bị chặn. Công cụ chỉ xử lý bài giảng được phép.'
+    case 'content_not_lecture':
+      return 'Công cụ chỉ tạo sơ đồ cho bài giảng. Video giải trí, âm nhạc hoặc ngoài danh sách cho phép sẽ không được xử lý.'
+    case 'content_too_short':
+      return 'Video hoặc phụ đề quá ngắn để có thể là một bài giảng. Hãy thử bài dài hơn.'
     case 'rate_limited':
       return 'Bạn thao tác quá nhanh. Chờ một chút rồi thử lại nhé.'
     case 'ai_quota_exceeded':
@@ -139,6 +148,12 @@ export function transcriptStatusText(code: string | undefined): string {
     case 'youtube_error':
     case 'network_error':
       return 'Không kết nối được YouTube'
+    case 'video_blocked':
+      return 'Video bị chặn'
+    case 'content_not_lecture':
+      return 'Không phải bài giảng'
+    case 'content_too_short':
+      return 'Video quá ngắn'
     case 'rate_limited':
       return 'Thao tác quá nhanh'
     case 'ai_quota_exceeded':
