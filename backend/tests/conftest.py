@@ -8,6 +8,7 @@ from sqlalchemy.orm import Session, sessionmaker
 from sqlalchemy.pool import StaticPool
 
 import main as main_module
+from app.core.config import get_settings
 from app.db.base import Base
 from app.db.session import get_db
 from app.services.rate_limit import reset_rate_limits
@@ -27,6 +28,10 @@ TestingSession = sessionmaker(bind=engine, autoflush=False, expire_on_commit=Fal
 def isolated_state(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     """Keep every test away from the real session store and cache file."""
     monkeypatch.setattr(main_module, "CACHE_PATH", tmp_path / "video_cache.json")
+    # Existing fixtures use tiny fake transcripts; the content gate is tested
+    # explicitly in test_content_policy.py with the policy turned on. Settings
+    # are patched in place: other fixtures mutate the cached object too.
+    monkeypatch.setattr(get_settings(), "CONTENT_POLICY", "off")
     main_module.sessions.clear()
     main_module.video_cache.clear()
     reset_rate_limits()
