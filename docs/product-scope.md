@@ -62,7 +62,7 @@ Sản phẩm **không phát video** — YouTube phát. Điều sản phẩm ki�
 | Lớp | Việc làm | Trạng thái |
 |---|---|---|
 | **1. Metadata** | oEmbed (tiêu đề, kênh) + độ dài và số cue của phụ đề; blocklist / allowlist | **Đã làm** |
-| **2. Phân loại** | 1 call AI nhỏ trên 30 cue đầu: `lecture` / `not_lecture` / `sensitive` | Chưa làm |
+| **2. Phân loại** | 1 call AI nhỏ trên 30 cue đầu: `lecture` / `not_lecture` / `sensitive` | **Đã làm** |
 | **3. Chia sẻ** | Chỉ project được xác nhận là bài giảng mới bật link công khai | Chưa làm |
 
 ### Lớp 1 hoạt động thế nào
@@ -84,11 +84,36 @@ Lỗi trả về theo hợp đồng `{code, message}` hiện có:
 | `code` | Nghĩa |
 |---|---|
 | `video_blocked` | Video/kênh nằm trong blocklist |
-| `content_not_lecture` | Ngoài allowlist hoặc tiêu đề không phải bài giảng |
+| `content_not_lecture` | Ngoài allowlist, tiêu đề hoặc AI nói không phải bài giảng |
 | `content_too_short` | Quá ngắn để là bài giảng |
+| `content_sensitive` | AI đánh giá nội dung không an toàn để tóm tắt học tập |
 
 Giao diện hiện tiếng Việt tương ứng và **không** gợi ý "tải file .srt" cho các
 lỗi này — nếu không, người dùng sẽ dùng file upload để vòng qua chính sách.
+
+### Lớp 2 hoạt động thế nào
+
+Sau khi lớp 1 cho phép, một call AI nhỏ đọc **tiêu đề, tên kênh và tối đa 30 cue
+đầu** (giới hạn 4.000 ký tự), rồi trả một trong ba nhãn:
+
+- `lecture` → giữ nguyên cho học, nâng nhãn thành `lecture` nếu oEmbed từng lỗi;
+- `not_lecture` → từ chối, mã `content_not_lecture`;
+- `sensitive` → từ chối, mã `content_sensitive`.
+
+Ba nguyên tắc thiết kế:
+
+1. **Tiêu đề và phụ đề là dữ liệu không tin cậy.** Prompt nói rõ với mô hình
+   không được thi hành chỉ thị nằm trong nội dung video — một bài giảng về
+   prompt injection không được tự điều khiển bộ phân loại.
+2. **Fail-open.** AI không được cấu hình, lỗi mạng hoặc trả JSON sai → nhãn
+   `unverified`, video vẫn mở. Kết quả lỗi **không được cache**, nên lần sau vẫn
+   thử lại.
+3. **Cache có giới hạn.** Kết quả hợp lệ được cache theo `video_id` + băm của
+   đúng mẫu phụ đề đã đọc, tối đa 200 mục theo thứ tự dùng gần đây. Mở lại cùng
+   video không tốn quota; đổi phụ đề thì tự động đánh giá lại.
+
+Video **allowlist không gọi classifier** — đã là danh sách kiểm duyệt thủ công
+thì không cần hỏi AI, và cũng không tốn quota.
 
 ### Cấu hình
 
@@ -104,6 +129,8 @@ sách trống: áp dụng heuristic, chưa khoá cứng.
 | `CONTENT_BLOCK_VIDEO_IDS` | ID video bị chặn |
 | `CONTENT_MIN_DURATION_SECONDS` | Mặc định `180` |
 | `CONTENT_MIN_CUES` | Mặc định `20` |
+| `CONTENT_CLASSIFIER_ENABLED` | `true` (mặc định); `false` để tắt hẳn lớp 2 |
+| `CONTENT_CLASSIFIER_CUES` | Số cue đầu đọc khi phân loại, mặc định `30` (tối đa 30) |
 
 Ví dụ cho buổi demo — chỉ cho phép đúng các video đã kiểm:
 
@@ -115,10 +142,10 @@ CONTENT_ALLOW_VIDEO_IDS=<id-video-1>,<id-video-2>,<id-video-3>
 ### Giới hạn phải nói thẳng
 
 - oEmbed **không có** category hay duration của YouTube nếu không dùng Data API
-  key. "Thể loại" ở đây là heuristic trên tiêu đề/kênh, không phải category chính
-  thức. Lớp 2 mới là phân loại thật.
-- Upload `.srt/.vtt` hiện **không qua gate** (không có metadata để xét). Đây là
-  tài liệu người dùng tự cung cấp; sản phẩm ghi nhận rõ ràng trong báo cáo.
+  key. Lớp 1 là heuristic trên tiêu đề/kênh; lớp 2 mới là phân loại thật nhưng
+  chỉ đọc 30 cue đầu, nên vẫn có thể sai ở một bài giảng dài.
+- Upload `.srt/.vtt` hiện **không qua cả hai lớp** (không có metadata để xét).
+  Đây là tài liệu người dùng tự cung cấp; sản phẩm ghi nhận rõ ràng trong báo cáo.
 - Heuristic có sai sót. Allowlist là cách duy nhất để có demo an toàn tuyệt đối.
 - Chặn không có nghĩa là kiểm duyệt mọi nội dung. Nghĩa là sản phẩm chỉ xử lý
   những gì nằm trong phạm vi đã cam kết ở trang này.

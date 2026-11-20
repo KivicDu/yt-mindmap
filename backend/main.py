@@ -29,7 +29,7 @@ from app.middleware.rate_limit import RateLimitMiddleware
 from app.models.project import Project
 from app.models.user import User
 from app.schemas.project import AutosaveRequest
-from app.services import content_policy
+from app.services import content_classifier, content_policy
 from app.services import projects as project_service
 from app.services import sharing as sharing_service
 from chunking import chunk_time_range, is_seek_backward, select_chunk
@@ -801,6 +801,40 @@ async def get_transcript(
             if not decision.allowed:
                 raise content_error(decision)
             label = decision.label
+
+            # Layer 2: a small AI call confirms the layer-1 guess from the
+            # caption sample. An allowlisted video is already trusted, so it
+            # skips the call. Every AI failure stays `unverified` and lets the
+            # learner in -- a safety net must not become a second lock.
+            if decision.reason != "allowlist":
+                oembed_title = oembed.get("title")
+                classify_title = request.title or (
+                    oembed_title if isinstance(oembed_title, str) else None
+                )
+                author_name = oembed.get("author_name")
+                classification = await run_in_threadpool(
+                    content_classifier.classify,
+                    video_id,
+                    classify_title,
+                    author_name if isinstance(author_name, str) else None,
+                    transcript,
+                )
+                ai_label = classification.get("label")
+                if ai_label in ("not_lecture", "sensitive"):
+                    raise content_error(
+                        content_policy.Decision(
+                            allowed=False,
+                            code=(
+                                "content_not_lecture"
+                                if ai_label == "not_lecture"
+                                else "content_sensitive"
+                            ),
+                            label="unverified",
+                            reason=f"classifier:{ai_label}",
+                        )
+                    )
+                if ai_label == "lecture":
+                    label = "lecture"
 
         try:
             vid = video_id

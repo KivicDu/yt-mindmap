@@ -98,6 +98,12 @@ class Settings(BaseSettings):
     CONTENT_MIN_DURATION_SECONDS: int = 180
     CONTENT_MIN_CUES: int = 20
 
+    # Layer-2 classifier. One small AI call on the first cues of a new video;
+    # results are cached per video, so a replay costs nothing. `off` skips the
+    # call entirely (useful for offline demos and for keeping quota predictable).
+    CONTENT_CLASSIFIER_ENABLED: bool = True
+    CONTENT_CLASSIFIER_CUES: int = 30
+
     @property
     def is_sqlite(self) -> bool:
         return self.DATABASE_URL.startswith("sqlite")

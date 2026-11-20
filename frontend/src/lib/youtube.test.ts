@@ -50,10 +50,13 @@ describe('YouTube error messages', () => {
   it('treats a content-policy refusal as an error, not a caption problem', () => {
     expect(isCaptionOnlyProblem('video_blocked')).toBe(false)
     expect(isCaptionOnlyProblem('content_not_lecture')).toBe(false)
+    expect(isCaptionOnlyProblem('content_sensitive')).toBe(false)
     expect(transcriptStatusText('video_blocked')).toBe('Video bị chặn')
+    expect(transcriptStatusText('content_sensitive')).toBe('Nội dung không phù hợp')
     expect(transcriptErrorMessage('content_not_lecture')).toContain('bài giảng')
     expect(transcriptErrorMessage('content_too_short')).toContain('quá ngắn')
     expect(transcriptErrorMessage('video_blocked')).not.toContain('.srt')
+    expect(transcriptErrorMessage('content_sensitive')).not.toContain('.srt')
   })
 })
 
