@@ -85,6 +85,19 @@ class Settings(BaseSettings):
     # otherwise a client could spoof the header and dodge IP limits.
     TRUST_PROXY_HEADERS: bool = False
 
+    # Layer-1 content gate. `enforce` checks every YouTube URL before a map is
+    # built; `off` keeps the old "any video with captions" behaviour. The
+    # allow/block lists are comma-separated channel names or 11-char video ids.
+    # An empty list means "no explicit rule"; a non-empty allowlist is a
+    # closed list, which is the safe way to demo or run a private instance.
+    CONTENT_POLICY: Literal["off", "enforce"] = "enforce"
+    CONTENT_ALLOW_CHANNELS: str = ""
+    CONTENT_ALLOW_VIDEO_IDS: str = ""
+    CONTENT_BLOCK_CHANNELS: str = ""
+    CONTENT_BLOCK_VIDEO_IDS: str = ""
+    CONTENT_MIN_DURATION_SECONDS: int = 180
+    CONTENT_MIN_CUES: int = 20
+
     @property
     def is_sqlite(self) -> bool:
         return self.DATABASE_URL.startswith("sqlite")

@@ -29,6 +29,7 @@ from app.middleware.rate_limit import RateLimitMiddleware
 from app.models.project import Project
 from app.models.user import User
 from app.schemas.project import AutosaveRequest
+from app.services import content_policy
 from app.services import projects as project_service
 from app.services import sharing as sharing_service
 from chunking import chunk_time_range, is_seek_backward, select_chunk
@@ -401,20 +402,56 @@ async def healthz():
         "ai_tokens": dict(ai_engine.usage_totals),
     }
 
-async def _fetch_youtube_title(url: str) -> str | None:
+async def fetch_oembed(video_id: str) -> dict[str, Any]:
+    """Public video metadata from oEmbed. A network failure returns checked=False.
+
+    Both `/video-info` and the content gate use this one call, so a link is
+    described and classified from the same answer. oEmbed has no category or
+    duration, which is why the gate also looks at the caption cues.
+    """
+
+    canonical = f"https://www.youtube.com/watch?v={video_id}"
+    result: dict[str, Any] = {
+        "title": None,
+        "author_name": None,
+        "thumbnail_url": None,
+        "checked": False,
+        "embeddable": None,
+        "reason": None,
+    }
     try:
         async with httpx.AsyncClient(timeout=5.0) as client:
             resp = await client.get(
                 "https://www.youtube.com/oembed",
-                params={"url": url, "format": "json"},
+                params={"url": canonical, "format": "json"},
             )
-            if resp.status_code == 200:
-                data = resp.json()
-                if isinstance(data, dict) and data.get("title"):
-                    return str(data["title"])
     except Exception:
-        pass
-    return None
+        # A transient network problem is not proof that embedding is blocked.
+        return result
+
+    result["checked"] = True
+    if resp.status_code == 200:
+        try:
+            data = resp.json()
+        except ValueError:
+            data = {}
+        if isinstance(data, dict):
+            result["title"] = data.get("title")
+            result["author_name"] = data.get("author_name")
+            result["thumbnail_url"] = data.get("thumbnail_url")
+        result["embeddable"] = True
+    elif resp.status_code in (400, 401, 403, 404):
+        result["embeddable"] = False
+        result["reason"] = "not_embeddable"
+    return result
+
+
+async def _fetch_youtube_title(url: str) -> str | None:
+    video_id = extract_video_id(url)
+    if not video_id:
+        return None
+    title = (await fetch_oembed(video_id)).get("title")
+    return str(title) if title else None
 
 
 @app.get("/video-info")
@@ -437,51 +474,7 @@ async def get_video_info(url: str):
             },
         )
 
-    canonical = f"https://www.youtube.com/watch?v={video_id}"
-    result: dict[str, Any] = {
-        "video_id": video_id,
-        "title": None,
-        "author_name": None,
-        "thumbnail_url": None,
-        "embeddable": None,
-        "checked": False,
-        "reason": None,
-    }
-
-    try:
-        async with httpx.AsyncClient(timeout=5.0) as client:
-            resp = await client.get(
-                "https://www.youtube.com/oembed",
-                params={"url": canonical, "format": "json"},
-            )
-    except Exception:
-        # A transient network problem is not proof that embedding is blocked;
-        # leave embeddable as None so the player still gets a chance.
-        return result
-
-    result["checked"] = True
-    if resp.status_code == 200:
-        try:
-            data = resp.json()
-        except ValueError:
-            data = {}
-        if isinstance(data, dict):
-            result.update(
-                {
-                    "title": data.get("title"),
-                    "author_name": data.get("author_name"),
-                    "thumbnail_url": data.get("thumbnail_url"),
-                }
-            )
-        result["embeddable"] = True
-        return result
-
-    if resp.status_code in (400, 401, 403, 404):
-        result["embeddable"] = False
-        result["reason"] = "not_embeddable"
-        return result
-
-    return result
+    return {"video_id": video_id, **await fetch_oembed(video_id)}
 
 
 async def switch_transcript_language(
@@ -592,6 +585,47 @@ async def get_transcript_track(
             detail={"code": error.code, "message": error.message},
         ) from error
     return {"language": resolved, "transcript": entries}
+
+
+def video_metadata(
+    video_id: str,
+    oembed: dict[str, Any],
+    transcript: list[dict[str, Any]] | None = None,
+) -> content_policy.VideoMetadata:
+    """Turn data the endpoint already has into the gate's input."""
+
+    cues = [cue for cue in (transcript or []) if isinstance(cue, dict)]
+    duration = max(
+        (
+            float(cue.get("start", 0.0)) + float(cue.get("duration", 0.0))
+            for cue in cues
+        ),
+        default=0.0,
+    )
+    return content_policy.VideoMetadata(
+        video_id=video_id,
+        title=oembed.get("title") if isinstance(oembed.get("title"), str) else None,
+        author_name=(
+            oembed.get("author_name")
+            if isinstance(oembed.get("author_name"), str)
+            else None
+        ),
+        oembed_checked=bool(oembed.get("checked")),
+        cue_count=len(cues),
+        duration_seconds=duration,
+    )
+
+
+def content_error(decision: content_policy.Decision) -> HTTPException:
+    """Maps a policy denial to the same `{code, message}` contract as captions."""
+
+    return HTTPException(
+        status_code=422,
+        detail={
+            "code": decision.code or "content_not_lecture",
+            "message": f"Content policy: {decision.reason or 'not allowed'}",
+        },
+    )
 
 
 @app.post("/transcript")
@@ -726,6 +760,19 @@ async def get_transcript(
             ) from e
 
     if request.url:
+        video_id = extract_video_id(request.url)
+        oembed: dict[str, Any] = {}
+        label = "unverified"
+        if video_id:
+            # Decide what we can before fetching captions, so a blocked video
+            # never reaches the transcript client, the cache or the AI.
+            oembed = await fetch_oembed(video_id)
+            preflight = content_policy.evaluate(
+                video_metadata(video_id, oembed), check_length=False
+            )
+            if not preflight.allowed:
+                raise content_error(preflight)
+
         try:
             # The YouTube client is synchronous; keeping it off the event loop
             # means one slow video no longer freezes every other request.
@@ -746,9 +793,23 @@ async def get_transcript(
                 },
             ) from e
 
+        if video_id:
+            # Length needs the captions; this is the second and last gate.
+            decision = content_policy.evaluate(
+                video_metadata(video_id, oembed, transcript)
+            )
+            if not decision.allowed:
+                raise content_error(decision)
+            label = decision.label
+
         try:
-            vid = extract_video_id(request.url)
-            title = request.title or await _fetch_youtube_title(request.url)
+            vid = video_id
+            oembed_title = oembed.get("title")
+            title = request.title or (
+                oembed_title if isinstance(oembed_title, str) else None
+            )
+            if not title:
+                title = await _fetch_youtube_title(request.url)
             session_id, cached = create_session(
                 vid,
                 transcript,
@@ -759,12 +820,14 @@ async def get_transcript(
                 language=language,
                 map_layout=request.map_layout,
             )
+            sessions[session_id]["content_label"] = label
             return {
                 "transcript": transcript,
                 "video_id": vid,
                 "title": title,
                 "language": language,
                 "cached": cached,
+                "content_label": label,
                 **session_payload(session_id),
             }
         except Exception as e:
