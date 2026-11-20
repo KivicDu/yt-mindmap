@@ -390,16 +390,26 @@ def test_patch_node_reports_a_lost_session():
     assert response.json()["detail"] == "session_lost"
 
 
-def test_patch_node_persists_to_the_cache():
+def test_patch_node_keeps_the_edit_out_of_the_shared_cache():
     session_id, _ = _session_with_nodes([_node()])
     client.patch(
-        "/node", json={"session_id": session_id, "node_id": "node-1", "note": "cached"}
+        "/node",
+        json={"session_id": session_id, "node_id": "node-1", "note": "private", "pinned": True},
     )
 
-    stored = main_module.video_cache["vid"]
-    assert stored["nodes"][0]["note"] == "cached"
-    on_disk = json.loads(main_module.CACHE_PATH.read_text())
-    assert on_disk["vid"]["nodes"][0]["note"] == "cached"
+    # The live session keeps the learner's own edit.
+    assert main_module.sessions[session_id]["nodes"][0]["note"] == "private"
+    assert main_module.sessions[session_id]["nodes"][0]["pinned"] is True
+
+    # The shared cache is keyed only by video id: it must carry structure but
+    # never one visitor's note or pin into the next visitor's session.
+    for stored in (
+        main_module.video_cache["vid"],
+        json.loads(main_module.CACHE_PATH.read_text())["vid"],
+    ):
+        assert stored["nodes"][0]["id"] == "node-1"
+        assert "note" not in stored["nodes"][0]
+        assert "pinned" not in stored["nodes"][0]
 
 
 def test_patch_node_emits_an_event_for_other_tabs():

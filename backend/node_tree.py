@@ -327,3 +327,27 @@ def normalize_cached_nodes(raw: Any, parent_id: str | None = None) -> list[dict[
         node["children"] = normalize_cached_nodes(entry.get("children"), parent_id=node["id"])
         nodes.append(node)
     return nodes
+
+
+def strip_private_fields(nodes: Any) -> list[dict[str, Any]]:
+    """Copy a tree without the per-user ``note`` and ``pinned`` fields.
+
+    ``video_cache`` is keyed by video id and shared by every visitor. A guest
+    can edit a node during a session, so writing the raw tree there would show
+    one learner's private note to the next person who opens the same video.
+    Signed-in maps never reach the cache; this protects the remaining path.
+    """
+    if not isinstance(nodes, list):
+        return []
+    cleaned: list[dict[str, Any]] = []
+    for entry in nodes:
+        if not isinstance(entry, dict):
+            continue
+        node = {
+            key: value for key, value in entry.items() if key not in ("note", "pinned", "updatedAt")
+        }
+        children = entry.get("children")
+        if isinstance(children, list):
+            node["children"] = strip_private_fields(children)
+        cleaned.append(node)
+    return cleaned

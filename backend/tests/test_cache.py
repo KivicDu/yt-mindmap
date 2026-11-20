@@ -147,3 +147,53 @@ def test_session_starts_with_an_empty_tree_for_a_new_video():
     session = main_module.sessions[session_id]
     assert session["nodes"] == []
     assert session["markdown"] == ""
+
+
+def test_guest_notes_and_pins_never_reach_the_shared_cache():
+    tree = [
+        {
+            "id": "n1",
+            "parentId": None,
+            "label": "Root",
+            "time": 0.0,
+            "note": "private note",
+            "pinned": True,
+            "children": [
+                {
+                    "id": "n2",
+                    "parentId": "n1",
+                    "label": "Child",
+                    "time": 1.0,
+                    "note": "child note",
+                    "pinned": True,
+                    "children": [],
+                }
+            ],
+        }
+    ]
+    session = session_payload(nodes=tree)
+
+    cache_video_map("vid1", session)
+
+    cached = main_module.video_cache["vid1"]["nodes"]
+    assert "note" not in cached[0]
+    assert "pinned" not in cached[0]
+    assert "note" not in cached[0]["children"][0]
+    assert "pinned" not in cached[0]["children"][0]
+    # The live session still holds its own edits.
+    assert session["nodes"][0]["note"] == "private note"
+
+    stored = json.loads(main_module.CACHE_PATH.read_text(encoding="utf-8"))
+    assert "note" not in stored["vid1"]["nodes"][0]
+
+    session_id, _ = create_session("vid1", TRANSCRIPT)
+    restored = main_module.sessions[session_id]["nodes"]
+    assert restored[0]["note"] == ""
+    assert restored[0]["pinned"] is False
+    assert restored[0]["children"][0]["note"] == ""
+    assert restored[0]["children"][0]["pinned"] is False
+
+
+def test_signed_in_sessions_are_still_never_cached():
+    cache_video_map("vid1", session_payload(owner_id="user-1"))
+    assert main_module.video_cache == {}

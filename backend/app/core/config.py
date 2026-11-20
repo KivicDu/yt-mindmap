@@ -9,9 +9,16 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Literal
 
+from pydantic import model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 ENV_FILE = Path(__file__).resolve().parents[2] / ".env"
+
+# Kept for local development and tests only. `APP_ENV=staging|production`
+# refuses to boot with this value: a publicly known signing key makes every JWT
+# forgeable.
+DEFAULT_JWT_SECRET_KEY = "dev-only-secret-change-me-in-production"
+MIN_PRODUCTION_SECRET_LENGTH = 32
 
 
 class Settings(BaseSettings):
@@ -23,6 +30,7 @@ class Settings(BaseSettings):
     )
 
     # App
+    APP_ENV: Literal["development", "test", "staging", "production"] = "development"
     APP_NAME: str = "YouTube Mind Map API"
     APP_VERSION: str = "0.3.0"
     FRONTEND_URL: str = "http://localhost:5173"
@@ -32,7 +40,7 @@ class Settings(BaseSettings):
     DATABASE_ECHO: bool = False
 
     # Auth
-    JWT_SECRET_KEY: str = "dev-only-secret-change-me-in-production"
+    JWT_SECRET_KEY: str = DEFAULT_JWT_SECRET_KEY
     JWT_ALGORITHM: str = "HS256"
     ACCESS_TOKEN_TTL_MINUTES: int = 15
     REFRESH_TOKEN_TTL_DAYS: int = 14
@@ -108,6 +116,22 @@ class Settings(BaseSettings):
     # video was confirmed as a lecture (allowlist or classifier verdict).
     # Default to closed; set false only while migrating old rows.
     CONTENT_SHARE_REQUIRE_VERIFIED: bool = True
+
+    @model_validator(mode="after")
+    def _guard_production_secret(self) -> "Settings":
+        """Fail closed instead of serving forgeable tokens in production."""
+        if self.APP_ENV in {"staging", "production"}:
+            secret = self.JWT_SECRET_KEY.strip()
+            if (
+                not secret
+                or secret == DEFAULT_JWT_SECRET_KEY
+                or len(secret) < MIN_PRODUCTION_SECRET_LENGTH
+            ):
+                raise ValueError(
+                    "JWT_SECRET_KEY must be a unique value of at least "
+                    f"{MIN_PRODUCTION_SECRET_LENGTH} characters in {self.APP_ENV}"
+                )
+        return self
 
     @property
     def is_sqlite(self) -> bool:
