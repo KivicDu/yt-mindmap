@@ -418,6 +418,10 @@ def save_session(
     project.transcript_language = session.get("language")
     project.summary_so_far = session.get("summary_so_far", "")
     project.consumed_until = float(session.get("consumed_until", 0.0))
+    # Only overwrite when this session actually carries a verdict: a session
+    # restored from an old project must not silently demote that project.
+    if "content_verified" in session:
+        project.content_verified = bool(session["content_verified"])
     project.last_opened_at = utcnow()
     project.search_text = build_search_text(
         title=project.title,

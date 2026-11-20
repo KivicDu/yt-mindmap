@@ -63,7 +63,7 @@ Sản phẩm **không phát video** — YouTube phát. Điều sản phẩm ki�
 |---|---|---|
 | **1. Metadata** | oEmbed (tiêu đề, kênh) + độ dài và số cue của phụ đề; blocklist / allowlist | **Đã làm** |
 | **2. Phân loại** | 1 call AI nhỏ trên 30 cue đầu: `lecture` / `not_lecture` / `sensitive` | **Đã làm** |
-| **3. Chia sẻ** | Chỉ project được xác nhận là bài giảng mới bật link công khai | Chưa làm |
+| **3. Chia sẻ** | Chỉ project được xác nhận là bài giảng mới bật link công khai | **Đã làm** |
 
 ### Lớp 1 hoạt động thế nào
 
@@ -115,6 +115,28 @@ Ba nguyên tắc thiết kế:
 Video **allowlist không gọi classifier** — đã là danh sách kiểm duyệt thủ công
 thì không cần hỏi AI, và cũng không tốn quota.
 
+### Lớp 3 hoạt động thế nào
+
+Một project chỉ bật được link công khai khi `content_verified = true`. Nhãn này
+được lưu ngay trên bản ghi project, không phải suy lại lúc bật link:
+
+- **Có** khi video nằm trong allowlist hoặc classifier trả `lecture`.
+- **Không có** khi chỉ lớp 1 đoán bằng heuristic, khi AI lỗi, hoặc khi sơ đồ
+  dựng từ file `.srt/.vtt` do người dùng tự tải.
+
+Áp dụng ở ba điểm, để không có cửa sau:
+
+1. `PUT /api/projects/{id}/share` và xoay link từ chối (422 `content_not_verified`)
+   nếu project chưa xác nhận. **Tắt chia sẻ luôn được phép**, kể cả với project cũ.
+2. `GET /api/share/{slug}` và `/api/share/meta` trả kết quả như "không tìm thấy"
+   cho project chưa xác nhận — một slug cũ bị demote không tiếp tục phục vụ nội dung.
+3. Giao diện share hiện thông báo và khoá công tắc, các select và nút mời.
+
+Hệ quả cần biết: migration `0009_content_verified` đặt cột này là `false` cho mọi
+bản ghi cũ, nên **link công khai của các project cũ ngừng hoạt động**. Đây là ý
+đồ: không thể chứng minh nguồn gốc thì không công khai. Chủ project vẫn mở được
+bản của mình và có thể bật lại sau khi mở lại video để lớp 2 xác nhận.
+
 ### Cấu hình
 
 Đặt trong `backend/.env` (hoặc biến môi trường). Mặc định `enforce` với danh
@@ -131,6 +153,7 @@ sách trống: áp dụng heuristic, chưa khoá cứng.
 | `CONTENT_MIN_CUES` | Mặc định `20` |
 | `CONTENT_CLASSIFIER_ENABLED` | `true` (mặc định); `false` để tắt hẳn lớp 2 |
 | `CONTENT_CLASSIFIER_CUES` | Số cue đầu đọc khi phân loại, mặc định `30` (tối đa 30) |
+| `CONTENT_SHARE_REQUIRE_VERIFIED` | `true` (mặc định); chỉ để `false` tạm thời khi di chuyển dữ liệu cũ |
 
 Ví dụ cho buổi demo — chỉ cho phép đúng các video đã kiểm:
 

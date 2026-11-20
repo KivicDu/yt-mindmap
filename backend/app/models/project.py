@@ -9,7 +9,7 @@ the shared video cache is only used for anonymous sessions.
 from datetime import datetime
 from uuid import uuid4
 
-from sqlalchemy import JSON, Boolean, DateTime, Float, ForeignKey, String, Text
+from sqlalchemy import JSON, Boolean, DateTime, Float, ForeignKey, String, Text, false
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db.base import Base, TimestampMixin
@@ -50,6 +50,13 @@ class Project(Base, TimestampMixin):
     )
     map_palette: Mapped[str] = mapped_column(
         String(20), default="paper", server_default="paper", nullable=False
+    )
+
+    # Layer-3 share policy: only a video confirmed as a lecture (allowlist or
+    # classifier) may get a public link. Defaults to false, so old rows and
+    # uploaded subtitle files start closed rather than leaking by default.
+    content_verified: Mapped[bool] = mapped_column(
+        Boolean, default=False, server_default=false(), nullable=False
     )
 
     # Free-form labels ("math", "ai", "ôn thi") used to group projects.

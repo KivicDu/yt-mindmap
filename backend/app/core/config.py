@@ -104,6 +104,11 @@ class Settings(BaseSettings):
     CONTENT_CLASSIFIER_ENABLED: bool = True
     CONTENT_CLASSIFIER_CUES: int = 30
 
+    # Layer-3 share policy. A public link is only allowed for a project whose
+    # video was confirmed as a lecture (allowlist or classifier verdict).
+    # Default to closed; set false only while migrating old rows.
+    CONTENT_SHARE_REQUIRE_VERIFIED: bool = True
+
     @property
     def is_sqlite(self) -> bool:
         return self.DATABASE_URL.startswith("sqlite")

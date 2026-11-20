@@ -107,6 +107,10 @@ export interface ShareSettings {
   role: ShareRole
   slug: string | null
   visibility: 'private' | 'unlisted' | 'invited'
+  /** The video was confirmed as a lecture (allowlist or classifier). */
+  content_verified: boolean
+  /** Layer-3 policy: public links are allowed only for confirmed lectures. */
+  shareable: boolean
   members: ShareMember[]
 }
 

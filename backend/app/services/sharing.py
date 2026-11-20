@@ -19,6 +19,7 @@ from typing import Any
 from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session
 
+from app.core.config import get_settings
 from app.models.project import Project
 from app.models.project_member import ProjectMember
 from app.models.user import User
@@ -39,6 +40,18 @@ def normalize_email(email: str) -> str:
 
 def can_edit(role: str | None) -> bool:
     return role in EDITOR_ROLES
+
+
+def shareable(project: Project) -> bool:
+    """Layer-3 rule: a public link needs a confirmed lecture.
+
+    A project saved from an uploaded subtitle file, or before this policy
+    existed, has no proof of provenance. Turning sharing off is always allowed,
+    so an owner can revoke an old link even when the row is not shareable.
+    """
+    if not get_settings().CONTENT_SHARE_REQUIRE_VERIFIED:
+        return True
+    return bool(project.content_verified)
 
 
 def _new_slug() -> str:
@@ -135,6 +148,8 @@ def share_settings(db: Session, project: Project) -> dict[str, Any]:
         "role": project.link_role,
         "slug": project.share_slug,
         "visibility": project.visibility,
+        "content_verified": bool(project.content_verified),
+        "shareable": shareable(project),
         "members": [member_payload(db, member) for member in members],
     }
 
@@ -154,6 +169,9 @@ def update_share(
         db.refresh(project)
         return project
 
+    if not shareable(project):
+        raise ValueError("content_not_verified")
+
     if project.share_slug is None:
         project.share_slug = unique_slug(db)
     project.visibility = "invited" if access == "invited" else "unlisted"
@@ -164,6 +182,8 @@ def update_share(
 
 
 def rotate_slug(db: Session, project: Project, role: str | None = None) -> Project:
+    if not shareable(project):
+        raise ValueError("content_not_verified")
     if project.visibility == "private":
         project.visibility = "unlisted"
     project.share_slug = unique_slug(db)

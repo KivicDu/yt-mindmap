@@ -48,6 +48,7 @@ export default function ShareDialog({ project, onClose }: Props) {
   const [confirmRotate, setConfirmRotate] = useState(false)
   const [email, setEmail] = useState('')
   const [inviteRole, setInviteRole] = useState<ShareRole>('viewer')
+  const canShare = Boolean(settings?.shareable)
 
   const apply = useCallback((next: ShareSettings) => {
     setSettings(next)
@@ -84,14 +85,18 @@ export default function ShareDialog({ project, onClose }: Props) {
     }
   }
 
-  const toggle = () =>
-    run(() =>
+  const toggle = () => {
+    // Turning sharing off is always allowed, even for an old project that is
+    // no longer verified: the owner must be able to revoke a stale link.
+    if (!canShare && !settings?.enabled) return
+    return run(() =>
       updateShareSettings(project.id, {
         enabled: !settings?.enabled,
         access,
         role,
       }),
     )
+  }
 
   const changeAccess = (next: ShareAccess) => {
     setAccess(next)
@@ -195,6 +200,13 @@ export default function ShareDialog({ project, onClose }: Props) {
           <p className="share-note">Đang tải…</p>
         ) : (
           <>
+            {!canShare && (
+              <p className="share-notice" role="status">
+                Dự án này chưa được xác nhận là bài giảng, nên chưa bật được link công
+                khai. Sơ đồ dựng từ file phụ đề tự tải chưa đủ điều kiện.
+              </p>
+            )}
+
             <div className="share-switch-row">
               <div>
                 <strong>{settings?.enabled ? 'Đang chia sẻ' : 'Đang tắt chia sẻ'}</strong>
@@ -210,7 +222,7 @@ export default function ShareDialog({ project, onClose }: Props) {
                 role="switch"
                 aria-checked={Boolean(settings?.enabled)}
                 aria-label="Bật hoặc tắt chia sẻ"
-                disabled={busy}
+                disabled={busy || (!canShare && !settings?.enabled)}
                 onClick={() => void toggle()}
               >
                 <span aria-hidden="true" />
@@ -222,7 +234,7 @@ export default function ShareDialog({ project, onClose }: Props) {
                 <span>Người có link</span>
                 <select
                   value={access}
-                  disabled={busy}
+                  disabled={busy || !canShare}
                   onChange={(event) => changeAccess(event.target.value as ShareAccess)}
                 >
                   {(Object.keys(ACCESS_LABEL) as ShareAccess[]).map((value) => (
@@ -237,7 +249,7 @@ export default function ShareDialog({ project, onClose }: Props) {
                 <span>Quyền của link</span>
                 <select
                   value={role}
-                  disabled={busy || access === 'invited'}
+                  disabled={busy || !canShare || access === 'invited'}
                   onChange={(event) => changeRole(event.target.value as ShareRole)}
                 >
                   {(Object.keys(ROLE_LABEL) as ShareRole[]).map((value) => (
@@ -272,7 +284,7 @@ export default function ShareDialog({ project, onClose }: Props) {
                     <button
                       className="btn btn--ghost btn--sm"
                       type="button"
-                      disabled={busy}
+                      disabled={busy || !canShare}
                       onClick={() => {
                         void run(() => rotateShareLink(project.id, role)).then(() =>
                           setConfirmRotate(false),
@@ -328,6 +340,7 @@ export default function ShareDialog({ project, onClose }: Props) {
                 <input
                   type="email"
                   required
+                  disabled={!canShare}
                   placeholder="email@gmail.com"
                   aria-label="Email người được mời"
                   value={email}
@@ -335,6 +348,7 @@ export default function ShareDialog({ project, onClose }: Props) {
                 />
                 <select
                   value={inviteRole}
+                  disabled={!canShare}
                   aria-label="Quyền của người được mời"
                   onChange={(event) => setInviteRole(event.target.value as ShareRole)}
                 >
@@ -347,7 +361,7 @@ export default function ShareDialog({ project, onClose }: Props) {
                 <button
                   className="btn btn--primary btn--sm"
                   type="submit"
-                  disabled={busy || !email.trim()}
+                  disabled={busy || !canShare || !email.trim()}
                 >
                   Mời
                 </button>

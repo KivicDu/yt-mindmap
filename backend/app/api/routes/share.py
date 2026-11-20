@@ -34,7 +34,8 @@ def shared_project_metadata(
 ) -> Response:
     """Render safe social metadata for public share URLs during nginx SSI."""
     project = sharing_service.get_by_slug(db, slug)
-    if project and project.visibility == "unlisted":
+    shareable = project is not None and sharing_service.shareable(project)
+    if shareable and project is not None and project.visibility == "unlisted":
         title = f"{project.title} — sơ đồ tư duy | yt-mindmap"
         description = f"Xem sơ đồ tư duy “{project.title}” được chia sẻ bằng yt-mindmap."
     else:
@@ -54,8 +55,11 @@ def shared_project_metadata(
         f'<meta property="og:url" content="{html.escape(share_url, quote=True)}">',
     ]
 
-    if project and project.visibility == "unlisted" and re.fullmatch(
-        r"[A-Za-z0-9_-]{11}", project.video_id or ""
+    if (
+        shareable
+        and project is not None
+        and project.visibility == "unlisted"
+        and re.fullmatch(r"[A-Za-z0-9_-]{11}", project.video_id or "")
     ):
         thumbnail_url = (
             f"https://i.ytimg.com/vi/{project.video_id}/hqdefault.jpg"
@@ -75,6 +79,17 @@ def read_shared_project(
 ):
     project = sharing_service.get_by_slug(db, slug)
     if project is None or project.visibility == "private":
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail={
+                "code": "share_not_found",
+                "message": "This share link does not exist or has been turned off.",
+            },
+        )
+
+    # Defence in depth: a slug created before this policy (or left behind by a
+    # demoted project) must not keep serving content that is now unshareable.
+    if not sharing_service.shareable(project):
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail={
