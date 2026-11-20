@@ -700,6 +700,10 @@ async def get_transcript(
         else:
             touch_session(session_id)
 
+        # Keep the row's verdict in the live session so autosave never demotes
+        # a project simply because it was reopened.
+        sessions[session_id]["content_verified"] = bool(project.content_verified)
+
         project.last_opened_at = utcnow()
         db.commit()
 
@@ -737,6 +741,8 @@ async def get_transcript(
                 language=None,
                 map_layout=request.map_layout,
             )
+            # A learner-supplied file has no provenance to confirm.
+            sessions[session_id]["content_verified"] = False
             return {
                 "transcript": transcript,
                 "video_id": vid,
@@ -763,6 +769,7 @@ async def get_transcript(
         video_id = extract_video_id(request.url)
         oembed: dict[str, Any] = {}
         label = "unverified"
+        content_verified = False
         if video_id:
             # Decide what we can before fetching captions, so a blocked video
             # never reaches the transcript client, the cache or the AI.
@@ -801,6 +808,9 @@ async def get_transcript(
             if not decision.allowed:
                 raise content_error(decision)
             label = decision.label
+            # Only an explicit allowlist or the AI verdict counts as proof for
+            # layer 3. A passing heuristic is a guess, not a confirmation.
+            content_verified = decision.reason == "allowlist"
 
             # Layer 2: a small AI call confirms the layer-1 guess from the
             # caption sample. An allowlisted video is already trusted, so it
@@ -835,6 +845,7 @@ async def get_transcript(
                     )
                 if ai_label == "lecture":
                     label = "lecture"
+                    content_verified = True
 
         try:
             vid = video_id
@@ -855,6 +866,7 @@ async def get_transcript(
                 map_layout=request.map_layout,
             )
             sessions[session_id]["content_label"] = label
+            sessions[session_id]["content_verified"] = content_verified
             return {
                 "transcript": transcript,
                 "video_id": vid,
@@ -862,6 +874,7 @@ async def get_transcript(
                 "language": language,
                 "cached": cached,
                 "content_label": label,
+                "content_verified": content_verified,
                 **session_payload(session_id),
             }
         except Exception as e:
