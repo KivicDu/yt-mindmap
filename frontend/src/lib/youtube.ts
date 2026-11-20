@@ -71,6 +71,7 @@ export type TranscriptErrorCode =
   | 'video_blocked'
   | 'content_not_lecture'
   | 'content_too_short'
+  | 'content_sensitive'
   | string
 
 /**
@@ -119,6 +120,8 @@ export function transcriptErrorMessage(code: string | undefined): string {
       return 'Công cụ chỉ tạo sơ đồ cho bài giảng. Video giải trí, âm nhạc hoặc ngoài danh sách cho phép sẽ không được xử lý.'
     case 'content_too_short':
       return 'Video hoặc phụ đề quá ngắn để có thể là một bài giảng. Hãy thử bài dài hơn.'
+    case 'content_sensitive':
+      return 'Nội dung này không phù hợp để tóm tắt thành tài liệu học tập. Công cụ chỉ xử lý bài giảng an toàn.'
     case 'rate_limited':
       return 'Bạn thao tác quá nhanh. Chờ một chút rồi thử lại nhé.'
     case 'ai_quota_exceeded':
@@ -154,6 +157,8 @@ export function transcriptStatusText(code: string | undefined): string {
       return 'Không phải bài giảng'
     case 'content_too_short':
       return 'Video quá ngắn'
+    case 'content_sensitive':
+      return 'Nội dung không phù hợp'
     case 'rate_limited':
       return 'Thao tác quá nhanh'
     case 'ai_quota_exceeded':
