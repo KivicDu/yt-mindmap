@@ -4,6 +4,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from app.core.config import get_settings
+from app.middleware.rate_limit import is_ai_path
 from app.services.rate_limit import reset_rate_limits
 
 
@@ -73,3 +74,57 @@ def test_rate_limiting_can_be_disabled(client: TestClient, monkeypatch: pytest.M
             "/api/auth/login", json={"email": "a@b.com", "password": "whatever1"}
         )
         assert response.status_code == 401
+
+
+@pytest.mark.parametrize(
+    "path",
+    ["/transcript", "/update-map", "/session/abc123/restructure"],
+)
+def test_known_ai_paths_are_recognised(path):
+    assert is_ai_path(path) is True
+
+
+@pytest.mark.parametrize(
+    "path",
+    [
+        "/session/abc123/node",
+        "/session/abc123/merge",
+        "/session/restructure",
+        "/api/auth/login",
+        "/healthz",
+    ],
+)
+def test_other_paths_are_not_counted_as_ai(path):
+    assert is_ai_path(path) is False
+
+
+def test_restructure_shares_the_ai_burst_bucket(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+):
+    monkeypatch.setattr(get_settings(), "RATE_LIMIT_AI_PER_MINUTE", 2)
+
+    transcript = client.post("/transcript", json={})
+    first = client.post("/session/sid/restructure", json={"map_layout": "spider"})
+    second = client.post("/session/sid/restructure", json={"map_layout": "circle"})
+
+    # Body validation runs after the middleware, so a missing session does not
+    # stop the request from counting as an AI call.
+    assert transcript.status_code != 429
+    assert first.status_code != 429
+    assert second.status_code == 429
+    assert second.json()["detail"] == "rate_limited"
+
+
+def test_restructure_consumes_the_daily_ai_quota(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+):
+    settings = get_settings()
+    monkeypatch.setattr(settings, "RATE_LIMIT_AI_PER_MINUTE", 100)
+    monkeypatch.setattr(settings, "AI_DAILY_QUOTA_ANONYMOUS", 1)
+
+    first = client.post("/session/sid/restructure", json={"map_layout": "spider"})
+    second = client.post("/session/sid/restructure", json={"map_layout": "circle"})
+
+    assert first.status_code != 429
+    assert second.status_code == 429
+    assert second.json()["detail"] == "ai_quota_exceeded"

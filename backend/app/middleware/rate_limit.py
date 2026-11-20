@@ -11,6 +11,7 @@ tuning simple. When a limit is hit the API answers ``429`` with a
 from __future__ import annotations
 
 import math
+import re
 
 from fastapi import Request
 from fastapi.responses import JSONResponse
@@ -39,6 +40,15 @@ AUTH_PATHS = frozenset(
 
 # These call Gemini (or can, once the session has new transcript content).
 AI_PATHS = frozenset({"/transcript", "/update-map"})
+# A path parameter means an exact-match set misses the restructure call, which
+# is a full AI call of its own (ADR 0013). Keep this as a pattern, not a route
+# string, so `/session/{id}/node` and friends stay outside the AI quota.
+AI_PATH_PATTERNS = (re.compile(r"^/session/[^/]+/restructure$"),)
+
+
+def is_ai_path(path: str) -> bool:
+    """True for every endpoint that can spend an AI call."""
+    return path in AI_PATHS or any(pattern.fullmatch(path) for pattern in AI_PATH_PATTERNS)
 
 
 class RateLimitMiddleware:
@@ -66,7 +76,7 @@ class RateLimitMiddleware:
                 await _reject(scope, receive, send, retry_after, "rate_limited")
                 return
 
-        if method == "POST" and path in AI_PATHS:
+        if method == "POST" and is_ai_path(path):
             subject = _subject(request)
             limit = Limit("ai", settings.RATE_LIMIT_AI_PER_MINUTE)
             retry_after = ai_limiter.hit(f"ai:{subject}", limit)
