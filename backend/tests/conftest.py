@@ -11,6 +11,7 @@ import main as main_module
 from app.core.config import get_settings
 from app.db.base import Base
 from app.db.session import get_db
+from app.services.content_classifier import reset_classifier_cache
 from app.services.rate_limit import reset_rate_limits
 
 # SQLite is a test double only: models use portable column types and the app
@@ -31,7 +32,12 @@ def isolated_state(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     # Existing fixtures use tiny fake transcripts; the content gate is tested
     # explicitly in test_content_policy.py with the policy turned on. Settings
     # are patched in place: other fixtures mutate the cached object too.
-    monkeypatch.setattr(get_settings(), "CONTENT_POLICY", "off")
+    settings = get_settings()
+    monkeypatch.setattr(settings, "CONTENT_POLICY", "off")
+    # The classifier is exercised explicitly in its own tests. Keeping it off
+    # here means no test can reach a real Gemini key from the local .env.
+    monkeypatch.setattr(settings, "CONTENT_CLASSIFIER_ENABLED", False)
+    reset_classifier_cache()
     main_module.sessions.clear()
     main_module.video_cache.clear()
     reset_rate_limits()
