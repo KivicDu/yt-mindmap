@@ -16,6 +16,7 @@ from node_tree import (
     normalize_cached_nodes,
     normalize_nodes,
     resolve_time,
+    strip_private_fields,
     tree_to_markdown,
     update_node,
 )
@@ -390,3 +391,45 @@ class TestNewNodeDefaults:
         tree = normalize_nodes([{"name": "A", "time": 1}])
         update_node(tree, tree[0]["id"], note="long note", pinned=True)
         assert tree_to_markdown(tree) == "- [A](#seek-1.0)"
+
+
+class TestStripPrivateFields:
+    def test_notes_and_pins_are_removed_at_every_depth(self):
+        tree = [
+            {
+                "id": "a",
+                "label": "A",
+                "note": "my private note",
+                "pinned": True,
+                "children": [
+                    {
+                        "id": "b",
+                        "label": "B",
+                        "note": "child note",
+                        "pinned": True,
+                        "children": [],
+                    }
+                ],
+            }
+        ]
+
+        sanitized = strip_private_fields(tree)
+
+        assert "note" not in sanitized[0]
+        assert "pinned" not in sanitized[0]
+        assert "note" not in sanitized[0]["children"][0]
+        assert "pinned" not in sanitized[0]["children"][0]
+        assert sanitized[0]["label"] == "A"
+        assert sanitized[0]["children"][0]["label"] == "B"
+
+    def test_the_live_tree_is_not_mutated(self):
+        node = {"id": "a", "label": "A", "note": "keep", "pinned": True, "children": []}
+
+        sanitized = strip_private_fields([node])
+
+        assert "note" not in sanitized[0]
+        assert node["note"] == "keep"
+        assert node["pinned"] is True
+
+    def test_malformed_entries_are_skipped(self):
+        assert strip_private_fields(["text", None, {"label": "A"}]) == [{"label": "A"}]

@@ -38,6 +38,7 @@ from node_tree import (
     merge_nodes,
     normalize_cached_nodes,
     normalize_nodes,
+    strip_private_fields,
     tree_to_markdown,
     update_node,
 )
@@ -261,8 +262,9 @@ def cache_video_map(video_id: str | None, session: dict[str, Any]) -> None:
         return
     video_cache[video_id] = {
         # The tree is the source of truth; markdown is kept so an older
-        # frontend or a downgraded backend can still read the cache.
-        "nodes": session.get("nodes", []),
+        # frontend or a downgraded backend can still read the cache. Guests can
+        # edit notes and pins too, so the shared copy must lose those fields.
+        "nodes": strip_private_fields(session.get("nodes", [])),
         "markdown": session.get("markdown", ""),
         "summary_so_far": session.get("summary_so_far", ""),
         "consumed_until": float(session.get("consumed_until", 0.0)),
