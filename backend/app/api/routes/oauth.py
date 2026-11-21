@@ -20,7 +20,7 @@ from sqlalchemy.orm import Session
 
 from app.core.config import get_settings
 from app.db.session import get_db
-from app.services.accounts import upsert_oauth_user
+from app.services.accounts import OAuthLinkBlocked, upsert_oauth_user
 from app.services.auth_tokens import issue_refresh_token
 from app.services.oauth import OAuthError, build_authorize_url, exchange_code, is_configured
 from app.utils.cookies import set_session_cookies
@@ -109,6 +109,9 @@ def finish(
     try:
         user = upsert_oauth_user(db, identity)
         refresh_token = issue_refresh_token(db, user.id)
+    except OAuthLinkBlocked:
+        db.rollback()
+        return fail(OAuthLinkBlocked.code)
     except Exception:  # noqa: BLE001 - never strand the browser on a 500
         db.rollback()
         return fail("oauth_account_error")

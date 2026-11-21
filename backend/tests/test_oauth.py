@@ -190,16 +190,24 @@ def test_oauth_links_to_an_existing_password_account(
             "display_name": "Kivic",
         },
     )
+    # Only a verified local account may be linked: registration itself does not
+    # prove that the person owns the address.
+    existing = db_session.query(User).filter_by(email="kivic@example.com").one()
+    existing.email_verified = True
+    db_session.commit()
     client.cookies.clear()
 
     state = start_google(client)
     monkeypatch.setattr(
         oauth_routes, "exchange_code", lambda provider, code: GOOGLE_IDENTITY
     )
-    client.get(
+    response = client.get(
         f"/api/auth/google/callback?code=good&state={state}", follow_redirects=False
     )
+    assert response.headers["location"] == "http://localhost:5173/dashboard"
 
+    # The callback used its own session; refresh the test session's identity map.
+    db_session.expire_all()
     user = db_session.query(User).filter_by(email="kivic@example.com").one()
     assert user.provider == "local"  # the password remains the primary method
     assert user.provider_id == "google:1234567890"
@@ -211,6 +219,46 @@ def test_oauth_links_to_an_existing_password_account(
         "/api/auth/login",
         json={"email": "kivic@example.com", "password": "hunter2pass"},
     ).status_code == 200
+
+
+def test_oauth_refuses_to_link_an_unverified_password_account(
+    client: TestClient, configured, monkeypatch: pytest.MonkeyPatch, db_session: Session
+):
+    # Anyone can register someone else's address without inbox access. The
+    # victim's first OAuth login must not hand that account to the registrant.
+    client.post(
+        "/api/auth/register",
+        json={
+            "email": "kivic@example.com",
+            "password": "attacker-pass",
+            "display_name": "Attacker",
+        },
+    )
+    client.cookies.clear()
+
+    state = start_google(client)
+    monkeypatch.setattr(
+        oauth_routes, "exchange_code", lambda provider, code: GOOGLE_IDENTITY
+    )
+    response = client.get(
+        f"/api/auth/google/callback?code=good&state={state}", follow_redirects=False
+    )
+
+    assert response.status_code == 302
+    assert "error=oauth_email_conflict" in response.headers["location"]
+    assert cookie_value(response, "ytmm_refresh_token") is None
+
+    user = db_session.query(User).filter_by(email="kivic@example.com").one()
+    assert user.provider_id is None
+    assert user.email_verified is False
+    # The original password still works — nothing was silently taken over.
+    assert (
+        client.post(
+            "/api/auth/login",
+            json={"email": "kivic@example.com", "password": "attacker-pass"},
+        ).status_code
+        == 200
+    )
 
 
 def test_provider_failure_redirects_instead_of_returning_500(

@@ -48,6 +48,8 @@ export function oauthErrorMessage(error: string | null, provider: string | null)
       return `${name} không trả về email đã xác minh nên chưa thể tạo tài khoản. Hãy đăng ký bằng email thay thế.`
     case 'email_unverified':
       return `Email từ ${name} chưa được xác minh nên chưa thể dùng để đăng nhập.`
+    case 'oauth_email_conflict':
+      return 'Email này đã có tài khoản local chưa xác minh. Hãy đặt lại mật khẩu qua email đó trước khi liên kết, hoặc dùng email khác.'
     default:
       return `Đăng nhập bằng ${name} chưa thành công. Thử lại giúp mình nhé.`
   }

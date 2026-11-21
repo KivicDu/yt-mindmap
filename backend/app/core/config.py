@@ -19,6 +19,10 @@ ENV_FILE = Path(__file__).resolve().parents[2] / ".env"
 # forgeable.
 DEFAULT_JWT_SECRET_KEY = "dev-only-secret-change-me-in-production"
 MIN_PRODUCTION_SECRET_LENGTH = 32
+# A different 32-character `dev-*` string is still a public signing key: the
+# compose fallback was one of those and slipped past a plain length/equality
+# check. Reject the whole family, not just the one default we know about.
+INSECURE_SECRET_PREFIXES = ("dev-", "test-", "example-")
 
 
 class Settings(BaseSettings):
@@ -134,12 +138,13 @@ class Settings(BaseSettings):
             secret = self.JWT_SECRET_KEY.strip()
             if (
                 not secret
-                or secret == DEFAULT_JWT_SECRET_KEY
+                or secret.lower().startswith(INSECURE_SECRET_PREFIXES)
                 or len(secret) < MIN_PRODUCTION_SECRET_LENGTH
             ):
                 raise ValueError(
                     "JWT_SECRET_KEY must be a unique value of at least "
-                    f"{MIN_PRODUCTION_SECRET_LENGTH} characters in {self.APP_ENV}"
+                    f"{MIN_PRODUCTION_SECRET_LENGTH} characters, without a "
+                    f"development prefix, in {self.APP_ENV}"
                 )
         return self
 
