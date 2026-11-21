@@ -1,9 +1,14 @@
 """Account lookup and creation for OAuth sign-ins.
 
-Policy (agreed for phase 1): signing in with Google or GitHub using an email
-that already belongs to a password account links the two instead of creating a
-second account. Google and GitHub only report verified addresses, so the linkage
-proves ownership of the email. The password stays valid and keeps working.
+Policy: signing in with Google or GitHub using an email that already belongs
+to a **verified** account links the two instead of creating a second account;
+the password stays valid and keeps working.
+
+An unverified local account with a password is never auto-linked. Registration
+does not require inbox ownership, so anyone could register the victim's address
+first and wait for the victim's first OAuth login to hand the account over. The
+provider verifying its own email does not help: the local account was never
+verified. In that case the callback returns a conflict the UI can explain.
 """
 
 from sqlalchemy import delete, or_, select
@@ -18,6 +23,12 @@ from app.models.user import User
 from app.services.oauth import OAuthIdentity
 
 
+class OAuthLinkBlocked(Exception):
+    """A provider identity would take over an unverified local account."""
+
+    code = "oauth_email_conflict"
+
+
 def normalize_email(email: str) -> str:
     return email.strip().lower()
 
@@ -30,6 +41,15 @@ def upsert_oauth_user(db: Session, identity: OAuthIdentity) -> User:
     user = db.scalar(select(User).where(User.provider_id == linked_key))
     if user is None:
         user = db.scalar(select(User).where(User.email == email))
+        # An unverified password account proves nothing about inbox ownership.
+        # Linking here would give whoever set that password control of the
+        # provider-verified user's data. Verified accounts may still be linked.
+        if (
+            user is not None
+            and user.password_hash is not None
+            and not user.email_verified
+        ):
+            raise OAuthLinkBlocked(f"{email}: unverified local account exists")
 
     if user is None:
         user = User(
