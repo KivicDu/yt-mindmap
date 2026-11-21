@@ -1,7 +1,9 @@
 # ADR 0012 — Transcribe the audio when a video has no captions
 
 ## Status
-Proposed — design approved before implementation
+Accepted 2026-11-22 — scope and limits approved, no implementation yet.
+The four open questions (sign-in, daily limit, maximum duration, default-off
+rollout) were resolved as recorded in §2 and §9.
 
 ## Context
 
@@ -34,12 +36,21 @@ built from them exactly as before.
 ```
 POST /transcript {url}
         │
+        ├─ layer-1 policy refuses (blocklist / outside closed allowlist)
+        │                                           ──────────► 422, no YouTube call
         ├─ fetch_transcript(url) succeeds ──────────► 200, as today
         │
         └─ fails with a caption-absence code
-                ├─ ASR disabled / not signed in / over quota ─► 422, as today
+                ├─ ASR disabled ──────────────────────────────► 422, as today
+                ├─ not signed in ─────────────────────────────► 401
+                ├─ over the ASR daily quota ──────────────────► 429
                 └─ otherwise ────────────────────────────────► 202 + job_id
 ```
+
+Layer 1 runs **before** any caption request (`backend/main.py`, `preflight`),
+so a blocked video can never turn into an ASR job. A blocklist hit keeps its
+`video_blocked` answer; a closed allowlist miss keeps `content_not_lecture`.
+Neither is a caption-absence code and neither may be retried as audio.
 
 ASR is attempted **only** for these codes:
 
@@ -73,9 +84,22 @@ ASR_JOB_TTL_SECONDS: int = 3_600           # sweep finished/failed jobs
 ASR_AUDIO_BITRATE: str = "32k"             # mono 16 kHz mp3
 ```
 
-`ASR_DAILY_LIMIT_PER_USER` is a counter in the existing in-memory limiter,
-keyed `asr:{user_id}:{utc_date}`. The finished transcript cache (below) means a
-repeat view of the same video does not consume the quota.
+`ASR_DAILY_LIMIT_PER_USER` is a **separate** daily counter, not the existing
+`DailyQuota` used by AI routes: that class stores the UTC date internally and
+keys by `ai:user:<id>`/`ai:anonymous:<ip>` (`rate_limit.py`). Use an explicit
+`asr:user:<id>` key so the general 5000/day AI allowance stays untouched; a
+429 must carry `{code: "asr_quota_exceeded", message}` rather than the plain
+`{"detail": ...}` the general quota middleware emits. The finished transcript
+cache (below) means a repeat view of the same video does not consume the quota.
+
+**Resolved decisions** (the four review questions):
+
+| Question | Decision | Why |
+| --- | --- | --- |
+| Sign-in | Required for ASR; guests keep today's caption-only path | Cost and persistence are charged to an account; the rest of the app stays guest-usable |
+| Daily limit | 3 per user per day, on the separate ASR counter | A few new lectures/day is enough; repeat views are free via the shared cache |
+| Maximum duration | 10,800 s (3 h), configurable | Matches the lecture scope and bounds upload size (~14 MB) and job latency |
+| Rollout | `ASR_ENABLED=false`; UI says *đang nghe audio*; allowlist-first demo | Audio download is a new access mode with unclear terms, so it must never become the default or a gate bypass |
 
 ### 3. Job model
 
@@ -107,6 +131,7 @@ New endpoints, additive; nothing existing changes shape.
 POST /transcript {url}
   202 { status: "asr_queued",
         job_id, video_id, title, language: null,
+        content_label: "unverified", content_verified: false,
         asr: { stage: "queued", elapsed_seconds: 0, max_seconds: <estimate> } }
 
 GET /transcript/asr/{job_id}          # owner only
@@ -120,7 +145,10 @@ DELETE /transcript/asr/{job_id}       # owner only
 
 `session` is the **same payload** the 200 path of `POST /transcript` returns,
 so the frontend applies a finished job with the existing `applyLoadResult`
-code path and no second loading logic.
+code path and no second loading logic. The queued 202 carries
+`content_label: "unverified"` and `content_verified: false` for that reason:
+`applyLoadResult` must not read missing fields as a successful verdict, and an
+unfinished job has no verdict yet.
 
 Polling (2 s) is chosen over SSE because the session does not exist yet: the
 SSE channel is keyed by `session_id`, and inventing a session for a job that
@@ -183,6 +211,17 @@ Reopening the same video — by the same learner or another one — reads this r
 and skips both the download and the Gemini call. Only cues derived from a
 public YouTube video are stored; nothing user-specific goes in this table.
 
+**A cached ASR row is not a policy verdict.** Layer 1 still runs on every load,
+and layer 2 must classify the resulting cues exactly as it classifies YouTube
+captions: same three labels, same untrusted-input prompt, same bounded sample
+and cache key. If `CONTENT_VISUAL_CHECK_ENABLED` is on, the same sampled
+thumbnails/frames are attached; if it is off, classification stays text-only.
+The project gets `content_verified = true` **only** from an explicit allowlist
+match or a `lecture` verdict — never from "the audio was transcribed
+successfully". A video whose captions were absent is not therefore trusted.
+Because the classifier cache is keyed by the hashed sample, a cached ASR row
+still gets its own decision and can earn `content_verified` on first use.
+
 `projects.transcript_source` records where the current project's cues came
 from, so the UI can be honest about quality:
 
@@ -210,9 +249,14 @@ manual from auto without a second YouTube request.
 - On `ready`, the transcript appears and the map starts building from the
   current playhead, exactly like a normal load.
 - On `failed`, the existing caption-only message returns, plus the upload hint.
+  This hint applies **only** to ASR codes. A policy refusal
+  (`video_blocked`, `content_not_lecture`, `content_sensitive`) must keep its
+  own copy and must never suggest `.srt` upload as a way around the gate.
 - The transcript tab header carries a badge: *Phụ đề tự động (YouTube)*,
-  *IVAN nghe audio*, or *Bạn tải lên*. The project list shows the same badge,
-  so a shared map never looks more authoritative than it is.
+  *IVAN nghe audio*, or *Bạn tải lên*. The project list shows the same badge.
+  A public link still requires `content_verified = true`, so this badge only
+  appears on a shared map after the normal layer-2 decision; it never replaces
+  that decision.
 - The export is unchanged; provenance stays in the app, not in the file.
 
 ### 8. New error codes
@@ -228,7 +272,22 @@ manual from auto without a second YouTube request.
 
 `asr_audio_blocked` and `asr_failed` both end in the same place — the manual
 upload hint — but they are separate codes because only one of them is worth
-retrying.
+retrying. All new codes use the structured `{code, message}` body already used
+by the content gate, not the plain `{"detail": ...}` shape of the general rate
+limiter.
+
+### 9. Boundaries
+
+- **Terms of service.** Downloading audio sits in a grey area. The feature is
+  off by default, described in the UI as *nghe audio* for a video the learner
+  is already watching, and first enabled on an allowlist-only demo. It is not
+  a way to bypass the content gate or the share policy.
+- **Scope.** The product scope currently covers reading captions, building the
+  map, saving and sharing. Adding audio access requires an explicit rollout
+  decision; this ADR records that decision as opt-in rather than assuming it.
+- **Error precedence.** A policy refusal always wins over an ASR failure. The
+  `.srt` hint is for caption/audio failures only, never for
+  `video_blocked`/`content_not_lecture`/`content_sensitive`.
 
 ## Consequences
 
@@ -280,10 +339,12 @@ retrying.
 
 1. **Backend, no UI** — `backend/asr.py` (download + Gemini + cue repair),
    `video_transcripts` table and `projects.transcript_source`
-   (`alembic/versions/0009_asr_fallback.py`), job store and three endpoints,
-   settings, error codes, quota. Unit tests with a fake downloader and a fake
-   Gemini client: the fallback decision table, cue parsing (all three repair
-   paths), job state machine, owner-only access, TTL sweep.
+   (`alembic/versions/0010_asr_fallback.py`, `down_revision =
+   "0009_content_verified"` — 0009 is already taken by the share-policy
+   migration), job store and three endpoints, settings, error codes, quota.
+   Unit tests with a fake downloader and a fake Gemini client: the fallback
+   decision table, cue parsing (all three repair paths), job state machine,
+   owner-only access, TTL sweep.
 2. **Frontend** — 202 handling, polling, progress panel with cancel, `ready`
    reuse of `applyLoadResult`, new error copy.
 3. **Provenance** — badge in the transcript tab and the project list,
