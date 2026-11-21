@@ -88,14 +88,24 @@ app.add_middleware(
 # endpoints keep their URLs. The refresh cookie requires allow_credentials.
 app.include_router(api_router, prefix="/api")
 
+# A single anonymous request used to be able to make the server parse an
+# arbitrarily large subtitle file or tree. These caps are generous for a real
+# lecture but bound memory and CPU before parsing starts.
+MAX_FILE_CONTENT_CHARS = 2_000_000
+MAX_INITIAL_MARKDOWN_CHARS = 2_000_000
+MAX_INITIAL_NODES = 2_000
+
+
 class TranscriptRequest(BaseModel):
-    url: str | None = None
-    file_content: str | None = None
+    url: str | None = Field(default=None, max_length=2048)
+    file_content: str | None = Field(default=None, max_length=MAX_FILE_CONTENT_CHARS)
     # Sent when the client restores a session, so node ids survive the restart.
-    initial_nodes: list[dict[str, Any]] | None = None
-    initial_markdown: str | None = None
+    initial_nodes: list[dict[str, Any]] | None = Field(
+        default=None, max_length=MAX_INITIAL_NODES
+    )
+    initial_markdown: str | None = Field(default=None, max_length=MAX_INITIAL_MARKDOWN_CHARS)
     resume_at: float | None = None
-    title: str | None = None
+    title: str | None = Field(default=None, max_length=500)
     # Reopen a saved project: captions and nodes come from the database.
     project_id: str | None = None
     # Switch the caption track of an already-loaded session without rebuilding
@@ -264,6 +274,11 @@ def cache_video_map(video_id: str | None, session: dict[str, Any]) -> None:
     # cache would leak one account's notes and pins into another account's map.
     if session.get("owner_id"):
         return
+    # Uploaded subtitles and client-supplied restore data have no provenance.
+    # Caching them would seed the global per-video cache with a stranger's map
+    # (and an advanced AI pointer) for everyone who opens the same video later.
+    if session.get("cacheable") is False:
+        return
     video_cache[video_id] = {
         # The tree is the source of truth; markdown is kept so an older
         # frontend or a downgraded backend can still read the cache. Guests can
@@ -328,6 +343,7 @@ def create_session(
     project_id: str | None = None,
     use_cache: bool = True,
     map_layout: str | None = None,
+    cacheable: bool = True,
 ) -> tuple:
     mode = normalize_mode(map_layout)
     cached = video_cache.get(video_id) if (video_id and use_cache) else None
@@ -375,6 +391,8 @@ def create_session(
         # Shared editors all drive the player; only one may run the AI at a time
         # or the same transcript chunk would be mapped twice.
         "update_lock": threading.Lock(),
+        # Client-supplied maps must never be promoted into the shared cache.
+        "cacheable": cacheable,
     }
     return session_id, bool(cached)
 
@@ -702,6 +720,7 @@ async def get_transcript(
                 project_id=project.id,
                 use_cache=False,
                 map_layout=project.map_layout,
+                cacheable=False,
             )
         else:
             touch_session(session_id)
@@ -746,6 +765,7 @@ async def get_transcript(
                 title=title,
                 language=None,
                 map_layout=request.map_layout,
+                cacheable=False,
             )
             # A learner-supplied file has no provenance to confirm.
             sessions[session_id]["content_verified"] = False
@@ -871,6 +891,14 @@ async def get_transcript(
                     label = "lecture"
                     content_verified = True
 
+        # A client restoring a map sends its own nodes/markdown/pointer. Those
+        # bytes are untrusted, so the resulting session may be read but never
+        # written into the shared cache under this video id.
+        restore_input = bool(
+            request.initial_nodes
+            or request.initial_markdown is not None
+            or request.resume_at is not None
+        )
         try:
             vid = video_id
             oembed_title = oembed.get("title")
@@ -888,6 +916,7 @@ async def get_transcript(
                 title=title,
                 language=language,
                 map_layout=request.map_layout,
+                cacheable=not restore_input,
             )
             sessions[session_id]["content_label"] = label
             sessions[session_id]["content_verified"] = content_verified

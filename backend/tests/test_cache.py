@@ -197,3 +197,12 @@ def test_guest_notes_and_pins_never_reach_the_shared_cache():
 def test_signed_in_sessions_are_still_never_cached():
     cache_video_map("vid1", session_payload(owner_id="user-1"))
     assert main_module.video_cache == {}
+
+
+def test_untrusted_sessions_are_never_cached():
+    """Uploads and client-restored maps have no provenance to trust."""
+    session_id, _ = create_session("vid1", TRANSCRIPT, cacheable=False)
+
+    cache_video_map("vid1", main_module.sessions[session_id])
+
+    assert main_module.video_cache == {}

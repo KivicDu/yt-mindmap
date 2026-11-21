@@ -43,6 +43,28 @@ def test_transcript_from_uploaded_subtitles_creates_session():
     assert body["session_id"] in main_module.sessions
 
 
+def test_upload_session_is_not_marked_cacheable():
+    response = client.post(
+        "/transcript",
+        json={"url": "https://www.youtube.com/watch?v=abcdefghijk", "file_content": SRT},
+    )
+    assert response.status_code == 200
+    assert main_module.sessions[response.json()["session_id"]]["cacheable"] is False
+
+
+def test_transcript_rejects_unbounded_request_fields():
+    oversized = "x" * (main_module.MAX_FILE_CONTENT_CHARS + 1)
+    assert (
+        client.post("/transcript", json={"file_content": oversized}).status_code == 422
+    )
+
+    too_many_nodes = [{"label": "x"}] * (main_module.MAX_INITIAL_NODES + 1)
+    assert (
+        client.post("/transcript", json={"initial_nodes": too_many_nodes}).status_code
+        == 422
+    )
+
+
 def test_transcript_requires_url_or_file():
     response = client.post("/transcript", json={})
     assert response.status_code == 400
