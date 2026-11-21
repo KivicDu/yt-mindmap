@@ -216,6 +216,7 @@ yt-mindmap/
 
 - [Architecture](docs/architecture.md) — component and sequence diagrams, invariants
 - [Auth & OAuth setup](docs/auth-oauth.md) — Google/GitHub client IDs, flow, troubleshooting
+- [Phạm vi sản phẩm](docs/product-scope.md) — content gate, study loop and stated limits
 - [ADR 0001](docs/adr/0001-incremental-budgeted-ai.md) — incremental, budgeted AI calls
 - [ADR 0002](docs/adr/0002-sessions-sse-disk-cache.md) — sessions, SSE, disk cache
 - [ADR 0003](docs/adr/0003-markdown-to-node-tree.md) — node tree as the source of truth

@@ -62,12 +62,12 @@ must never be able to damage the answer key.
 
 The check does not blank the map. It samples **target nodes** (default 12, spread
 across the timeline so a 2-hour lecture is covered end to end) and, for each one,
-hides that node's `name` and `note` while keeping its parent label and timestamp
-visible:
+hides that node's `label` and `note` while keeping its parent label and timestamp
+visible (`label` is the canonical node field per ADR 0003):
 
 > `12:40 · Tuần hoàn` → *"Nhánh này nói về gì?"* → learner types the idea.
 
-- Works for every layout, because it only needs `name`, `time`, `children`.
+- Works for every layout, because it only needs `label`, `time`, `children`.
 - The surrounding map stays visible, so the learner keeps their bearings; this
   is a check, not an exam.
 - Notes and pins are hidden too — they are the learner's own answer key.
@@ -116,7 +116,9 @@ quality signal for the grader.
 
 `build_quiz_prompt(markdown)` asks for 5–8 questions covering the top-level
 topics, each with a short expected-answer key, written in the lecture's language.
-It reads the stored markdown only:
+It reads the stored map only. Because Markdown is a compatibility projection of
+ADR 0003, the prompt input is regenerated from `nodes` with
+`node_tree.tree_to_markdown` rather than trusting a stale stored `markdown` blob:
 
 - no YouTube call, no captions, no playhead;
 - cached per project (and invalidated when the map changes), so reopening a
@@ -152,9 +154,11 @@ New table `review_attempts`:
 | `weak_ranges` | JSON list of `[start, end]` seconds with the weakest answers |
 | `created_at` | when |
 
-`weak_ranges` is the same timestamp arithmetic the coverage warning needs
-("which minutes have no branch"), so both features share one helper rather than
-two.
+`weak_ranges` needs the same timestamp arithmetic the planned coverage warning
+needs ("which minutes have no branch"), so both features should share one helper.
+That helper does **not** exist yet: `product-scope.md` still lists the coverage
+warning as missing, so it must be built as part of this work, not treated as an
+existing API.
 
 The table is for the learner's own history and for the next-review step. It is
 not used to rank learners, and there is no "score" column to compare across
@@ -162,11 +166,17 @@ projects.
 
 ### 8. Access
 
-Attempts are per user and writable only by people who may edit the project
-(owner, invited editor). A viewer of a shared link can read the map but cannot
-create an attempt — the same rule that already stops viewers from editing nodes.
-A shared project therefore has one map and several independent attempt
-histories.
+Attempts are per user and writable only by people who may edit the project:
+the owner, an invited editor, **or a public-link holder whose `link_role` grants
+edit access** (`app/services/sharing.py:can_edit`). A read-only viewer of a
+shared link can read the map but cannot create an attempt — the same rule that
+already stops viewers from editing nodes. A shared project therefore has one
+map and several independent attempt histories.
+
+This does not weaken the share gate: every public link still requires
+`content_verified = true`, so an unverified project cannot be reached through a
+link and has no shared-attempt path. Attempts never set or clear
+`content_verified`; they only read a map that was already allowed.
 
 ## Consequences
 
@@ -231,7 +241,11 @@ check to YouTube and to captions, and the map is the thing the learner studied.
 4. **Routes** — `POST /api/projects/{id}/quiz` (generate or return cached),
    `POST /api/projects/{id}/attempt` (record and advance the schedule),
    `PATCH /api/projects/{id}/review` (toggle, interval), `GET /api/review/due`.
-   Every one goes through the existing project-role check.
+   Every one goes through the existing project-role check. The two AI-backed
+   routes must be added to `is_ai_path()` in
+   `backend/app/middleware/rate_limit.py`; otherwise quiz generation and
+   ambiguous-answer grading would bypass the per-minute AI limit and the daily
+   quota that every other Gemini route pays.
 5. **Frontend** — a self-check panel in the workspace (hide target labels, one
    input per target, override button), a review toggle in the project header,
    and the "Cần ôn hôm nay" block on the dashboard, rendered only when enabled.
