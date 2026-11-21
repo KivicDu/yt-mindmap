@@ -40,9 +40,11 @@ API docs: http://127.0.0.1:8001/docs
 ### Production configuration
 
 Set `APP_ENV=production` (or `staging`) and a unique `JWT_SECRET_KEY` of at
-least 32 characters. The app **refuses to boot** if either is missing in those
-environments, so the development default can never sign real tokens. Local
-development needs neither: it defaults to `APP_ENV=development`.
+least 32 characters. The app **refuses to boot** if the environment is missing,
+the key is short, or it starts with `dev-`, `test-` or `example-`. The fallback
+values in `docker-compose.yml` are local-only; leaving `APP_ENV` unset keeps the
+app in development mode even when the container is public. Local development
+needs neither override: it defaults to `APP_ENV=development`.
 
 ## Endpoints
 
