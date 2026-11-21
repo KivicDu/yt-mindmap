@@ -20,6 +20,20 @@ router = APIRouter(prefix="/projects", tags=["projects"])
 _NOT_FOUND = HTTPException(status_code=404, detail="project_not_found")
 
 
+def _share_policy_error(error: ValueError) -> HTTPException:
+    """Keep the `{code, message}` contract used by the rest of the policy."""
+
+    if str(error) == "content_not_verified":
+        return HTTPException(
+            status_code=422,
+            detail={
+                "code": "content_not_verified",
+                "message": "Chỉ bài giảng đã được xác nhận mới được bật link công khai.",
+            },
+        )
+    return HTTPException(status_code=400, detail=str(error))
+
+
 def _owned_or_404(db: Session, user: User, project_id: str):
     project = project_service.get_owned(db, user.id, project_id)
     if project is None:
@@ -232,13 +246,16 @@ def update_share_settings(
     db: Session = Depends(get_db),
 ):
     project = _owned_or_404(db, user, project_id)
-    sharing_service.update_share(
-        db,
-        project,
-        enabled=body.enabled,
-        access=body.access,
-        role=body.role,
-    )
+    try:
+        sharing_service.update_share(
+            db,
+            project,
+            enabled=body.enabled,
+            access=body.access,
+            role=body.role,
+        )
+    except ValueError as error:
+        raise _share_policy_error(error) from error
     return sharing_service.share_settings(db, project)
 
 
@@ -250,7 +267,10 @@ def rotate_share_link(
     db: Session = Depends(get_db),
 ):
     project = _owned_or_404(db, user, project_id)
-    sharing_service.rotate_slug(db, project, role=body.role if body else None)
+    try:
+        sharing_service.rotate_slug(db, project, role=body.role if body else None)
+    except ValueError as error:
+        raise _share_policy_error(error) from error
     return sharing_service.share_settings(db, project)
 
 

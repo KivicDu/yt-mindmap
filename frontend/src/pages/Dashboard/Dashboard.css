@@ -227,6 +227,8 @@
 
 .dash-cta {
   display: inline-flex;
+  cursor: pointer;
+  font-family: inherit;
   align-items: center;
   justify-content: center;
   height: 36px;
@@ -1058,6 +1060,17 @@
   color: var(--ink-3);
   font-size: 12px;
   line-height: 1.5;
+}
+
+.share-notice {
+  margin: 0;
+  padding: 10px 12px;
+  border: 1px solid var(--line-2);
+  border-radius: var(--r-sm);
+  background: var(--paper-2);
+  color: var(--ink-2);
+  font-size: 12px;
+  line-height: 1.55;
 }
 
 .share-warning {

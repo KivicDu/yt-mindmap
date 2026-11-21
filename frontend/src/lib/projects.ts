@@ -8,6 +8,7 @@
 
 import { apiFetch } from './api'
 import type { MapNode } from './mindmapTree'
+import type { MapLayout, MapPalette } from './mapStyle'
 
 export interface TranscriptCue {
   start: number
@@ -25,6 +26,8 @@ export interface ProjectSummary {
   link_role: ShareRole
   node_count: number
   tags: string[]
+  map_layout: MapLayout
+  map_palette: MapPalette
   transcript_language: string | null
   consumed_until: number
   created_at: string | null
@@ -104,6 +107,10 @@ export interface ShareSettings {
   role: ShareRole
   slug: string | null
   visibility: 'private' | 'unlisted' | 'invited'
+  /** The video was confirmed as a lecture (allowlist or classifier). */
+  content_verified: boolean
+  /** Layer-3 policy: public links are allowed only for confirmed lectures. */
+  shareable: boolean
   members: ShareMember[]
 }
 
@@ -168,6 +175,8 @@ export function updateProject(
     is_draft?: boolean
     visibility?: 'private' | 'unlisted'
     tags?: string[]
+    map_layout?: MapLayout
+    map_palette?: MapPalette
   },
 ): Promise<ProjectDetail> {
   return apiFetch<ProjectDetail>(`/projects/${id}`, { method: 'PATCH', body: patch })
@@ -338,12 +347,16 @@ export function parseShareSlug(input: string): string | null {
 export function autosaveProject(input: {
   session_id: string
   project_id?: string | null
+  map_layout?: MapLayout
+  map_palette?: MapPalette
 }): Promise<ProjectSummary> {
   return apiFetch<ProjectSummary>('/projects/autosave', {
     method: 'POST',
     body: {
       session_id: input.session_id,
       project_id: input.project_id || null,
+      map_layout: input.map_layout,
+      map_palette: input.map_palette,
     },
   })
 }
@@ -359,6 +372,9 @@ export interface LocalDraft {
   nodes: MapNode[]
   consumedUntil: number
   language: string | null
+  /** Chosen look; older drafts have none and fall back to the default. */
+  mapLayout?: MapLayout
+  mapPalette?: MapPalette
   savedAt: string
 }
 

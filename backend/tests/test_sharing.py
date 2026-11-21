@@ -94,6 +94,38 @@ def test_public_link_is_read_only_for_anonymous(client: TestClient):
     assert setting_slug(client, owner, project["id"]) == settings["slug"]
 
 
+def test_share_metadata_is_escaped_and_uses_public_project_data(client: TestClient):
+    owner = register(client)
+    project = create_project(
+        client,
+        owner,
+        title='Bio <script>alert("x")</script>',
+    )
+    settings = share(client, owner, project["id"])
+
+    response = client.get("/api/share/meta", params={"slug": settings["slug"]})
+
+    assert response.status_code == 200
+    assert response.headers["content-type"].startswith("text/html")
+    assert "<script>" not in response.text
+    assert "&lt;script&gt;alert(&quot;x&quot;)&lt;/script&gt;" in response.text
+    assert f"/s/{settings['slug']}" in response.text
+    assert "https://i.ytimg.com/vi/abcdefghijk/hqdefault.jpg" in response.text
+    assert 'name="robots" content="noindex,nofollow"' in response.text
+
+
+def test_share_metadata_does_not_reveal_invited_project_title(client: TestClient):
+    owner = register(client)
+    project = create_project(client, owner, title="Private course title")
+    settings = share(client, owner, project["id"], access="invited")
+
+    response = client.get("/api/share/meta", params={"slug": settings["slug"]})
+
+    assert response.status_code == 200
+    assert "Private course title" not in response.text
+    assert "Sơ đồ tư duy được chia sẻ | yt-mindmap" in response.text
+
+
 def setting_slug(client: TestClient, headers: dict[str, str], project_id: str) -> str:
     return client.get(f"/api/projects/{project_id}/share", headers=headers).json()["slug"]
 

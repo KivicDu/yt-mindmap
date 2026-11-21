@@ -37,6 +37,13 @@ uvicorn main:app --reload --port 8001 --host 127.0.0.1
 
 API docs: http://127.0.0.1:8001/docs
 
+### Production configuration
+
+Set `APP_ENV=production` (or `staging`) and a unique `JWT_SECRET_KEY` of at
+least 32 characters. The app **refuses to boot** if either is missing in those
+environments, so the development default can never sign real tokens. Local
+development needs neither: it defaults to `APP_ENV=development`.
+
 ## Endpoints
 
 | Method | Path | Purpose |
@@ -70,7 +77,18 @@ pytest
 ```
 
 `pytest.ini` adds the backend directory to the import path, so tests run from
-this folder without installing the package.
+this folder without installing the package. Visual-check tests use a fake HTTP
+client and a fake Gemini client; no test opens a socket.
+
+## Content gate visual check
+
+`CONTENT_VISUAL_CHECK_ENABLED` is `false` by default, so production behaviour is
+unchanged until it is explicitly enabled. When on, `/transcript` samples a few
+bounded public JPEGs (thumbnail, three spread-out frames, up to two storyboard
+sheets) and passes them to the **same** layer-2 classifier call. Failures degrade
+to text-only; the label set and the open-by-default policy do not change. Cache
+entries include a digest of the sampled images. See
+[docs/product-scope.md](../docs/product-scope.md) for the limits.
 
 ## Layout
 
@@ -82,6 +100,7 @@ this folder without installing the package.
 | `chunking.py` | Pure seek/chunk rules (no FastAPI import) |
 | `subtitles.py` | `.srt` / `.vtt` parser |
 | `transcript.py` | YouTube captions fetcher |
+| `app/services/video_visuals.py` | Bounded, best-effort JPEG sampling for the content classifier |
 | `app/` | Accounts: settings, SQLAlchemy session, `User` model, auth/OAuth routes, services |
 | `alembic/` | Database migrations (`alembic upgrade head`) |
 | `tests/` | Unit + API tests |
@@ -93,8 +112,11 @@ this folder without installing the package.
 - A session stores the map as a node tree (`nodes`); `markdown` is generated from
   it with `node_tree.tree_to_markdown`. Caches written before the tree existed
   have no `nodes` and are re-parsed from Markdown on restore.
-- User state (`note`, `pinned`, `aliases`) lives on the node, is written to the
-  cache by `PATCH /node`, and is preserved when the AI merges new children in.
+- User state (`note`, `pinned`, `aliases`) lives on the node and is preserved
+  when the AI merges new children in. `PATCH /node` keeps it in the live session
+  (and in the project row for signed-in users), but `strip_private_fields()`
+  removes `note`/`pinned` before the tree is written to the shared, video-keyed
+  cache — otherwise one visitor's note would show up in another's map.
 - `GEMINI_BASE_URL` can point the AI client at a mock or proxy, which is how
   tests exercise the AI path without calling Google.
 - `.env` is loaded before `ai_engine` is imported so the API key is available at startup.

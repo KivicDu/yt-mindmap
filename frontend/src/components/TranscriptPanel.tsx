@@ -1,7 +1,8 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react'
 import { cueTextAt } from '../lib/bilingual'
 import { formatTime } from '../lib/mindmapTree'
 import type { TranscriptLanguage } from '../lib/youtube'
+import type { PlaybackClock } from '../lib/playbackClock'
 
 export interface TranscriptCue {
   start: number
@@ -11,7 +12,7 @@ export interface TranscriptCue {
 
 interface TranscriptPanelProps {
   entries: TranscriptCue[]
-  currentTime: number
+  playbackClock: PlaybackClock
   onSeek: (seconds: number) => void
   language: string | null
   languages: TranscriptLanguage[]
@@ -43,15 +44,25 @@ function normalize(value: string): string {
 }
 
 function activeCueIndex(entries: TranscriptCue[], time: number): number {
-  for (let index = entries.length - 1; index >= 0; index -= 1) {
-    if (entries[index].start <= time) return index
+  let low = 0
+  let high = entries.length - 1
+  let active = -1
+
+  while (low <= high) {
+    const middle = Math.floor((low + high) / 2)
+    if (entries[middle].start <= time) {
+      active = middle
+      low = middle + 1
+    } else {
+      high = middle - 1
+    }
   }
-  return -1
+  return active
 }
 
 function TranscriptPanel({
   entries,
-  currentTime,
+  playbackClock,
   onSeek,
   language,
   languages,
@@ -72,7 +83,23 @@ function TranscriptPanel({
 }: TranscriptPanelProps) {
   const [query, setQuery] = useState('')
   const listRef = useRef<HTMLOListElement>(null)
-  const activeIndex = activeCueIndex(entries, currentTime)
+  const subscribeToActiveCue = useCallback(
+    (listener: () => void) => {
+      let previous = activeCueIndex(entries, playbackClock.getSnapshot())
+      return playbackClock.subscribe(() => {
+        const next = activeCueIndex(entries, playbackClock.getSnapshot())
+        if (next === previous) return
+        previous = next
+        listener()
+      })
+    },
+    [entries, playbackClock],
+  )
+  const getActiveCue = useCallback(
+    () => activeCueIndex(entries, playbackClock.getSnapshot()),
+    [entries, playbackClock],
+  )
+  const activeIndex = useSyncExternalStore(subscribeToActiveCue, getActiveCue, getActiveCue)
 
   const filtered = useMemo(() => {
     const needle = normalize(query.trim())

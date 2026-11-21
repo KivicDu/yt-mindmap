@@ -6,7 +6,9 @@ import type { YouTubeProps } from 'react-youtube'
 import './Workspace.css'
 import ThemeToggle from '../../components/ThemeToggle'
 import ExportMenu from '../../components/ExportMenu'
+import MapStyleDialog from '../../components/MapStyleDialog'
 import ShortcutHelp from '../../components/ShortcutHelp'
+import ChapterRail from '../../components/ChapterRail'
 import TranscriptPanel, {
   type TranscriptCue as TranscriptEntry,
 } from '../../components/TranscriptPanel'
@@ -33,10 +35,27 @@ import {
 } from '../../lib/projects'
 import { getAccessToken, refreshSession } from '../../lib/api'
 import { exportMap, type ExportFormat } from '../../lib/mapExport'
+import {
+  contentMode,
+  hasStoredStyle,
+  isContentMode,
+  isMapLayout,
+  MODE_LABELS,
+  modeSwitch,
+  normalizeStyle,
+  readStoredStyle,
+  storeStyle,
+  styleFromSearch,
+  stripStyleFromSearch,
+  type ContentMode,
+  type MapStyle,
+} from '../../lib/mapStyle'
 import { SkeletonList } from '../../components/ui/Skeleton'
 import { useToast } from '../../components/ui/useToast'
-import { activeChapter, buildChapters } from '../../lib/chapters'
+import { buildChapters } from '../../lib/chapters'
 import { isTypingTarget, shortcutFor } from '../../lib/shortcuts'
+import { PlaybackClock } from '../../lib/playbackClock'
+import { PlaybackProgress, PlaybackTime } from '../../components/PlaybackTime'
 import {
   extractVideoId,
   fetchTranscriptTrack,
@@ -70,12 +89,12 @@ interface Status {
   text: string
 }
 
-class TranscriptRequestError extends Error {
+class RequestError extends Error {
   readonly code?: string
 
   constructor(message: string, code?: string) {
     super(message)
-    this.name = 'TranscriptRequestError'
+    this.name = 'RequestError'
     this.code = code
   }
 }
@@ -129,7 +148,7 @@ function App() {
   const [nodeCount, setNodeCount] = useState(0)
   const [player, setPlayer] = useState<any>(null)
   const [isPlaying, setIsPlaying] = useState(false)
-  const [currentTime, setCurrentTime] = useState(0)
+  const [playbackClock] = useState(() => new PlaybackClock())
   const [autoUpdate, setAutoUpdate] = useState(true)
   const [focusRecent, setFocusRecent] = useState(false)
   const [status, setStatusState] = useState<Status>({ kind: 'idle', text: 'Sẵn sàng' })
@@ -141,6 +160,7 @@ function App() {
   const [isUpdating, setIsUpdating] = useState(false)
   const [isLoading, setIsLoading] = useState(false)
   const [editor, setEditor] = useState<NodeDraft | null>(null)
+  const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null)
   const [isSaving, setIsSaving] = useState(false)
   const [mapVersion, setMapVersion] = useState(0)
   const [consumedUntil, setConsumedUntil] = useState(0)
@@ -170,6 +190,32 @@ function App() {
   const [secondaryError, setSecondaryError] = useState('')
   const [exporting, setExporting] = useState<ExportFormat | null>(null)
   const [showHelp, setShowHelp] = useState(false)
+  // The look chosen in the picker. A URL param wins (the dashboard hands the
+  // choice over that way), then the learner's last choice, then the default.
+  const [mapStyle, setMapStyle] = useState<MapStyle>(
+    () => styleFromSearch(window.location.search) ?? readStoredStyle(),
+  )
+  // A first visit lands on a blank workspace, so the look is asked for before
+  // anything is built — the "choose before you start" step. A saved project
+  // carries its own look, and a returning learner already has a stored choice,
+  // so neither of them is interrupted.
+  const [styleOpen, setStyleOpen] = useState(
+    () =>
+      !routeProjectId &&
+      styleFromSearch(window.location.search) === null &&
+      !hasStoredStyle(),
+  )
+  // True only while the dialog is the "choose before you start" step, so it can
+  // say "Bắt đầu" instead of "Áp dụng" the way the dashboard picker does.
+  const [styleIntro, setStyleIntro] = useState(styleOpen)
+  // The thinking mode the current content was built for (ADR 0013). Changing
+  // the drawing (`tree` ↔ `tree-down`) does not change it; changing the mode
+  // offers a rebuild instead of spending tokens behind the learner's back.
+  const [builtMode, setBuiltMode] = useState<ContentMode>(() =>
+    contentMode((styleFromSearch(window.location.search) ?? readStoredStyle()).layout),
+  )
+  const [rebuildOffer, setRebuildOffer] = useState<ContentMode | null>(null)
+  const [rebuilding, setRebuilding] = useState(false)
 
   const urlInputRef = useRef<HTMLInputElement>(null)
   const fileInputRef = useRef<HTMLInputElement>(null)
@@ -188,6 +234,8 @@ function App() {
   const languagesLoadedRef = useRef(false)
   const languagesRequestRef = useRef(false)
   const tabRefs = useRef<Record<string, HTMLButtonElement | null>>({})
+  const styleRef = useRef(mapStyle)
+  const builtModeRef = useRef(builtMode)
 
   const setStatus = useCallback((text: string, kind: StatusKind = 'idle') => {
     setStatusState({ kind, text })
@@ -200,6 +248,26 @@ function App() {
     sessionIdRef.current = sessionId
   }, [sessionId])
 
+  useEffect(() => {
+    styleRef.current = mapStyle
+  }, [mapStyle])
+
+  useEffect(() => {
+    builtModeRef.current = builtMode
+  }, [builtMode])
+
+  // The picker hands its choice over as a query param. Once the state above
+  // has read it, drop it so a refresh or a shared link does not keep forcing
+  // the style over whatever the learner picks next.
+  useEffect(() => {
+    const search = window.location.search
+    if (!styleFromSearch(search)) return
+    const rest = stripStyleFromSearch(search)
+    navigate(`${window.location.pathname}${rest}`, { replace: true })
+    // Runs once: the params are gone after the first pass.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+
   /** Persist the live session. Returns false when the API refused the write. */
   const saveNow = useCallback(
     async (options?: { title?: string; promote?: boolean }): Promise<boolean> => {
@@ -210,6 +278,8 @@ function App() {
         const summary = await autosaveProject({
           session_id: session,
           project_id: projectIdRef.current,
+          map_layout: styleRef.current.layout,
+          map_palette: styleRef.current.palette,
         })
         projectIdRef.current = summary.id
         setProjectId(summary.id)
@@ -262,6 +332,8 @@ function App() {
         nodes: nodesRef.current,
         consumedUntil,
         language: transcriptLang,
+        mapLayout: styleRef.current.layout,
+        mapPalette: styleRef.current.palette,
         savedAt: new Date().toISOString(),
       })
       setSavedAt(new Date())
@@ -292,6 +364,26 @@ function App() {
       setSessionId(data.session_id)
       sessionIdRef.current = data.session_id
     }
+
+    // A saved project carries its own look, so reopening it looks the way the
+    // learner left it rather than the way the last project happened to look.
+    if (data.map_layout || data.map_palette) {
+      setMapStyle(
+        normalizeStyle({ layout: data.map_layout, palette: data.map_palette }),
+      )
+    }
+
+    // The content mode is not the drawing: a project saved as "bubble" may
+    // still hold tree content from before ADR 0013, which is what the rebuild
+    // bar is for.
+    const layout = isMapLayout(data.map_layout) ? data.map_layout : styleRef.current.layout
+    const mode = isContentMode(data.map_mode) ? data.map_mode : contentMode(layout)
+    setBuiltMode(mode)
+    const change = modeSwitch(layout, mode, {
+      hasContent: Array.isArray(data.nodes) && data.nodes.length > 0,
+      canEdit: data.can_edit !== false,
+    })
+    setRebuildOffer(change?.offer ? change.mode : null)
 
     if (Array.isArray(data.transcript)) {
       setTranscript(data.transcript)
@@ -342,6 +434,46 @@ function App() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [url, videoId, setStatus])
 
+  /**
+   * POST to a session endpoint. These live outside `/api`, so the access token
+   * is attached by hand; a guest call simply goes without one.
+   */
+  const postJson = async (path: string, body: unknown, fallback: string) => {
+    const send = () => {
+      const headers: Record<string, string> = { 'Content-Type': 'application/json' }
+      const token = getAccessToken()
+      if (token) headers.Authorization = `Bearer ${token}`
+      return fetch(`${API_BASE}${path}`, {
+        method: 'POST',
+        headers,
+        body: JSON.stringify(body),
+      })
+    }
+
+    let response = await send()
+    if (response.status === 401 && getAccessToken()) {
+      if (await refreshSession()) response = await send()
+    }
+
+    if (!response.ok) {
+      const payload = await response.json().catch(() => null)
+      const detail =
+        payload && typeof payload === 'object' && 'detail' in payload ? payload.detail : undefined
+      const code =
+        detail && typeof detail === 'object' && 'code' in detail && typeof detail.code === 'string'
+          ? detail.code
+          : undefined
+      const message =
+        detail && typeof detail === 'object' && 'message' in detail && typeof detail.message === 'string'
+          ? detail.message
+          : typeof detail === 'string'
+            ? detail
+            : fallback
+      throw new RequestError(message, code ?? (typeof detail === 'string' ? detail : undefined))
+    }
+    return response.json()
+  }
+
   const fetchTranscript = async (payload: {
     url?: string
     fileContent?: string
@@ -357,42 +489,11 @@ function App() {
     if (payload.initialNodes) body.initial_nodes = payload.initialNodes
     if (payload.resumeAt !== undefined) body.resume_at = payload.resumeAt
     if (payload.title) body.title = payload.title
+    // The first chunk should already be extracted for the chosen mode; the
+    // backend ignores this for saved projects, which carry their own.
+    body.map_layout = styleRef.current.layout
 
-    const send = () => {
-      const headers: Record<string, string> = { 'Content-Type': 'application/json' }
-      // Saved projects are owner-only, so reopening one needs the access token.
-      // Guests have none and the endpoint still works for them.
-      const token = getAccessToken()
-      if (token) headers.Authorization = `Bearer ${token}`
-      return fetch(`${API_BASE}/transcript`, {
-        method: 'POST',
-        headers,
-        body: JSON.stringify(body),
-      })
-    }
-
-    let response = await send()
-    if (response.status === 401 && getAccessToken()) {
-      if (await refreshSession()) response = await send()
-    }
-
-    if (!response.ok) {
-      const body = await response.json().catch(() => null)
-      const detail =
-        body && typeof body === 'object' && 'detail' in body ? body.detail : undefined
-      const code =
-        detail && typeof detail === 'object' && 'code' in detail && typeof detail.code === 'string'
-          ? detail.code
-          : undefined
-      const message =
-        detail && typeof detail === 'object' && 'message' in detail && typeof detail.message === 'string'
-          ? detail.message
-          : typeof detail === 'string'
-            ? detail
-            : 'Không thể tải phụ đề'
-      throw new TranscriptRequestError(message, code ?? (typeof detail === 'string' ? detail : undefined))
-    }
-    return response.json()
+    return postJson('/transcript', body, 'Không thể tải phụ đề')
   }
 
   const loadVideo = async (id: string) => {
@@ -436,7 +537,7 @@ function App() {
     setMapTitle(DEFAULT_TITLE)
     applyNodes([], false)
     setEditor(null)
-    setCurrentTime(0)
+    playbackClock.set(0, true)
     currentTimeRef.current = 0
     lastTriggerRef.current = 0
     setIsLoading(true)
@@ -466,7 +567,7 @@ function App() {
       applyLoadResult(data, id, 'Đã tải phụ đề')
     } catch (error: unknown) {
       if (token === loadTokenRef.current) {
-        const code = error instanceof TranscriptRequestError ? error.code : undefined
+        const code = error instanceof RequestError ? error.code : undefined
         console.warn('[transcript]', code || error)
         setStatus(
           transcriptStatusText(code),
@@ -540,11 +641,16 @@ function App() {
       if (token !== loadTokenRef.current) return
       const id = draft.videoId || extractVideoId(draft.url)
       if (id) setVideoId(id)
+      if (draft.mapLayout || draft.mapPalette) {
+        setMapStyle(
+          normalizeStyle({ layout: draft.mapLayout, palette: draft.mapPalette }),
+        )
+      }
       applyLoadResult(data, id || '', 'Đã khôi phục bản nháp trong trình duyệt')
       setPendingDraft(null)
     } catch (error: unknown) {
       if (token === loadTokenRef.current) {
-        const code = error instanceof TranscriptRequestError ? error.code : undefined
+        const code = error instanceof RequestError ? error.code : undefined
         setStatus(transcriptStatusText(code), 'error')
         setUrlError(transcriptErrorMessage(code))
       }
@@ -601,7 +707,7 @@ function App() {
       })
       .catch((error: unknown) => {
         if (token !== loadTokenRef.current) return
-        const code = error instanceof TranscriptRequestError ? error.code : undefined
+        const code = error instanceof RequestError ? error.code : undefined
         setStatus('Không mở được dự án', 'error')
         setUrlError(
           code === 'project_not_found'
@@ -701,6 +807,7 @@ function App() {
 
   const onPlayerError: YouTubeProps['onError'] = (event) => {
     const error = playerErrorMessage(event.data)
+    setIsPlaying(false)
     setPlayerError(error)
     setStatus(error.title, 'error')
   }
@@ -710,10 +817,10 @@ function App() {
       if (!player || typeof player.seekTo !== 'function') return
       player.seekTo(seconds, true)
       currentTimeRef.current = seconds
-      setCurrentTime(seconds)
+      playbackClock.set(seconds, true)
       setStatus(`Đã tua đến ${formatTime(seconds)}`, 'idle')
     },
-    [player, setStatus],
+    [player, playbackClock, setStatus],
   )
 
   /** Caption tracks are fetched only when the picker is opened. */
@@ -836,6 +943,81 @@ function App() {
     }
   }
 
+  /**
+   * Ask the session to rewrite its content for `mode`.
+   *
+   * `offer` is false for the free cases (an empty map), where the call only
+   * records the mode and never reaches the model.
+   */
+  const adoptMode = async (mode: ContentMode, offer: boolean) => {
+    const session = sessionIdRef.current
+    if (!session || rebuilding) return
+    setRebuilding(true)
+    if (offer) setStatus('Đang tạo lại nội dung…', 'busy')
+    try {
+      const data = await postJson(
+        `/session/${session}/restructure`,
+        { map_layout: mode },
+        'Không tạo lại được nội dung',
+      )
+      if (Array.isArray(data.nodes)) applyNodes(data.nodes, false)
+      const applied: ContentMode = isContentMode(data.map_mode) ? data.map_mode : mode
+      setBuiltMode(applied)
+      setRebuildOffer(null)
+      if (offer) {
+        setStatus(`Đã tạo lại nội dung theo kiểu ${MODE_LABELS[applied]}`, 'ok')
+        // Persist the rewritten tree so reopening the project shows it.
+        void saveRef.current()
+      }
+    } catch (error: any) {
+      // The map is untouched server-side, so only the message is lost.
+      setStatus(error?.message || 'Không tạo lại được nội dung', 'error')
+    } finally {
+      setRebuilding(false)
+    }
+  }
+
+  /**
+   * Apply a look chosen in the dialog. The style is presentation, so it is
+   * remembered per project and per browser; a viewer keeps it local because
+   * they cannot write to the row.
+   *
+   * A different mode is a different *content*, so it is offered rather than
+   * spent: the drawing changes now, the rebuild is one click (ADR 0013).
+   */
+  const handleStyleConfirm = async (style: MapStyle) => {
+    setMapStyle(style)
+    styleRef.current = style
+    storeStyle(style)
+    setStyleOpen(false)
+    // The renderer only reads the style on mount/update, so nudge it to
+    // repaint the palette without waiting for the next AI update.
+    mindmapRef.current?.updateTree(titleRef.current, nodesRef.current, { focusNew: false })
+
+    const change = modeSwitch(style.layout, builtModeRef.current, {
+      hasContent: nodesRef.current.length > 0,
+      canEdit,
+    })
+    setRebuildOffer(change?.offer ? change.mode : null)
+    // Nothing extracted yet, so switching costs nothing: the next chunk is
+    // already built for the new mode. Do it quietly.
+    if (change && !change.offer) void adoptMode(change.mode, false)
+
+    const id = projectIdRef.current
+    if (id && canEdit) {
+      try {
+        await updateProject(id, {
+          map_layout: style.layout,
+          map_palette: style.palette,
+        })
+      } catch {
+        setStatus('Đã đổi kiểu sơ đồ, nhưng chưa lưu được vào dự án', 'error')
+        return
+      }
+    }
+    setStatus('Đã đổi kiểu sơ đồ', 'ok')
+  }
+
   const loadVersions = useCallback(async () => {
     const id = projectIdRef.current
     if (!id) return
@@ -888,6 +1070,9 @@ function App() {
     } else if (event.data === YT.PlayerState.PAUSED) {
       setIsPlaying(false)
       setStatus('Tạm dừng', 'idle')
+    } else if (event.data === YT.PlayerState.ENDED) {
+      setIsPlaying(false)
+      setStatus('Đã phát xong', 'idle')
     }
   }
 
@@ -897,7 +1082,7 @@ function App() {
     const interval = setInterval(() => {
       const time = player.getCurrentTime()
       currentTimeRef.current = time
-      setCurrentTime(time)
+      playbackClock.set(time)
       if (autoUpdate && canEdit && videoId && transcript.length > 0 && !isUpdatingRef.current) {
         if (time - lastTriggerRef.current >= AUTO_UPDATE_SECONDS) {
           lastTriggerRef.current = time
@@ -907,7 +1092,7 @@ function App() {
     }, 1000)
 
     return () => clearInterval(interval)
-  }, [player, isPlaying, autoUpdate, canEdit, videoId, transcript.length])
+  }, [player, isPlaying, autoUpdate, canEdit, videoId, transcript.length, playbackClock])
 
   useEffect(() => {
     eventSourceRef.current?.close()
@@ -921,6 +1106,11 @@ function App() {
           es.close()
           recreateSession()
           return
+        }
+        if (data?.type === 'restructure' && isContentMode(data.map_mode)) {
+          // Another tab rewrote the map for a new mode; this one is up to date.
+          setBuiltMode(data.map_mode)
+          setRebuildOffer(null)
         }
         if (data && Array.isArray(data.nodes) && mindmapRef.current) {
           applyNodes(data.nodes, data?.type === 'diff')
@@ -946,6 +1136,7 @@ function App() {
   }, [])
 
   const handleSelectNode = useCallback((nodeId: string) => {
+    setSelectedNodeId(nodeId)
     if (!canEdit) return
     const node = findNodeById(nodesRef.current, nodeId)
     if (!node) return
@@ -1143,12 +1334,10 @@ function App() {
 
   const lastEntry = transcript[transcript.length - 1]
   const totalSeconds = lastEntry ? lastEntry.start + (lastEntry.duration || 0) : 0
-  const progress = totalSeconds > 0 ? Math.min(100, (currentTime / totalSeconds) * 100) : 0
   const playbackError = playerError
   // `mapVersion` is the render trigger for the mutable tree in `nodesRef`.
   // eslint-disable-next-line react-hooks/exhaustive-deps
   const chapters = useMemo(() => buildChapters(nodesRef.current), [mapVersion])
-  const currentChapter = activeChapter(chapters, currentTime)
 
   return (
     <div className="app-shell">
@@ -1247,6 +1436,7 @@ function App() {
             <button
               className="btn btn--ghost btn--sm app-topbar__upload"
               type="button"
+              aria-label="Tải file phụ đề .srt hoặc .vtt"
               onClick={() => fileInputRef.current?.click()}
               disabled={isLoading}
             >
@@ -1350,12 +1540,41 @@ function App() {
           </form>
         )}
 
+        {rebuildOffer && (
+          <div className="rebuild-bar" role="status">
+            <span className="rebuild-bar__text">
+              Đã đổi cách vẽ. Nội dung vẫn được tạo theo kiểu{' '}
+              <strong>{MODE_LABELS[builtMode]}</strong>.
+            </span>
+            <span className="rebuild-bar__actions">
+              <button
+                type="button"
+                className="btn btn--primary btn--sm"
+                disabled={rebuilding}
+                onClick={() => void adoptMode(rebuildOffer, true)}
+              >
+                {rebuilding
+                  ? 'Đang tạo lại…'
+                  : `Tạo lại theo kiểu ${MODE_LABELS[rebuildOffer]}`}
+              </button>
+              <button
+                type="button"
+                className="btn btn--ghost btn--sm"
+                disabled={rebuilding}
+                onClick={() => setRebuildOffer(null)}
+              >
+                Để sau
+              </button>
+            </span>
+          </div>
+        )}
+
         <div className={`app-status app-status--${status.kind}`} role="status" aria-live="polite">
           <span className="app-status__dot" aria-hidden="true" />
           <span className="app-status__text">{status.text}</span>
           <span className="app-status__meta">
             {transcript.length > 0 && <span>{transcript.length} mục phụ đề</span>}
-            {videoId && <span className="app-status__time">{formatTime(currentTime)}</span>}
+            {videoId && <PlaybackTime clock={playbackClock} className="app-status__time" />}
           </span>
         </div>
       </header>
@@ -1424,9 +1643,9 @@ function App() {
           </div>
 
           <div className="player__foot">
-            <span className="player__clock">{formatTime(currentTime)}</span>
+            <PlaybackTime clock={playbackClock} className="player__clock" />
             <span className="player__track" aria-hidden="true">
-              <span className="player__track-fill" style={{ width: `${progress}%` }} />
+              <PlaybackProgress clock={playbackClock} totalSeconds={totalSeconds} />
             </span>
             <span className="player__clock player__clock--muted">
               {totalSeconds > 0 ? formatTime(totalSeconds) : '—:—'}
@@ -1434,33 +1653,7 @@ function App() {
           </div>
 
           {chapters.length > 0 && (
-            <nav className="chapter-rail" aria-label="Chương theo chủ đề">
-              <div className="chapter-rail__head">
-                <span className="chapter-rail__title">Chương</span>
-                <span className="chapter-rail__now">
-                  {currentChapter ? currentChapter.label : 'Chưa tới chương đầu'}
-                </span>
-              </div>
-              <ol className="chapter-rail__list">
-                {chapters.map((chapter) => {
-                  const isActive = currentChapter?.id === chapter.id
-                  return (
-                    <li key={chapter.id}>
-                      <button
-                        type="button"
-                        className={`chapter-rail__item${isActive ? ' is-active' : ''}`}
-                        aria-current={isActive ? 'true' : undefined}
-                        title={`Tua tới ${formatTime(chapter.start)}`}
-                        onClick={() => handleSeek(chapter.start)}
-                      >
-                        <span className="chapter-rail__time">{formatTime(chapter.start)}</span>
-                        <span className="chapter-rail__label">{chapter.label}</span>
-                      </button>
-                    </li>
-                  )
-                })}
-              </ol>
-            </nav>
+            <ChapterRail chapters={chapters} clock={playbackClock} onSeek={handleSeek} />
           )}
         </section>
 
@@ -1639,7 +1832,7 @@ function App() {
             ) : detailTab === 'transcript' ? (
               <TranscriptPanel
                 entries={transcript}
-                currentTime={currentTime}
+                playbackClock={playbackClock}
                 onSeek={handleSeek}
                 language={transcriptLang}
                 languages={languages}
@@ -1743,15 +1936,16 @@ function App() {
                   </div>
                   <div>
                     <dt>Thời điểm</dt>
-                    <dd>{videoId ? formatTime(currentTime) : '—'}</dd>
+                    <dd>{videoId ? <PlaybackTime clock={playbackClock} /> : '—'}</dd>
                   </div>
                 </dl>
 
                 <div className="session__hint">
                   <span className="session__hint-title">Mẹo</span>
                   <p>
-                    Nhấn vào một nhánh có mốc thời gian để tua video tới đúng đoạn. Nhấn vào
-                    nhãn (không phải mốc giờ) để sửa nội dung.
+                    Dùng Tab hoặc phím mũi tên để duyệt nhánh, rồi Enter hoặc Space để chọn.
+                    Dùng +/− để thu phóng và 0 để vừa khung. Nhánh có mốc thời gian sẽ tua
+                    video; nhãn node sẽ mở chỉnh sửa.
                   </p>
                 </div>
 
@@ -1831,6 +2025,24 @@ function App() {
                 {isUpdating ? 'Đang phân tích…' : 'Cập nhật'}
               </button>
 
+              <button
+                type="button"
+                className="btn btn--outline btn--sm"
+                onClick={() => setStyleOpen(true)}
+                title="Đổi bảng màu và kiểu sơ đồ"
+              >
+                <svg viewBox="0 0 20 20" fill="none" aria-hidden="true" width="14" height="14">
+                  <path
+                    d="M4 15.5 12.5 7a1.8 1.8 0 0 0-2.5-2.5L1.5 13v2.5H4ZM11 5l3.5 3.5M14 12.5c1.4 0 2.5 1 2.5 2.3 0 1.2-1.1 2.2-2.5 2.2s-2.5-1-2.5-2.2c0-1.3 1.1-2.3 2.5-2.3Z"
+                    stroke="currentColor"
+                    strokeWidth="1.4"
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                  />
+                </svg>
+                Kiểu sơ đồ
+              </button>
+
               <ExportMenu
                 onExport={(format) => void handleExport(format)}
                 disabled={nodeCount === 0}
@@ -1845,9 +2057,11 @@ function App() {
                 ref={mindmapRef}
                 onSeek={handleSeek}
                 onSelect={handleSelectNode}
-                selectedId={editor?.id ?? null}
+                selectedId={selectedNodeId}
                 collapseOld={focusRecent}
                 onReady={handleMindMapReady}
+                layout={mapStyle.layout}
+                palette={mapStyle.palette}
               />
             </Suspense>
 
@@ -1920,6 +2134,24 @@ function App() {
       </main>
 
       {showHelp && <ShortcutHelp onClose={() => setShowHelp(false)} />}
+      <MapStyleDialog
+        open={styleOpen}
+        initial={mapStyle}
+        title={styleIntro ? 'Chọn kiểu sơ đồ' : 'Đổi kiểu sơ đồ'}
+        confirmLabel={styleIntro ? 'Bắt đầu' : 'Áp dụng'}
+        onClose={() => {
+          // Dismissing means "keep what is on screen". Remembering it stops the
+          // first-visit prompt from coming back; the dashboard's own picker
+          // still asks before every new project.
+          storeStyle(styleRef.current)
+          setStyleIntro(false)
+          setStyleOpen(false)
+        }}
+        onConfirm={(style) => {
+          setStyleIntro(false)
+          void handleStyleConfirm(style)
+        }}
+      />
     </div>
   )
 }

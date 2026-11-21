@@ -9,9 +9,16 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Literal
 
+from pydantic import model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 ENV_FILE = Path(__file__).resolve().parents[2] / ".env"
+
+# Kept for local development and tests only. `APP_ENV=staging|production`
+# refuses to boot with this value: a publicly known signing key makes every JWT
+# forgeable.
+DEFAULT_JWT_SECRET_KEY = "dev-only-secret-change-me-in-production"
+MIN_PRODUCTION_SECRET_LENGTH = 32
 
 
 class Settings(BaseSettings):
@@ -23,6 +30,7 @@ class Settings(BaseSettings):
     )
 
     # App
+    APP_ENV: Literal["development", "test", "staging", "production"] = "development"
     APP_NAME: str = "YouTube Mind Map API"
     APP_VERSION: str = "0.3.0"
     FRONTEND_URL: str = "http://localhost:5173"
@@ -32,7 +40,7 @@ class Settings(BaseSettings):
     DATABASE_ECHO: bool = False
 
     # Auth
-    JWT_SECRET_KEY: str = "dev-only-secret-change-me-in-production"
+    JWT_SECRET_KEY: str = DEFAULT_JWT_SECRET_KEY
     JWT_ALGORITHM: str = "HS256"
     ACCESS_TOKEN_TTL_MINUTES: int = 15
     REFRESH_TOKEN_TTL_DAYS: int = 14
@@ -84,6 +92,56 @@ class Settings(BaseSettings):
     # Only enable behind a reverse proxy that overwrites X-Forwarded-For;
     # otherwise a client could spoof the header and dodge IP limits.
     TRUST_PROXY_HEADERS: bool = False
+
+    # Layer-1 content gate. `enforce` checks every YouTube URL before a map is
+    # built; `off` keeps the old "any video with captions" behaviour. The
+    # allow/block lists are comma-separated channel names or 11-char video ids.
+    # An empty list means "no explicit rule"; a non-empty allowlist is a
+    # closed list, which is the safe way to demo or run a private instance.
+    CONTENT_POLICY: Literal["off", "enforce"] = "enforce"
+    CONTENT_ALLOW_CHANNELS: str = ""
+    CONTENT_ALLOW_VIDEO_IDS: str = ""
+    CONTENT_BLOCK_CHANNELS: str = ""
+    CONTENT_BLOCK_VIDEO_IDS: str = ""
+    CONTENT_MIN_DURATION_SECONDS: int = 180
+    CONTENT_MIN_CUES: int = 20
+
+    # Layer-2 classifier. One small AI call on the first cues of a new video;
+    # results are cached per video, so a replay costs nothing. `off` skips the
+    # call entirely (useful for offline demos and for keeping quota predictable).
+    CONTENT_CLASSIFIER_ENABLED: bool = True
+    CONTENT_CLASSIFIER_CUES: int = 30
+
+    # Optional visual signal for the classifier. Off by default: it changes no
+    # production behaviour until explicitly enabled. When on, a few small
+    # public JPEGs (thumbnail + spread-out frames + storyboard) are attached to
+    # the same classifier call, so sensitive imagery can be caught even when
+    # the title and captions look harmless.
+    CONTENT_VISUAL_CHECK_ENABLED: bool = False
+    CONTENT_VISUAL_MAX_IMAGES: int = 6
+    CONTENT_VISUAL_FETCH_TIMEOUT: float = 5.0
+    CONTENT_VISUAL_MAX_BYTES: int = 1_500_000
+
+    # Layer-3 share policy. A public link is only allowed for a project whose
+    # video was confirmed as a lecture (allowlist or classifier verdict).
+    # Default to closed; set false only while migrating old rows.
+    CONTENT_SHARE_REQUIRE_VERIFIED: bool = True
+
+    @model_validator(mode="after")
+    def _guard_production_secret(self) -> "Settings":
+        """Fail closed instead of serving forgeable tokens in production."""
+        if self.APP_ENV in {"staging", "production"}:
+            secret = self.JWT_SECRET_KEY.strip()
+            if (
+                not secret
+                or secret == DEFAULT_JWT_SECRET_KEY
+                or len(secret) < MIN_PRODUCTION_SECRET_LENGTH
+            ):
+                raise ValueError(
+                    "JWT_SECRET_KEY must be a unique value of at least "
+                    f"{MIN_PRODUCTION_SECRET_LENGTH} characters in {self.APP_ENV}"
+                )
+        return self
 
     @property
     def is_sqlite(self) -> bool:

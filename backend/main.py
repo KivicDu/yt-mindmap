@@ -6,6 +6,7 @@ load_dotenv(Path(__file__).resolve().parent / ".env")
 
 import asyncio
 import json
+import logging
 import os
 import threading
 import time
@@ -20,15 +21,17 @@ from sqlalchemy.orm import Session
 from sse_starlette.sse import EventSourceResponse
 from starlette.concurrency import run_in_threadpool
 
-from ai_engine import ai_engine
+from ai_engine import MAX_RESTRUCTURE_CHARS, ai_engine, normalize_mode
 from app.api.deps import get_current_user, get_optional_user
 from app.api.router import api_router
+from app.core.config import get_settings
 from app.db.base import utcnow
 from app.db.session import get_db
 from app.middleware.rate_limit import RateLimitMiddleware
 from app.models.project import Project
 from app.models.user import User
 from app.schemas.project import AutosaveRequest
+from app.services import content_classifier, content_policy, video_visuals
 from app.services import projects as project_service
 from app.services import sharing as sharing_service
 from chunking import chunk_time_range, is_seek_backward, select_chunk
@@ -37,6 +40,7 @@ from node_tree import (
     merge_nodes,
     normalize_cached_nodes,
     normalize_nodes,
+    strip_private_fields,
     tree_to_markdown,
     update_node,
 )
@@ -63,6 +67,8 @@ ALLOWED_ORIGINS = [
     for origin in os.getenv("ALLOWED_ORIGINS", "").split(",")
     if origin.strip()
 ] or DEFAULT_ALLOWED_ORIGINS
+
+logger = logging.getLogger(__name__)
 
 app = FastAPI(title="YouTube Mind Map API", version="0.3.0")
 
@@ -96,6 +102,12 @@ class TranscriptRequest(BaseModel):
     # the map. `session_id` is required for that path.
     session_id: str | None = None
     language: str | None = Field(default=None, max_length=20)
+    # The thinking mode the map is built for (ADR 0013). `tree-down` is a
+    # drawing of `tree`, so it never changes what the AI extracts.
+    map_layout: str | None = Field(default=None, max_length=20)
+
+class RestructureRequest(BaseModel):
+    map_layout: str = Field(max_length=20)
 
 class UpdateMapRequest(BaseModel):
     video_id: str
@@ -254,11 +266,15 @@ def cache_video_map(video_id: str | None, session: dict[str, Any]) -> None:
         return
     video_cache[video_id] = {
         # The tree is the source of truth; markdown is kept so an older
-        # frontend or a downgraded backend can still read the cache.
-        "nodes": session.get("nodes", []),
+        # frontend or a downgraded backend can still read the cache. Guests can
+        # edit notes and pins too, so the shared copy must lose those fields.
+        "nodes": strip_private_fields(session.get("nodes", [])),
         "markdown": session.get("markdown", ""),
         "summary_so_far": session.get("summary_so_far", ""),
         "consumed_until": float(session.get("consumed_until", 0.0)),
+        # The same video can be mapped in four modes; a session may only reuse
+        # an entry built for its own mode (ADR 0013).
+        "map_mode": session.get("map_mode", "tree"),
         "updated_at": time.time(),
     }
     if len(video_cache) > MAX_CACHED_VIDEOS:
@@ -290,6 +306,15 @@ def restore_nodes(
     return markdown_to_tree(cached.get("markdown", ""))
 
 
+def cache_mode(cached: dict[str, Any] | None) -> str:
+    """The mode a cache entry was built for.
+
+    Entries written before ADR 0013 have no field and are trees, which is what
+    they are; `normalize_mode` also folds `tree-down` into `tree`.
+    """
+    return normalize_mode((cached or {}).get("map_mode") or "tree")
+
+
 def create_session(
     video_id: str | None,
     transcript: list[dict[str, Any]],
@@ -302,8 +327,14 @@ def create_session(
     owner_id: str | None = None,
     project_id: str | None = None,
     use_cache: bool = True,
+    map_layout: str | None = None,
 ) -> tuple:
+    mode = normalize_mode(map_layout)
     cached = video_cache.get(video_id) if (video_id and use_cache) else None
+    # Content from another mode is not a partial map of this one: ignore it and
+    # let the session rebuild from the playhead.
+    if cached is not None and cache_mode(cached) != mode:
+        cached = None
 
     nodes = restore_nodes(initial_nodes, initial_markdown, cached)
     markdown = tree_to_markdown(nodes) if nodes else ""
@@ -332,6 +363,10 @@ def create_session(
         "summary_so_far": summary_so_far,
         "nodes": nodes,
         "markdown": markdown,
+        # The content mode the AI builds for, and the tree each visited mode
+        # held, so switching back and forth is free and lossless (ADR 0013).
+        "map_mode": mode,
+        "maps": {mode: nodes} if nodes else {},
         "events": [],
         "last_active": time.time(),
         # Present only for signed-in sessions; autosave and resume use them.
@@ -353,6 +388,7 @@ def session_payload(session_id: str) -> dict[str, Any]:
         "consumed_until": float(session.get("consumed_until", 0.0)),
         "title": session.get("title"),
         "summary": session.get("summary_so_far", ""),
+        "map_mode": session.get("map_mode", "tree"),
     }
 
 @app.get("/")
@@ -372,20 +408,56 @@ async def healthz():
         "ai_tokens": dict(ai_engine.usage_totals),
     }
 
-async def _fetch_youtube_title(url: str) -> str | None:
+async def fetch_oembed(video_id: str) -> dict[str, Any]:
+    """Public video metadata from oEmbed. A network failure returns checked=False.
+
+    Both `/video-info` and the content gate use this one call, so a link is
+    described and classified from the same answer. oEmbed has no category or
+    duration, which is why the gate also looks at the caption cues.
+    """
+
+    canonical = f"https://www.youtube.com/watch?v={video_id}"
+    result: dict[str, Any] = {
+        "title": None,
+        "author_name": None,
+        "thumbnail_url": None,
+        "checked": False,
+        "embeddable": None,
+        "reason": None,
+    }
     try:
         async with httpx.AsyncClient(timeout=5.0) as client:
             resp = await client.get(
                 "https://www.youtube.com/oembed",
-                params={"url": url, "format": "json"},
+                params={"url": canonical, "format": "json"},
             )
-            if resp.status_code == 200:
-                data = resp.json()
-                if isinstance(data, dict) and data.get("title"):
-                    return str(data["title"])
     except Exception:
-        pass
-    return None
+        # A transient network problem is not proof that embedding is blocked.
+        return result
+
+    result["checked"] = True
+    if resp.status_code == 200:
+        try:
+            data = resp.json()
+        except ValueError:
+            data = {}
+        if isinstance(data, dict):
+            result["title"] = data.get("title")
+            result["author_name"] = data.get("author_name")
+            result["thumbnail_url"] = data.get("thumbnail_url")
+        result["embeddable"] = True
+    elif resp.status_code in (400, 401, 403, 404):
+        result["embeddable"] = False
+        result["reason"] = "not_embeddable"
+    return result
+
+
+async def _fetch_youtube_title(url: str) -> str | None:
+    video_id = extract_video_id(url)
+    if not video_id:
+        return None
+    title = (await fetch_oembed(video_id)).get("title")
+    return str(title) if title else None
 
 
 @app.get("/video-info")
@@ -408,51 +480,7 @@ async def get_video_info(url: str):
             },
         )
 
-    canonical = f"https://www.youtube.com/watch?v={video_id}"
-    result: dict[str, Any] = {
-        "video_id": video_id,
-        "title": None,
-        "author_name": None,
-        "thumbnail_url": None,
-        "embeddable": None,
-        "checked": False,
-        "reason": None,
-    }
-
-    try:
-        async with httpx.AsyncClient(timeout=5.0) as client:
-            resp = await client.get(
-                "https://www.youtube.com/oembed",
-                params={"url": canonical, "format": "json"},
-            )
-    except Exception:
-        # A transient network problem is not proof that embedding is blocked;
-        # leave embeddable as None so the player still gets a chance.
-        return result
-
-    result["checked"] = True
-    if resp.status_code == 200:
-        try:
-            data = resp.json()
-        except ValueError:
-            data = {}
-        if isinstance(data, dict):
-            result.update(
-                {
-                    "title": data.get("title"),
-                    "author_name": data.get("author_name"),
-                    "thumbnail_url": data.get("thumbnail_url"),
-                }
-            )
-        result["embeddable"] = True
-        return result
-
-    if resp.status_code in (400, 401, 403, 404):
-        result["embeddable"] = False
-        result["reason"] = "not_embeddable"
-        return result
-
-    return result
+    return {"video_id": video_id, **await fetch_oembed(video_id)}
 
 
 async def switch_transcript_language(
@@ -565,6 +593,47 @@ async def get_transcript_track(
     return {"language": resolved, "transcript": entries}
 
 
+def video_metadata(
+    video_id: str,
+    oembed: dict[str, Any],
+    transcript: list[dict[str, Any]] | None = None,
+) -> content_policy.VideoMetadata:
+    """Turn data the endpoint already has into the gate's input."""
+
+    cues = [cue for cue in (transcript or []) if isinstance(cue, dict)]
+    duration = max(
+        (
+            float(cue.get("start", 0.0)) + float(cue.get("duration", 0.0))
+            for cue in cues
+        ),
+        default=0.0,
+    )
+    return content_policy.VideoMetadata(
+        video_id=video_id,
+        title=oembed.get("title") if isinstance(oembed.get("title"), str) else None,
+        author_name=(
+            oembed.get("author_name")
+            if isinstance(oembed.get("author_name"), str)
+            else None
+        ),
+        oembed_checked=bool(oembed.get("checked")),
+        cue_count=len(cues),
+        duration_seconds=duration,
+    )
+
+
+def content_error(decision: content_policy.Decision) -> HTTPException:
+    """Maps a policy denial to the same `{code, message}` contract as captions."""
+
+    return HTTPException(
+        status_code=422,
+        detail={
+            "code": decision.code or "content_not_lecture",
+            "message": f"Content policy: {decision.reason or 'not allowed'}",
+        },
+    )
+
+
 @app.post("/transcript")
 async def get_transcript(
     request: TranscriptRequest,
@@ -632,9 +701,14 @@ async def get_transcript(
                 owner_id=project.user_id,
                 project_id=project.id,
                 use_cache=False,
+                map_layout=project.map_layout,
             )
         else:
             touch_session(session_id)
+
+        # Keep the row's verdict in the live session so autosave never demotes
+        # a project simply because it was reopened.
+        sessions[session_id]["content_verified"] = bool(project.content_verified)
 
         project.last_opened_at = utcnow()
         db.commit()
@@ -645,6 +719,8 @@ async def get_transcript(
             "video_id": vid,
             "title": title,
             "language": language,
+            "map_layout": project.map_layout or "tree",
+            "map_palette": project.map_palette or "paper",
             "cached": cached,
             "role": role,
             "can_edit": sharing_service.can_edit(role),
@@ -669,7 +745,10 @@ async def get_transcript(
                 initial_nodes=request.initial_nodes,
                 title=title,
                 language=None,
+                map_layout=request.map_layout,
             )
+            # A learner-supplied file has no provenance to confirm.
+            sessions[session_id]["content_verified"] = False
             return {
                 "transcript": transcript,
                 "video_id": vid,
@@ -693,6 +772,20 @@ async def get_transcript(
             ) from e
 
     if request.url:
+        video_id = extract_video_id(request.url)
+        oembed: dict[str, Any] = {}
+        label = "unverified"
+        content_verified = False
+        if video_id:
+            # Decide what we can before fetching captions, so a blocked video
+            # never reaches the transcript client, the cache or the AI.
+            oembed = await fetch_oembed(video_id)
+            preflight = content_policy.evaluate(
+                video_metadata(video_id, oembed), check_length=False
+            )
+            if not preflight.allowed:
+                raise content_error(preflight)
+
         try:
             # The YouTube client is synchronous; keeping it off the event loop
             # means one slow video no longer freezes every other request.
@@ -713,9 +806,79 @@ async def get_transcript(
                 },
             ) from e
 
+        if video_id:
+            # Length needs the captions; this is the second and last gate.
+            decision = content_policy.evaluate(
+                video_metadata(video_id, oembed, transcript)
+            )
+            if not decision.allowed:
+                raise content_error(decision)
+            label = decision.label
+            # Only an explicit allowlist or the AI verdict counts as proof for
+            # layer 3. A passing heuristic is a guess, not a confirmation.
+            content_verified = decision.reason == "allowlist"
+
+            # Layer 2: a small AI call confirms the layer-1 guess from the
+            # caption sample. An allowlisted video is already trusted, so it
+            # skips the call. Every AI failure stays `unverified` and lets the
+            # learner in -- a safety net must not become a second lock.
+            if decision.reason != "allowlist":
+                oembed_title = oembed.get("title")
+                classify_title = request.title or (
+                    oembed_title if isinstance(oembed_title, str) else None
+                )
+                author_name = oembed.get("author_name")
+                # Optional visual signal, off by default. A few bounded public
+                # JPEGs catch imagery that the caption text cannot describe.
+                # Fetch failures yield an empty list and the classifier stays
+                # text-only, so this can never block a study session.
+                visuals: list[Any] = []
+                if get_settings().CONTENT_VISUAL_CHECK_ENABLED:
+                    try:
+                        visuals = await run_in_threadpool(
+                            video_visuals.fetch_visuals,
+                            video_id,
+                            duration=video_visuals.duration_from_cues(transcript),
+                        )
+                    except Exception as exc:
+                        logger.warning(
+                            "Visual sampling failed for %s: %s", video_id, type(exc).__name__
+                        )
+                visual_kwargs = {"visuals": visuals} if visuals else {}
+                classification = await run_in_threadpool(
+                    content_classifier.classify,
+                    video_id,
+                    classify_title,
+                    author_name if isinstance(author_name, str) else None,
+                    transcript,
+                    **visual_kwargs,
+                )
+                ai_label = classification.get("label")
+                if ai_label in ("not_lecture", "sensitive"):
+                    raise content_error(
+                        content_policy.Decision(
+                            allowed=False,
+                            code=(
+                                "content_not_lecture"
+                                if ai_label == "not_lecture"
+                                else "content_sensitive"
+                            ),
+                            label="unverified",
+                            reason=f"classifier:{ai_label}",
+                        )
+                    )
+                if ai_label == "lecture":
+                    label = "lecture"
+                    content_verified = True
+
         try:
-            vid = extract_video_id(request.url)
-            title = request.title or await _fetch_youtube_title(request.url)
+            vid = video_id
+            oembed_title = oembed.get("title")
+            title = request.title or (
+                oembed_title if isinstance(oembed_title, str) else None
+            )
+            if not title:
+                title = await _fetch_youtube_title(request.url)
             session_id, cached = create_session(
                 vid,
                 transcript,
@@ -724,13 +887,18 @@ async def get_transcript(
                 initial_nodes=request.initial_nodes,
                 title=title,
                 language=language,
+                map_layout=request.map_layout,
             )
+            sessions[session_id]["content_label"] = label
+            sessions[session_id]["content_verified"] = content_verified
             return {
                 "transcript": transcript,
                 "video_id": vid,
                 "title": title,
                 "language": language,
                 "cached": cached,
+                "content_label": label,
+                "content_verified": content_verified,
                 **session_payload(session_id),
             }
         except Exception as e:
@@ -858,6 +1026,7 @@ async def update_map(
             transcript_chunk=chunk,
             summary_so_far=summary_so_far,
             time_range=time_range,
+            mode=session.get("map_mode", "tree"),
         )
 
         # On AI failure, keep the pointer so the chunk is retried later.
@@ -891,6 +1060,7 @@ async def update_map(
             )
             session["nodes"] = merge_nodes(session.get("nodes", []), new_nodes)
             session["markdown"] = tree_to_markdown(session["nodes"])
+            session.setdefault("maps", {})[session.get("map_mode", "tree")] = session["nodes"]
             cache_video_map(session.get("video_id"), session)
             event_data = {
                 "type": "diff",
@@ -924,6 +1094,123 @@ async def update_map(
         }
     finally:
         lock.release()
+
+@app.post("/session/{session_id}/restructure")
+async def restructure_map(
+    session_id: str,
+    request: RestructureRequest,
+    user: User | None = Depends(get_optional_user),
+    db: Session = Depends(get_db),
+):
+    """Rewrite the map for another thinking mode (ADR 0013).
+
+    One AI call reorganises what the map already holds. Modes the session has
+    visited before are restored from memory, and a mode that is only a drawing
+    of the current one (`tree` ↔ `tree-down`) changes nothing.
+    """
+    cleanup_sessions()
+    session = sessions.get(session_id)
+    if not session:
+        raise HTTPException(status_code=404, detail="session_lost")
+
+    project = assert_can_edit_session(db, session, user)
+    session["last_active"] = time.time()
+    target = normalize_mode(request.map_layout)
+    current = session.get("map_mode", "tree")
+    maps = session.setdefault("maps", {})
+
+    def payload(changed: bool, **extra: Any) -> dict[str, Any]:
+        return {
+            "nodes": session.get("nodes", []),
+            "markdown": session.get("markdown", ""),
+            "map_mode": session.get("map_mode", "tree"),
+            "changed": changed,
+            **extra,
+        }
+
+    if target == current:
+        return payload(False, reason="same_mode")
+
+    def adopt(nodes: list[dict[str, Any]], restored: bool) -> dict[str, Any]:
+        session["nodes"] = nodes
+        session["markdown"] = tree_to_markdown(nodes)
+        session["map_mode"] = target
+        maps[target] = nodes
+        cache_video_map(session.get("video_id"), session)
+        event = {
+            "type": "restructure",
+            "nodes": nodes,
+            "markdown": session["markdown"],
+            "map_mode": target,
+        }
+        session.setdefault("events", []).append({"type": "restructure", "data": event})
+        return payload(True, restored=restored)
+
+    # A mode visited earlier is still in memory, so switching back is free and
+    # loses nothing. Only the persisted project keeps the current mode.
+    remembered = maps.get(target)
+    if remembered is not None:
+        return adopt(remembered, restored=True)
+
+    markdown = (session.get("markdown") or "").strip()
+    if not markdown:
+        # Nothing has been extracted yet: the next chunk is already built for
+        # the new mode, so this costs nothing.
+        session["map_mode"] = target
+        maps[target] = session.get("nodes", [])
+        return payload(True, restored=False)
+
+    if len(markdown) > MAX_RESTRUCTURE_CHARS:
+        raise HTTPException(
+            status_code=413,
+            detail={
+                "code": "map_too_large",
+                "message": "Sơ đồ này quá lớn để tạo lại nội dung trong một lần.",
+            },
+        )
+
+    lock = session.get("update_lock")
+    if lock is None:
+        lock = threading.Lock()
+        session["update_lock"] = lock
+    if not lock.acquire(blocking=False):
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "code": "busy",
+                "message": "Đang cập nhật sơ đồ, thử lại sau vài giây.",
+            },
+        )
+    try:
+        outcome = await asyncio.to_thread(ai_engine.restructure, markdown, target)
+    finally:
+        lock.release()
+
+    if outcome.get("error") or outcome.get("note"):
+        raise HTTPException(
+            status_code=502,
+            detail={
+                "code": "ai_error",
+                "message": "Không tạo lại được nội dung. Sơ đồ vẫn giữ nguyên.",
+            },
+        )
+
+    nodes = normalize_nodes(outcome.get("nodes") or [])
+    if not nodes:
+        # An empty reply must never replace a map the learner already has.
+        raise HTTPException(
+            status_code=502,
+            detail={
+                "code": "ai_error",
+                "message": "Không tạo lại được nội dung. Sơ đồ vẫn giữ nguyên.",
+            },
+        )
+
+    if project is not None:
+        project_service.snapshot(db, project, author_id=user.id if user else None)
+
+    maps[current] = session.get("nodes", [])
+    return adopt(nodes, restored=False)
 
 @app.patch("/node")
 async def edit_node(
@@ -1051,6 +1338,13 @@ def autosave_project(
             title=request.title if role == sharing_service.ROLE_OWNER else None,
             author_id=user.id,
         )
+        # Style is presentation, not content, so an editor may change it even
+        # though they cannot rename the project.
+        if project_service.apply_style(
+            saved, request.map_layout, request.map_palette
+        ):
+            db.commit()
+            db.refresh(saved)
         return project_service.summary(saved)
 
     if target_id:
@@ -1071,6 +1365,8 @@ def autosave_project(
         project_id=request.project_id,
         title=request.title,
         is_draft=request.is_draft,
+        map_layout=request.map_layout,
+        map_palette=request.map_palette,
     )
     if project is None:
         raise HTTPException(status_code=404, detail="project_not_found")

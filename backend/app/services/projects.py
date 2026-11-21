@@ -83,6 +83,23 @@ def normalize_tags(values: list[str] | None) -> list[str]:
     return seen
 
 
+def apply_style(project: Project, layout: str | None, palette: str | None) -> bool:
+    """Write a map style the schema already validated.
+
+    Returns ``True`` when something changed, so the caller can decide whether
+    the row needs a commit of its own.
+    """
+
+    changed = False
+    if layout and layout != project.map_layout:
+        project.map_layout = layout
+        changed = True
+    if palette and palette != project.map_palette:
+        project.map_palette = palette
+        changed = True
+    return changed
+
+
 def summary(project: Project) -> dict[str, Any]:
     """What a list/card needs — never the transcript."""
     return {
@@ -94,6 +111,8 @@ def summary(project: Project) -> dict[str, Any]:
         "share_slug": project.share_slug,
         "link_role": project.link_role,
         "tags": list(project.tags or []),
+        "map_layout": project.map_layout or "tree",
+        "map_palette": project.map_palette or "paper",
         # The tree is nested, so the top-level list is only the number of roots.
         "node_count": count_nodes(project.nodes or []),
         "transcript_language": project.transcript_language,
@@ -331,6 +350,8 @@ def duplicate(db: Session, project: Project) -> Project:
         consumed_until=float(project.consumed_until or 0.0),
         is_draft=False,
         tags=list(project.tags or []),
+        map_layout=project.map_layout,
+        map_palette=project.map_palette,
         search_text=project.search_text,
         visibility="private",
         share_slug=None,
@@ -397,6 +418,10 @@ def save_session(
     project.transcript_language = session.get("language")
     project.summary_so_far = session.get("summary_so_far", "")
     project.consumed_until = float(session.get("consumed_until", 0.0))
+    # Only overwrite when this session actually carries a verdict: a session
+    # restored from an old project must not silently demote that project.
+    if "content_verified" in session:
+        project.content_verified = bool(session["content_verified"])
     project.last_opened_at = utcnow()
     project.search_text = build_search_text(
         title=project.title,
@@ -419,6 +444,8 @@ def autosave(
     project_id: str | None = None,
     title: str | None = None,
     is_draft: bool = True,
+    map_layout: str | None = None,
+    map_palette: str | None = None,
 ) -> Project | None:
     """Copy the live in-memory session into a row owned by ``user_id``.
 
@@ -455,9 +482,13 @@ def autosave(
             video_id=session.get("video_id"),
             title=title or session.get("title") or "Sơ đồ chưa đặt tên",
             is_draft=is_draft,
+            map_layout=map_layout or "tree",
+            map_palette=map_palette or "paper",
         )
         db.add(project)
         db.flush()
+    else:
+        apply_style(project, map_layout, map_palette)
 
     return save_session(
         db,

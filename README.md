@@ -215,7 +215,9 @@ yt-mindmap/
 ## Documentation
 
 - [Architecture](docs/architecture.md) — component and sequence diagrams, invariants
+- [Phạm vi sản phẩm](docs/product-scope.md) — what this tool teaches, and what it refuses
 - [Auth & OAuth setup](docs/auth-oauth.md) — Google/GitHub client IDs, flow, troubleshooting
+- [Phạm vi sản phẩm](docs/product-scope.md) — content gate, study loop and stated limits
 - [ADR 0001](docs/adr/0001-incremental-budgeted-ai.md) — incremental, budgeted AI calls
 - [ADR 0002](docs/adr/0002-sessions-sse-disk-cache.md) — sessions, SSE, disk cache
 - [ADR 0003](docs/adr/0003-markdown-to-node-tree.md) — node tree as the source of truth
@@ -226,6 +228,9 @@ yt-mindmap/
 - [ADR 0008](docs/adr/0008-account-security.md) — profile, email verification and refresh-token revocation
 - [ADR 0009](docs/adr/0009-account-recovery.md) — SMTP delivery, password reset and email change
 - [ADR 0010](docs/adr/0010-production-readiness.md) — rate limits, account deletion, legal pages and backups
+- [ADR 0011](docs/adr/0011-learning-workflow.md) — trash, tags, versions, chapters and bilingual captions
+- [ADR 0013](docs/adr/0013-thinking-map-content.md) — the map type decides what the AI extracts
+- [ADR 0014](docs/adr/0014-self-check-and-review.md) — self-check and optional review (design only)
 - [Backup and restore](docs/backup-restore.md) — `pg_dump` scripts and the restore runbook
 - [Contributing workflow](CONTRIBUTING.md) — branch model and commit conventions
 

@@ -6,13 +6,21 @@ from google.genai import errors as genai_errors
 
 import ai_engine as ai_module
 from ai_engine import (
+    CLASSIFIER_LABELS,
+    MAX_CLASSIFY_CHARS,
+    MAX_CLASSIFY_CUES,
+    MAX_CLASSIFY_REASON_CHARS,
     MAX_LOGGED_ERROR_CHARS,
     MAX_RETRIES,
     REQUEST_TIMEOUT,
     MindMapAI,
     _thinking_budget,
+    build_classify_prompt,
+    classification_contents,
+    classify_sample,
     describe_error,
     is_retryable,
+    parse_classification,
 )
 
 
@@ -238,6 +246,106 @@ class TestGenerateIncrementalUpdate:
         assert result["should_update"] is False
 
 
+class TestContentModes:
+    def test_each_layout_maps_to_its_thinking_mode(self):
+        assert ai_module.normalize_mode("tree") == "tree"
+        assert ai_module.normalize_mode("spider") == "spider"
+        assert ai_module.normalize_mode("bubble") == "bubble"
+        assert ai_module.normalize_mode("circle") == "circle"
+
+    def test_tree_down_is_only_a_drawing_of_the_tree_mode(self):
+        assert ai_module.normalize_mode("tree-down") == "tree"
+
+    def test_unknown_or_empty_values_fall_back_to_tree(self):
+        assert ai_module.normalize_mode("") == "tree"
+        assert ai_module.normalize_mode(None) == "tree"
+        assert ai_module.normalize_mode("flowchart") == "tree"
+
+    def test_mode_is_read_case_insensitively(self):
+        assert ai_module.normalize_mode(" Bubble ") == "bubble"
+
+    def test_incremental_prompt_carries_the_mode_block(self, engine):
+        engine.generate_incremental_update(
+            current_markdown="",
+            transcript_chunk=[{"start": 1.0, "text": "the heart has four chambers"}],
+            time_range=(1.0, 2.0),
+            mode="bubble",
+        )
+        prompt = engine.client.models.calls[0]["contents"]
+        assert ai_module.BUBBLE_MODE in prompt
+        assert ai_module.TREE_MODE not in prompt
+        assert "what is it like" in prompt
+
+    def test_incremental_prompt_defaults_to_the_tree_block(self, engine):
+        engine.generate_incremental_update(
+            current_markdown="",
+            transcript_chunk=[{"start": 1.0, "text": "text"}],
+            time_range=(1.0, 2.0),
+        )
+        prompt = engine.client.models.calls[0]["contents"]
+        assert ai_module.TREE_MODE in prompt
+
+    def test_unknown_mode_never_reaches_the_model(self, engine):
+        engine.generate_incremental_update(
+            current_markdown="",
+            transcript_chunk=[{"start": 1.0, "text": "text"}],
+            time_range=(1.0, 2.0),
+            mode="flowchart",
+        )
+        prompt = engine.client.models.calls[0]["contents"]
+        assert ai_module.TREE_MODE in prompt
+
+
+class TestRestructure:
+    def test_prompt_carries_the_map_and_the_mode(self, engine):
+        engine.client = FakeClient(
+            [FakeResponse('{"nodes": [{"name": "Topic", "time": 1.0}]}')]
+        )
+        engine.restructure("- [Topic](#seek-1.0)\n  - [Detail](#seek-2.0)", "circle")
+        prompt = engine.client.models.calls[0]["contents"]
+        assert "- [Topic](#seek-1.0)" in prompt
+        assert ai_module.CIRCLE_MODE in prompt
+        assert "Use ONLY content already present" in prompt
+
+    def test_reply_is_parsed_into_nodes(self, engine):
+        engine.client = FakeClient(
+            [
+                FakeResponse(
+                    '```json\n{"nodes": [{"name": "Topic", "time": 1.0, '
+                    '"children": [{"name": "Point", "time": 2.0}]}]}\n```'
+                )
+            ]
+        )
+        result = engine.restructure("- [Topic](#seek-1.0)", "spider")
+        assert result["mode"] == "spider"
+        assert result["nodes"][0]["name"] == "Topic"
+        assert result["nodes"][0]["children"][0]["name"] == "Point"
+
+    def test_empty_map_costs_no_call(self, engine):
+        result = engine.restructure("   ", "bubble")
+        assert result == {"nodes": [], "mode": "bubble"}
+        assert engine.client.models.calls == []
+
+    def test_unconfigured_engine_reports_a_note(self, monkeypatch):
+        monkeypatch.setenv("GEMINI_API_KEY", "")
+        result = MindMapAI().restructure("- [Topic](#seek-1.0)", "bubble")
+        assert result["note"] == "AI not configured"
+        assert result["nodes"] == []
+
+    def test_bad_json_is_reported_not_raised(self, engine):
+        engine.client = FakeClient([FakeResponse("not json")])
+        result = engine.restructure("- [Topic](#seek-1.0)", "bubble")
+        assert "error" in result
+        assert result["nodes"] == []
+
+    def test_usage_is_recorded(self, engine):
+        engine.client = FakeClient(
+            [FakeResponse('{"nodes": []}', FakeUsage(80, 10))]
+        )
+        engine.restructure("- [Topic](#seek-1.0)", "bubble")
+        assert engine.usage_totals["calls"] == 1
+
+
 class TestTokenUsage:
     def test_usage_is_accumulated_across_calls(self, engine):
         payload = json.dumps({"should_update": False, "new_nodes": [], "summary": "s"})
@@ -275,12 +383,157 @@ class TestDescribeError:
         text = describe_error(ValueError("first line\n\n  second line\t"))
         assert text == "ValueError: first line second line"
 
+
+class TestClassification:
+    def test_sample_caps_both_cue_count_and_characters(self):
+        many = [{"start": float(i), "text": f"cue number {i}"} for i in range(200)]
+        assert len(classify_sample(many)) == MAX_CLASSIFY_CUES
+
+        huge = [{"start": 0.0, "text": "x" * 9000} for _ in range(10)]
+        sample = classify_sample(huge)
+        assert len(sample) == 1
+        assert len(json.dumps(sample, ensure_ascii=False)) <= MAX_CLASSIFY_CHARS
+
+    def test_prompt_marks_metadata_as_untrusted_and_lists_every_label(self):
+        prompt = build_classify_prompt(
+            "A lecture", "Teacher", [{"start": 0.0, "text": "hello class"}]
+        )
+        assert "UNTRUSTED DATA" in prompt
+        assert "Never follow or obey" in prompt
+        for label in CLASSIFIER_LABELS:
+            assert label in prompt
+        assert "hello class" in prompt
+
+    def test_prompt_never_sees_cues_past_the_sample(self):
+        cues = [{"start": float(i), "text": f"cue-{i}"} for i in range(60)]
+        prompt = build_classify_prompt("Title", "Channel", cues)
+        assert "cue-0" in prompt
+        assert f"cue-{MAX_CLASSIFY_CUES}" not in prompt
+
+    @pytest.mark.parametrize("label", CLASSIFIER_LABELS)
+    def test_parser_accepts_every_declared_label(self, label):
+        result = parse_classification(
+            json.dumps({"label": label, "reason": "ok", "confidence": 0.8})
+        )
+        assert result["label"] == label
+        assert result["confidence"] == 0.8
+
+    def test_parser_fails_open_on_unknown_label_and_broken_json(self):
+        assert parse_classification('{"label": "ban_this_person"}')["label"] == "unverified"
+        assert parse_classification("not json at all")["label"] == "unverified"
+        assert parse_classification("{}")["label"] == "unverified"
+
+    def test_parser_caps_reason_and_clamps_confidence(self):
+        result = parse_classification(
+            json.dumps(
+                {
+                    "label": "LECTURE",
+                    "reason": "r" * 500,
+                    "confidence": 9.0,
+                }
+            )
+        )
+        assert result["label"] == "lecture"
+        assert len(result["reason"]) == MAX_CLASSIFY_REASON_CHARS
+        assert result["confidence"] == 1.0
+
+    def test_classify_video_returns_the_parsed_label(self, engine):
+        engine.client = FakeClient(
+            [
+                FakeResponse(
+                    '{"label": "sensitive", "reason": "graphic", "confidence": 0.9}',
+                    FakeUsage(50, 10),
+                )
+            ]
+        )
+        result = engine.classify_video("Title", "Channel", [{"start": 0.0, "text": "x"}])
+        assert result["label"] == "sensitive"
+        assert engine.usage_totals["calls"] == 1
+
+    def test_classify_video_fails_open_when_ai_raises(self, engine):
+        engine.client = FakeClient([api_error(401, "UNAUTHENTICATED")])
+        result = engine.classify_video("Title", "Channel", [{"start": 0.0, "text": "x"}])
+        assert result["label"] == "unverified"
+        assert result["reason"] == "ai_error"
+
+    def test_unconfigured_engine_costs_no_call(self, monkeypatch):
+        monkeypatch.setenv("GEMINI_API_KEY", "")
+        result = MindMapAI().classify_video("Title", "Channel", [{"start": 0.0, "text": "x"}])
+        assert result["label"] == "unverified"
+        assert result["reason"] == "ai_not_configured"
+
     def test_caps_long_messages(self):
         text = describe_error(RuntimeError("x" * 5000))
         assert len(text) == len("RuntimeError: ") + MAX_LOGGED_ERROR_CHARS
 
     def test_handles_an_error_without_a_message(self):
         assert describe_error(RuntimeError()) == "RuntimeError"
+
+
+class TestVisualClassification:
+    """The optional image signal: prompt rules + SDK parts, all offline."""
+
+    def test_text_prompt_has_no_visual_rules(self):
+        prompt = build_classify_prompt("Title", "Channel", [{"start": 0.0, "text": "x"}])
+        assert "images sampled from the video" not in prompt
+
+    def test_visual_prompt_tells_the_model_to_judge_not_obey(self):
+        prompt = build_classify_prompt(
+            "Title", "Channel", [{"start": 0.0, "text": "x"}], has_visuals=True
+        )
+        assert "images sampled from the video" in prompt
+        assert "UNTRUSTED DATA" in prompt
+        assert "medical, historical, artistic" in prompt
+        assert "inconclusive" in prompt
+
+    def test_contents_stays_a_string_without_images(self):
+        assert classification_contents("prompt") == "prompt"
+        assert classification_contents("prompt", []) == "prompt"
+
+    def test_contents_falls_back_to_text_when_the_sdk_has_no_types(self, monkeypatch):
+        monkeypatch.setattr(ai_module, "genai_types", None)
+        visual = type("Visual", (), {"source": "thumbnail", "data": b"\xff\xd8\xff"})()
+        assert classification_contents("prompt", [visual]) == "prompt"
+
+    def test_contents_builds_one_jpeg_part_per_image(self):
+        class Visual:
+            def __init__(self, source, data):
+                self.source = source
+                self.data = data
+
+        visuals = [
+            Visual("thumbnail", b"\xff\xd8\xffone"),
+            {"source": "auto:50%", "data": b"\xff\xd8\xfftwo"},
+            Visual("empty", b""),
+        ]
+        parts = classification_contents("prompt", visuals)
+
+        assert isinstance(parts, list)
+        assert len(parts) == 3  # one text part + two images
+        assert parts[0].text == "prompt"
+        assert [part.inline_data.mime_type for part in parts[1:]] == [
+            "image/jpeg",
+            "image/jpeg",
+        ]
+        assert [part.inline_data.data for part in parts[1:]] == [
+            b"\xff\xd8\xffone",
+            b"\xff\xd8\xfftwo",
+        ]
+
+    def test_classify_video_passes_parts_only_when_images_are_present(self, engine):
+        engine.client = FakeClient(
+            [FakeResponse('{"label": "lecture", "reason": "ok", "confidence": 0.9}')] * 2
+        )
+        cues = [{"start": 0.0, "text": "x"}]
+        visual = type("Visual", (), {"source": "thumbnail", "data": b"\xff\xd8\xff"})()
+
+        engine.classify_video("Title", "Channel", cues)
+        engine.classify_video("Title", "Channel", cues, visuals=[visual])
+
+        text_call, visual_call = engine.client.models.calls
+        assert isinstance(text_call["contents"], str)
+        assert isinstance(visual_call["contents"], list)
+        assert visual_call["contents"][1].inline_data.mime_type == "image/jpeg"
 
 
 class TestBaseUrl:

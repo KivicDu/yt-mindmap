@@ -9,7 +9,7 @@ the shared video cache is only used for anonymous sessions.
 from datetime import datetime
 from uuid import uuid4
 
-from sqlalchemy import JSON, Boolean, DateTime, Float, ForeignKey, String, Text
+from sqlalchemy import JSON, Boolean, DateTime, Float, ForeignKey, String, Text, false
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db.base import Base, TimestampMixin
@@ -40,6 +40,24 @@ class Project(Base, TimestampMixin):
 
     # Autosave writes a draft; an explicit "save" promotes it to a project.
     is_draft: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+
+    # How the map is drawn. `map_layout` picks the renderer (a left-to-right
+    # tree, or a radial family) and `map_palette` picks the branch colours.
+    # Both are validated against a small allowlist so a bad row can never make
+    # the workspace render something unknown; the defaults keep old rows valid.
+    map_layout: Mapped[str] = mapped_column(
+        String(20), default="tree", server_default="tree", nullable=False
+    )
+    map_palette: Mapped[str] = mapped_column(
+        String(20), default="paper", server_default="paper", nullable=False
+    )
+
+    # Layer-3 share policy: only a video confirmed as a lecture (allowlist or
+    # classifier) may get a public link. Defaults to false, so old rows and
+    # uploaded subtitle files start closed rather than leaking by default.
+    content_verified: Mapped[bool] = mapped_column(
+        Boolean, default=False, server_default=false(), nullable=False
+    )
 
     # Free-form labels ("math", "ai", "ôn thi") used to group projects.
     # A JSON list keeps tags cheap to read with the row; the list endpoint
