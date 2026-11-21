@@ -115,6 +115,30 @@ Ba nguyên tắc thiết kế:
 Video **allowlist không gọi classifier** — đã là danh sách kiểm duyệt thủ công
 thì không cần hỏi AI, và cũng không tốn quota.
 
+#### Tín hiệu ảnh (tuỳ chọn, mặc định tắt)
+
+Tiêu đề và phụ đề có thể bình thường trong khi **khung hình lại nhạy cảm**. Khi
+bật `CONTENT_VISUAL_CHECK_ENABLED=true`, lớp 2 tải thêm một vài JPEG công khai
+nhỏ — thumbnail `hqdefault`, ba khung tự động `1/2/3.jpg` ở ~25/50/75% video,
+và tối đa hai sheet storyboard (sheet thứ hai chỉ khi video dài hơn 10 phút) —
+rồi đưa **cùng một call AI** với prompt ở trên. Không tải video, không thêm call
+AI thứ hai, và tổng số ảnh bị giới hạn bởi `CONTENT_VISUAL_MAX_IMAGES`.
+
+Prompt xử lý ảnh như dữ liệu không tin cậy: ảnh có chữ hay biểu tượng cũng không
+được phép điều khiển mô hình. Bài giảng y khoa/lịch sử/nghệ thuật có ảnh mạnh
+không tự động bị gán `sensitive` — mô hình phải xét ý định và cách trình bày.
+Khi ảnh không rõ, quyết định vẫn dựa trên phụ đề.
+
+Đây là tín hiệu **bổ sung, không phải cổng mới**: ảnh lỗi, 404, sai định dạng,
+quá lớn hoặc fetcher gặp lỗi đều được bỏ qua để classifier tiếp tục bằng chữ;
+không có ảnh thì không truyền tham số ảnh vào engine. Nhãn trả về vẫn là ba nhãn
+cũ. Cache key có thêm băm của `(source, bytes)` từng ảnh và một marker schema,
+nên đổi ảnh thì đánh giá lại, còn mở lại cùng ảnh thì không tốn quota.
+
+Flag mặc định `false`: bật lên mới đổi hành vi. Việc này **chưa giải quyết được**
+mọi trường hợp — storyboard thường cần URL đã ký từ player nên hay 404, và ảnh
+rải rắc vẫn có thể bỏ sót một đoạn ngắn. Nút báo cáo/duyệt tay là việc riêng.
+
 ### Lớp 3 hoạt động thế nào
 
 Một project chỉ bật được link công khai khi `content_verified = true`. Nhãn này
@@ -153,6 +177,10 @@ sách trống: áp dụng heuristic, chưa khoá cứng.
 | `CONTENT_MIN_CUES` | Mặc định `20` |
 | `CONTENT_CLASSIFIER_ENABLED` | `true` (mặc định); `false` để tắt hẳn lớp 2 |
 | `CONTENT_CLASSIFIER_CUES` | Số cue đầu đọc khi phân loại, mặc định `30` (tối đa 30) |
+| `CONTENT_VISUAL_CHECK_ENABLED` | `false` (mặc định); `true` để thêm ảnh vào cùng call classifier |
+| `CONTENT_VISUAL_MAX_IMAGES` | Số ảnh tối đa, mặc định `6` (trần tuyệt đối `8`) |
+| `CONTENT_VISUAL_FETCH_TIMEOUT` | Timeout mỗi lần tải ảnh, mặc định `5` giây |
+| `CONTENT_VISUAL_MAX_BYTES` | Giới hạn mỗi ảnh, mặc định `1_500_000` byte |
 | `CONTENT_SHARE_REQUIRE_VERIFIED` | `true` (mặc định); chỉ để `false` tạm thời khi di chuyển dữ liệu cũ |
 
 Ví dụ cho buổi demo — chỉ cho phép đúng các video đã kiểm:
@@ -169,6 +197,8 @@ CONTENT_ALLOW_VIDEO_IDS=<id-video-1>,<id-video-2>,<id-video-3>
   chỉ đọc 30 cue đầu, nên vẫn có thể sai ở một bài giảng dài.
 - Upload `.srt/.vtt` hiện **không qua cả hai lớp** (không có metadata để xét).
   Đây là tài liệu người dùng tự cung cấp; sản phẩm ghi nhận rõ ràng trong báo cáo.
+- Tín hiệu ảnh là tuỳ chọn và chỉ lấy mẫu rải rắc; ảnh nhạy cảm xuất hiện ở đoạn
+  không được lấy mẫu vẫn có thể lọt qua. Đây chưa phải kiểm duyệt khung hình.
 - Heuristic có sai sót. Allowlist là cách duy nhất để có demo an toàn tuyệt đối.
 - Chặn không có nghĩa là kiểm duyệt mọi nội dung. Nghĩa là sản phẩm chỉ xử lý
   những gì nằm trong phạm vi đã cam kết ở trang này.

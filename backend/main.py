@@ -6,6 +6,7 @@ load_dotenv(Path(__file__).resolve().parent / ".env")
 
 import asyncio
 import json
+import logging
 import os
 import threading
 import time
@@ -23,13 +24,14 @@ from starlette.concurrency import run_in_threadpool
 from ai_engine import MAX_RESTRUCTURE_CHARS, ai_engine, normalize_mode
 from app.api.deps import get_current_user, get_optional_user
 from app.api.router import api_router
+from app.core.config import get_settings
 from app.db.base import utcnow
 from app.db.session import get_db
 from app.middleware.rate_limit import RateLimitMiddleware
 from app.models.project import Project
 from app.models.user import User
 from app.schemas.project import AutosaveRequest
-from app.services import content_classifier, content_policy
+from app.services import content_classifier, content_policy, video_visuals
 from app.services import projects as project_service
 from app.services import sharing as sharing_service
 from chunking import chunk_time_range, is_seek_backward, select_chunk
@@ -65,6 +67,8 @@ ALLOWED_ORIGINS = [
     for origin in os.getenv("ALLOWED_ORIGINS", "").split(",")
     if origin.strip()
 ] or DEFAULT_ALLOWED_ORIGINS
+
+logger = logging.getLogger(__name__)
 
 app = FastAPI(title="YouTube Mind Map API", version="0.3.0")
 
@@ -824,12 +828,30 @@ async def get_transcript(
                     oembed_title if isinstance(oembed_title, str) else None
                 )
                 author_name = oembed.get("author_name")
+                # Optional visual signal, off by default. A few bounded public
+                # JPEGs catch imagery that the caption text cannot describe.
+                # Fetch failures yield an empty list and the classifier stays
+                # text-only, so this can never block a study session.
+                visuals: list[Any] = []
+                if get_settings().CONTENT_VISUAL_CHECK_ENABLED:
+                    try:
+                        visuals = await run_in_threadpool(
+                            video_visuals.fetch_visuals,
+                            video_id,
+                            duration=video_visuals.duration_from_cues(transcript),
+                        )
+                    except Exception as exc:
+                        logger.warning(
+                            "Visual sampling failed for %s: %s", video_id, type(exc).__name__
+                        )
+                visual_kwargs = {"visuals": visuals} if visuals else {}
                 classification = await run_in_threadpool(
                     content_classifier.classify,
                     video_id,
                     classify_title,
                     author_name if isinstance(author_name, str) else None,
                     transcript,
+                    **visual_kwargs,
                 )
                 ai_label = classification.get("label")
                 if ai_label in ("not_lecture", "sensitive"):

@@ -77,7 +77,18 @@ pytest
 ```
 
 `pytest.ini` adds the backend directory to the import path, so tests run from
-this folder without installing the package.
+this folder without installing the package. Visual-check tests use a fake HTTP
+client and a fake Gemini client; no test opens a socket.
+
+## Content gate visual check
+
+`CONTENT_VISUAL_CHECK_ENABLED` is `false` by default, so production behaviour is
+unchanged until it is explicitly enabled. When on, `/transcript` samples a few
+bounded public JPEGs (thumbnail, three spread-out frames, up to two storyboard
+sheets) and passes them to the **same** layer-2 classifier call. Failures degrade
+to text-only; the label set and the open-by-default policy do not change. Cache
+entries include a digest of the sampled images. See
+[docs/product-scope.md](../docs/product-scope.md) for the limits.
 
 ## Layout
 
@@ -89,6 +100,7 @@ this folder without installing the package.
 | `chunking.py` | Pure seek/chunk rules (no FastAPI import) |
 | `subtitles.py` | `.srt` / `.vtt` parser |
 | `transcript.py` | YouTube captions fetcher |
+| `app/services/video_visuals.py` | Bounded, best-effort JPEG sampling for the content classifier |
 | `app/` | Accounts: settings, SQLAlchemy session, `User` model, auth/OAuth routes, services |
 | `alembic/` | Database migrations (`alembic upgrade head`) |
 | `tests/` | Unit + API tests |

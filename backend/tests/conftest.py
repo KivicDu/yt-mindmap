@@ -37,6 +37,8 @@ def isolated_state(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     # The classifier is exercised explicitly in its own tests. Keeping it off
     # here means no test can reach a real Gemini key from the local .env.
     monkeypatch.setattr(settings, "CONTENT_CLASSIFIER_ENABLED", False)
+    # Visual sampling is a separate opt-in; keep tests from opening sockets.
+    monkeypatch.setattr(settings, "CONTENT_VISUAL_CHECK_ENABLED", False)
     # Older sharing fixtures create projects directly, without a video verdict.
     # Layer 3 is exercised explicitly in test_share_policy.py with it enabled.
     monkeypatch.setattr(settings, "CONTENT_SHARE_REQUIRE_VERIFIED", False)

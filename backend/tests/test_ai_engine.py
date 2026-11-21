@@ -16,6 +16,7 @@ from ai_engine import (
     MindMapAI,
     _thinking_budget,
     build_classify_prompt,
+    classification_contents,
     classify_sample,
     describe_error,
     is_retryable,
@@ -467,6 +468,72 @@ class TestClassification:
 
     def test_handles_an_error_without_a_message(self):
         assert describe_error(RuntimeError()) == "RuntimeError"
+
+
+class TestVisualClassification:
+    """The optional image signal: prompt rules + SDK parts, all offline."""
+
+    def test_text_prompt_has_no_visual_rules(self):
+        prompt = build_classify_prompt("Title", "Channel", [{"start": 0.0, "text": "x"}])
+        assert "images sampled from the video" not in prompt
+
+    def test_visual_prompt_tells_the_model_to_judge_not_obey(self):
+        prompt = build_classify_prompt(
+            "Title", "Channel", [{"start": 0.0, "text": "x"}], has_visuals=True
+        )
+        assert "images sampled from the video" in prompt
+        assert "UNTRUSTED DATA" in prompt
+        assert "medical, historical, artistic" in prompt
+        assert "inconclusive" in prompt
+
+    def test_contents_stays_a_string_without_images(self):
+        assert classification_contents("prompt") == "prompt"
+        assert classification_contents("prompt", []) == "prompt"
+
+    def test_contents_falls_back_to_text_when_the_sdk_has_no_types(self, monkeypatch):
+        monkeypatch.setattr(ai_module, "genai_types", None)
+        visual = type("Visual", (), {"source": "thumbnail", "data": b"\xff\xd8\xff"})()
+        assert classification_contents("prompt", [visual]) == "prompt"
+
+    def test_contents_builds_one_jpeg_part_per_image(self):
+        class Visual:
+            def __init__(self, source, data):
+                self.source = source
+                self.data = data
+
+        visuals = [
+            Visual("thumbnail", b"\xff\xd8\xffone"),
+            {"source": "auto:50%", "data": b"\xff\xd8\xfftwo"},
+            Visual("empty", b""),
+        ]
+        parts = classification_contents("prompt", visuals)
+
+        assert isinstance(parts, list)
+        assert len(parts) == 3  # one text part + two images
+        assert parts[0].text == "prompt"
+        assert [part.inline_data.mime_type for part in parts[1:]] == [
+            "image/jpeg",
+            "image/jpeg",
+        ]
+        assert [part.inline_data.data for part in parts[1:]] == [
+            b"\xff\xd8\xffone",
+            b"\xff\xd8\xfftwo",
+        ]
+
+    def test_classify_video_passes_parts_only_when_images_are_present(self, engine):
+        engine.client = FakeClient(
+            [FakeResponse('{"label": "lecture", "reason": "ok", "confidence": 0.9}')] * 2
+        )
+        cues = [{"start": 0.0, "text": "x"}]
+        visual = type("Visual", (), {"source": "thumbnail", "data": b"\xff\xd8\xff"})()
+
+        engine.classify_video("Title", "Channel", cues)
+        engine.classify_video("Title", "Channel", cues, visuals=[visual])
+
+        text_call, visual_call = engine.client.models.calls
+        assert isinstance(text_call["contents"], str)
+        assert isinstance(visual_call["contents"], list)
+        assert visual_call["contents"][1].inline_data.mime_type == "image/jpeg"
 
 
 class TestBaseUrl:
