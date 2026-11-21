@@ -112,6 +112,16 @@ class Settings(BaseSettings):
     CONTENT_CLASSIFIER_ENABLED: bool = True
     CONTENT_CLASSIFIER_CUES: int = 30
 
+    # Optional visual signal for the classifier. Off by default: it changes no
+    # production behaviour until explicitly enabled. When on, a few small
+    # public JPEGs (thumbnail + spread-out frames + storyboard) are attached to
+    # the same classifier call, so sensitive imagery can be caught even when
+    # the title and captions look harmless.
+    CONTENT_VISUAL_CHECK_ENABLED: bool = False
+    CONTENT_VISUAL_MAX_IMAGES: int = 6
+    CONTENT_VISUAL_FETCH_TIMEOUT: float = 5.0
+    CONTENT_VISUAL_MAX_BYTES: int = 1_500_000
+
     # Layer-3 share policy. A public link is only allowed for a project whose
     # video was confirmed as a lecture (allowlist or classifier verdict).
     # Default to closed; set false only while migrating old rows.
