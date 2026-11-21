@@ -229,6 +229,7 @@ yt-mindmap/
 - [ADR 0009](docs/adr/0009-account-recovery.md) — SMTP delivery, password reset and email change
 - [ADR 0010](docs/adr/0010-production-readiness.md) — rate limits, account deletion, legal pages and backups
 - [ADR 0011](docs/adr/0011-learning-workflow.md) — trash, tags, versions, chapters and bilingual captions
+- [ADR 0012](docs/adr/0012-audio-fallback-asr.md) — audio fallback for videos without captions (accepted design, no code yet)
 - [ADR 0013](docs/adr/0013-thinking-map-content.md) — the map type decides what the AI extracts
 - [ADR 0014](docs/adr/0014-self-check-and-review.md) — self-check and optional review (design only)
 - [Backup and restore](docs/backup-restore.md) — `pg_dump` scripts and the restore runbook
