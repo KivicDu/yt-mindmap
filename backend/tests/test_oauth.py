@@ -1,5 +1,7 @@
 """OAuth start/callback behaviour, with the provider network stubbed out."""
 
+import base64
+import hashlib
 from urllib.parse import parse_qs, urlparse
 
 import pytest
@@ -11,6 +13,8 @@ from app.core.config import get_settings
 from app.models.user import User
 from app.services import oauth as oauth_service
 from app.services.oauth import OAuthError, OAuthIdentity
+
+VERIFIER = "v" * 64
 
 GOOGLE_IDENTITY = OAuthIdentity(
     provider="google",
@@ -58,7 +62,14 @@ def start_google(client: TestClient) -> str:
     response = client.get("/api/auth/google", follow_redirects=False)
     state = cookie_value(response, "ytmm_oauth_state")
     assert state and state.startswith("google:")
-    return state.split(":", 1)[1]
+    return pkce_parts(state)[0]
+
+
+def pkce_parts(cookie: str) -> tuple[str, str]:
+    """Split the OAuth cookie into (state, verifier)."""
+    parts = cookie.split(":")
+    assert len(parts) == 3 and parts[0] == "google"
+    return parts[1], parts[2]
 
 
 def test_unconfigured_provider_sends_the_browser_back_with_an_error(
@@ -87,6 +98,7 @@ def test_start_redirects_to_the_provider_with_a_state_cookie(client: TestClient,
     assert query["response_type"] == ["code"]
     assert query["redirect_uri"] == ["http://localhost:8001/api/auth/google/callback"]
     assert query["state"][0]
+    assert query["code_challenge_method"] == ["S256"]
 
     cookie_header = next(
         header
@@ -95,6 +107,12 @@ def test_start_redirects_to_the_provider_with_a_state_cookie(client: TestClient,
     )
     assert "HttpOnly" in cookie_header
     assert "Path=/api/auth" in cookie_header
+    _, verifier = pkce_parts(cookie_header.split(";", 1)[0].split("=", 1)[1])
+    expected = base64.urlsafe_b64encode(
+        hashlib.sha256(verifier.encode("ascii")).digest()
+    ).decode("ascii").rstrip("=")
+    assert query["code_challenge"] == [expected]
+    assert verifier != expected
 
 
 def test_callback_rejects_a_state_that_does_not_match_the_cookie(
@@ -132,7 +150,7 @@ def test_callback_creates_the_user_and_opens_a_working_session(
 ):
     state = start_google(client)
     monkeypatch.setattr(
-        oauth_routes, "exchange_code", lambda provider, code: GOOGLE_IDENTITY
+        oauth_routes, "exchange_code", lambda provider, code, verifier: GOOGLE_IDENTITY
     )
 
     response = client.get(
@@ -166,7 +184,7 @@ def test_signing_in_twice_reuses_the_same_account(
     client: TestClient, configured, monkeypatch: pytest.MonkeyPatch, db_session: Session
 ):
     monkeypatch.setattr(
-        oauth_routes, "exchange_code", lambda provider, code: GOOGLE_IDENTITY
+        oauth_routes, "exchange_code", lambda provider, code, verifier: GOOGLE_IDENTITY
     )
     for _ in range(2):
         client.cookies.clear()
@@ -199,7 +217,7 @@ def test_oauth_links_to_an_existing_password_account(
 
     state = start_google(client)
     monkeypatch.setattr(
-        oauth_routes, "exchange_code", lambda provider, code: GOOGLE_IDENTITY
+        oauth_routes, "exchange_code", lambda provider, code, verifier: GOOGLE_IDENTITY
     )
     response = client.get(
         f"/api/auth/google/callback?code=good&state={state}", follow_redirects=False
@@ -238,7 +256,7 @@ def test_oauth_refuses_to_link_an_unverified_password_account(
 
     state = start_google(client)
     monkeypatch.setattr(
-        oauth_routes, "exchange_code", lambda provider, code: GOOGLE_IDENTITY
+        oauth_routes, "exchange_code", lambda provider, code, verifier: GOOGLE_IDENTITY
     )
     response = client.get(
         f"/api/auth/google/callback?code=good&state={state}", follow_redirects=False
@@ -266,7 +284,7 @@ def test_provider_failure_redirects_instead_of_returning_500(
 ):
     state = start_google(client)
 
-    def boom(provider: str, code: str):
+    def boom(provider: str, code: str, verifier: str):
         raise OAuthError("profile_fetch_failed", provider=provider)
 
     monkeypatch.setattr(oauth_routes, "exchange_code", boom)
@@ -297,7 +315,7 @@ def test_github_profile_uses_a_verified_primary_email(monkeypatch: pytest.Monkey
 
     monkeypatch.setattr(oauth_service, "_get_json", fake_get)
 
-    identity = oauth_service.exchange_code("github", "code")
+    identity = oauth_service.exchange_code("github", "code", VERIFIER)
     assert identity.email == "primary@example.com"
     assert identity.display_name == "kivic"
     assert identity.provider_id == "42"
@@ -318,7 +336,7 @@ def test_github_without_a_verified_email_is_rejected(monkeypatch: pytest.MonkeyP
     )
 
     with pytest.raises(OAuthError) as failure:
-        oauth_service.exchange_code("github", "code")
+        oauth_service.exchange_code("github", "code", VERIFIER)
     assert failure.value.code == "email_unavailable"
 
 
@@ -326,9 +344,58 @@ def test_token_exchange_failure_is_reported_as_an_oauth_error(monkeypatch: pytes
     monkeypatch.setattr(oauth_service, "is_configured", lambda provider: True)
 
     def boom(url: str, data: dict):
+        assert data["code_verifier"] == VERIFIER
         raise ValueError("not json")
 
     monkeypatch.setattr(oauth_service, "_post_form", boom)
     with pytest.raises(OAuthError) as failure:
-        oauth_service.exchange_code("google", "code")
+        oauth_service.exchange_code("google", "code", VERIFIER)
     assert failure.value.code == "token_exchange_failed"
+
+
+def test_callback_checks_the_pkce_verifier_cookie(client: TestClient, configured):
+    start = client.get("/api/auth/google", follow_redirects=False)
+    cookie = cookie_value(start, "ytmm_oauth_state")
+    # Simulate an old cookie (state only, no verifier) from before PKCE shipped.
+    client.cookies.clear()
+    client.cookies.set(
+        "ytmm_oauth_state", f"google:{pkce_parts(cookie)[0]}", path="/api/auth"
+    )
+    response = client.get(
+        f"/api/auth/google/callback?code=abc&state={pkce_parts(cookie)[0]}",
+        follow_redirects=False,
+    )
+    assert "error=oauth_state_mismatch" in response.headers["location"]
+
+
+def test_google_rejects_a_profile_without_an_explicit_verified_email(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    monkeypatch.setattr(
+        oauth_service,
+        "_get_json",
+        lambda url, token, headers=None: {"sub": "1", "email": "kivic@example.com"},
+    )
+    with pytest.raises(OAuthError) as failure:
+        oauth_service._google_identity("token")
+    assert failure.value.code == "email_unverified"
+
+
+def test_github_rejects_an_unverified_public_email(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    monkeypatch.setattr(
+        oauth_service,
+        "_get_json",
+        lambda url, token, headers=None: (
+            {"id": 9, "login": "kivic", "email": "attacker@example.com"}
+            if url == oauth_service.GITHUB_USER_URL
+            else [
+                {"email": "attacker@example.com", "primary": True, "verified": False},
+                {"email": "real@example.com", "primary": False, "verified": True},
+            ]
+        ),
+    )
+    with pytest.raises(OAuthError) as failure:
+        oauth_service._github_identity("token")
+    assert failure.value.code == "email_unverified"

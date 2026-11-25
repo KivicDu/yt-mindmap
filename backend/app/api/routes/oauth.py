@@ -1,10 +1,10 @@
 """Google / GitHub sign-in.
 
 The browser starts at ``GET /api/auth/{provider}``; this route redirects to the
-provider with a random ``state`` also stored in a short-lived HttpOnly cookie.
-The provider then redirects back to ``/api/auth/{provider}/callback``, where the
-state is checked, the code is exchanged and the session cookies are set before
-the browser returns to the dashboard.
+provider with a random ``state`` and a PKCE S256 challenge, while keeping the
+state and its code verifier in a short-lived HttpOnly cookie. The provider then
+redirects back to ``/api/auth/{provider}/callback``, where both are checked
+before the session cookies are set and the browser returns to the dashboard.
 
 Any failure redirects to the frontend ``/login`` page with
 ``?oauth=<provider>&error=<code>`` so the UI can explain what happened. These
@@ -22,7 +22,14 @@ from app.core.config import get_settings
 from app.db.session import get_db
 from app.services.accounts import OAuthLinkBlocked, upsert_oauth_user
 from app.services.auth_tokens import issue_refresh_token
-from app.services.oauth import OAuthError, build_authorize_url, exchange_code, is_configured
+from app.services.oauth import (
+    OAuthError,
+    build_authorize_url,
+    code_challenge,
+    exchange_code,
+    is_configured,
+    new_code_verifier,
+)
 from app.utils.cookies import set_session_cookies
 
 router = APIRouter(prefix="/auth", tags=["auth"])
@@ -59,10 +66,13 @@ def start(provider: str) -> RedirectResponse:
 
     settings = get_settings()
     state = token_urlsafe(32)
-    response = RedirectResponse(build_authorize_url(provider, state), status_code=302)
+    verifier = new_code_verifier()
+    response = RedirectResponse(
+        build_authorize_url(provider, state, code_challenge(verifier)), status_code=302
+    )
     response.set_cookie(
         key=settings.OAUTH_STATE_COOKIE_NAME,
-        value=f"{provider}:{state}",
+        value=f"{provider}:{state}:{verifier}",
         max_age=settings.OAUTH_STATE_TTL_SECONDS,
         httponly=True,
         secure=settings.COOKIE_SECURE,
@@ -95,14 +105,15 @@ def finish(
         return fail("oauth_denied")
     if not code or not state:
         return fail("oauth_callback_missing_code")
-    prefix = f"{provider}:"
-    if not stored.startswith(prefix):
+    parts = stored.split(":")
+    if len(parts) != 3 or parts[0] != provider:
         return fail("oauth_state_mismatch")
-    if not compare_digest(stored[len(prefix) :], state):
+    _, cookie_state, verifier = parts
+    if not compare_digest(cookie_state, state):
         return fail("oauth_state_mismatch")
 
     try:
-        identity = exchange_code(provider, code)
+        identity = exchange_code(provider, code, verifier)
     except OAuthError as failure:
         return fail(failure.code)
 
