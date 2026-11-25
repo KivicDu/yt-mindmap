@@ -122,6 +122,8 @@ export interface SharedProjectView {
   requires_login: boolean
   owner_name: string
   session_id: string | null
+  /** Short-lived capability for the live stream; never an access token. */
+  stream_ticket: string | null
 }
 
 export type ProjectSort = 'updated' | 'created' | 'title'
