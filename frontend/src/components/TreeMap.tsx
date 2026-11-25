@@ -72,7 +72,7 @@ const SVG_STYLE = {
 } as CSSProperties
 
 const TreeMap = forwardRef<MindMapHandle, TreeMapProps>(
-  ({ onSeek, onSelect, selectedId, collapseOld, onReady, palette }, ref) => {
+  ({ onSeek, onSelect, selectedId, collapseOld, onReady, palette, maskedIds }, ref) => {
     const refSvg = useRef<SVGSVGElement>(null)
     const mm = useRef<Markmap | null>(null)
     const lastTree = useRef<{ title: string; nodes: MapNode[] }>({
@@ -87,6 +87,8 @@ const TreeMap = forwardRef<MindMapHandle, TreeMapProps>(
     const onSelectRef = useRef(onSelect)
     const selectedIdRef = useRef<string | null>(selectedId ?? null)
     const collapseRef = useRef(Boolean(collapseOld))
+    const maskedRef = useRef<string[] | undefined>(maskedIds)
+    const skipFirstMaskEffect = useRef(true)
     const selectionObserver = useRef<MutationObserver | null>(null)
     const highlightTimer = useRef<number | null>(null)
     const skipFirstCollapseEffect = useRef(true)
@@ -179,7 +181,7 @@ const TreeMap = forwardRef<MindMapHandle, TreeMapProps>(
 
       lastTree.current = { title, nodes }
 
-      const root = buildMapData({ title, nodes })
+      const root = buildMapData({ title, nodes }, { maskedIds: new Set(maskedRef.current ?? []) })
       if (collapseRef.current) {
         collapseOlderBranches(root, COLLAPSE_KEEP_LAST)
       }
@@ -327,6 +329,16 @@ const TreeMap = forwardRef<MindMapHandle, TreeMapProps>(
       render(lastTree.current.title, lastTree.current.nodes, 'fit')
       // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [collapseOld])
+
+    useEffect(() => {
+      if (skipFirstMaskEffect.current) {
+        skipFirstMaskEffect.current = false
+        return
+      }
+      maskedRef.current = maskedIds
+      render(lastTree.current.title, lastTree.current.nodes, 'keep')
+      // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [maskedIds])
 
     // Link colours are SVG attributes, not CSS, so a theme switch has to
     // re-render the tree. The camera transform lives on the <svg> and survives.

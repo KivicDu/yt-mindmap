@@ -74,6 +74,13 @@ function row(content: string, depth: number): string {
   return `<span class="mm-row mm-d${level}">${content}</span>`
 }
 
+/** Timestamp badge, kept visible even when the node's label is masked. */
+function timeBadgeOf(node: MapNode): string {
+  return hasTime(node.time)
+    ? `<span class="mm-time" title="Nhảy đến ${formatTime(node.time)}">[${escapeHtml(formatTime(node.time))}]</span>`
+    : ''
+}
+
 /**
  * One markmap node from one map node.
  *
@@ -84,12 +91,35 @@ function row(content: string, depth: number): string {
  * `depth` (1 = top-level topic) drives the type scale: a lecture reads better
  * when the shape of the tree is visible without reading every word.
  */
-export function nodeToMarkmap(node: MapNode, depth = 1): MarkmapNode {
-  const label = escapeHtml(cleanLabel(node.label))
+export function nodeToMarkmap(
+  node: MapNode,
+  depth = 1,
+  maskedIds?: ReadonlySet<string>,
+): MarkmapNode {
   const id = escapeHtml(node.id)
-  const timeBadge = hasTime(node.time)
-    ? `<span class="mm-time" title="Nhảy đến ${formatTime(node.time)}">[${escapeHtml(formatTime(node.time))}]</span>`
-    : ''
+  // ADR 0014 stage (c): hide the learner's own answer key while keeping the
+  // timestamp and the parent visible so the map still gives their bearings.
+  if (maskedIds?.has(node.id)) {
+    // Hide descendants too: a child label would give away the masked idea.
+    const hidden = new Set(maskedIds)
+    const hideChildren = (parent: MapNode) => {
+      for (const child of parent.children || []) {
+        hidden.add(child.id)
+        hideChildren(child)
+      }
+    }
+    hideChildren(node)
+    return {
+      content: row(
+        `${timeBadgeOf(node)}<span class="mm-masked" data-node-id="${id}" title="Nhánh bị che" aria-label="Nhánh bị che">⋯</span>`,
+        depth,
+      ),
+      children: (node.children || []).map((child) => nodeToMarkmap(child, depth + 1, hidden)),
+      payload: {},
+    }
+  }
+  const label = escapeHtml(cleanLabel(node.label))
+  const timeBadge = timeBadgeOf(node)
   const title = hasTime(node.time)
     ? `<a href="${SEEK_PREFIX}${node.time.toFixed(1)}" data-node-id="${id}" title="${escapeHtml(label)}" aria-label="${escapeHtml(cleanLabel(node.label))}">${label}</a>`
     : `<span data-node-id="${id}" title="${escapeHtml(label)}" aria-label="${escapeHtml(cleanLabel(node.label))}" role="button" tabindex="0" aria-keyshortcuts="Enter Space">${label}</span>`
@@ -100,7 +130,9 @@ export function nodeToMarkmap(node: MapNode, depth = 1): MarkmapNode {
   const note = cleanNote(node.note)
   const noteHtml = note ? `<span class="mm-note" title="${escapeHtml(note)}">${escapeHtml(note)}</span>` : ''
 
-  const children = (node.children || []).map((child) => nodeToMarkmap(child, depth + 1))
+  const children = (node.children || []).map((child) =>
+    nodeToMarkmap(child, depth + 1, maskedIds),
+  )
   return {
     content: row(`${pin}${timeBadge}${title}${noteHtml}`, depth),
     children,
@@ -109,8 +141,11 @@ export function nodeToMarkmap(node: MapNode, depth = 1): MarkmapNode {
 }
 
 /** Convert the tree into the data markmap renders, including the map title. */
-export function buildMapData(tree: MapTree): MarkmapNode {
-  const children = tree.nodes.map((node) => nodeToMarkmap(node, 1))
+export function buildMapData(
+  tree: MapTree,
+  options: { maskedIds?: ReadonlySet<string> } = {},
+): MarkmapNode {
+  const children = tree.nodes.map((node) => nodeToMarkmap(node, 1, options.maskedIds))
   if (children.length === 0) {
     children.push({ content: EMPTY_HINT, children: [], payload: {} })
   }

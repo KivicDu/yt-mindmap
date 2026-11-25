@@ -12,6 +12,7 @@ interface TreeDownMapProps {
   selectedId?: string | null
   collapseOld?: boolean
   onReady?: () => void
+  maskedIds?: string[]
 }
 
 const COLLAPSE_KEEP_LAST = 3
@@ -25,18 +26,19 @@ const COLLAPSE_KEEP_LAST = 3
  * navigation and export all behave exactly the same here.
  */
 const TreeDownMap = forwardRef<MindMapHandle, TreeDownMapProps>(
-  ({ palette, onSeek, onSelect, selectedId, collapseOld, onReady }, ref) => {
+  ({ palette, onSeek, onSelect, selectedId, collapseOld, onReady, maskedIds }, ref) => {
     const canvas = useRef<MindMapHandle>(null)
     const [tree, setTree] = useState<{ title: string; nodes: MapNode[] }>({
       title: 'Lecture Mind Map',
       nodes: [],
     })
 
+    const masked = useMemo(() => new Set(maskedIds ?? []), [maskedIds])
     const layout = useMemo(() => {
-      const root = buildMapData(tree)
+      const root = buildMapData(tree, { maskedIds: masked })
       if (collapseOld) collapseOlderBranches(root, COLLAPSE_KEEP_LAST)
       return layoutTreeDown(root)
-    }, [tree, collapseOld])
+    }, [tree, collapseOld, masked])
 
     useEffect(() => {
       onReady?.()

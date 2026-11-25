@@ -31,6 +31,7 @@ import {
   type TagCount,
   type TrashedProject,
 } from '../../lib/projects'
+import { dueProjects, type DueProject } from '../../lib/review'
 import ShareDialog from './ShareDialog'
 import './Dashboard.css'
 
@@ -266,6 +267,8 @@ function Overview({
         </div>
       </section>
 
+      <DueReviewSection revision={revision} />
+
       {error && <p className="dash-error" role="alert">{error}</p>}
 
       <section className="dash-stats" aria-label="Thống kê">
@@ -333,6 +336,52 @@ function Overview({
         )}
       </section>
     </>
+  )
+}
+
+/* ADR 0014: the reminder is opt-in and computed lazily on dashboard read.
+   No scheduler, no overdue score — just projects whose date has arrived. */
+function DueReviewSection({ revision }: { revision: number }) {
+  const [items, setItems] = useState<DueProject[]>([])
+
+  useEffect(() => {
+    let cancelled = false
+    dueProjects()
+      .then((data) => {
+        if (!cancelled) setItems(data)
+      })
+      .catch(() => {
+        if (!cancelled) setItems([])
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [revision])
+
+  if (items.length === 0) return null
+
+  return (
+    <section className="dash-panel dash-panel--review" aria-label="Cần ôn hôm nay">
+      <header className="dash-panel-header">
+        <h2>Cần ôn hôm nay</h2>
+        <span className="dash-panel-note">{items.length} dự án</span>
+      </header>
+      <ul className="dash-list">
+        {items.map((item) => (
+          <li key={item.id} className="dash-item">
+            <Link className="dash-item__main" to={`/app/${item.id}`}>
+              <span className="dash-item__title">{item.title}</span>
+              <span className="dash-item__meta">
+                {item.node_count} nhánh · đến hạn {formatWhen(item.next_review_at)}
+              </span>
+            </Link>
+          </li>
+        ))}
+      </ul>
+      <p className="dash-search-hint">
+        Mở dự án rồi bấm “Kiểm tra lại bài này” để tự kiểm vài nhánh.
+      </p>
+    </section>
   )
 }
 

@@ -328,6 +328,11 @@
   background: var(--surface);
 }
 
+.dash-panel--review {
+  border-color: var(--accent-line);
+  background: var(--paper-2);
+}
+
 .dash-panel-header {
   display: flex;
   align-items: baseline;
