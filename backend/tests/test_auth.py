@@ -140,6 +140,43 @@ def test_refresh_without_cookie_fails(client: TestClient):
     assert response.json()["detail"] == "missing_refresh_token"
 
 
+def test_refresh_rejects_a_cross_site_request(client: TestClient):
+    register(client)
+    blocked = client.post(
+        "/api/auth/refresh", headers={"Origin": "https://evil.example"}
+    )
+    assert blocked.status_code == 403
+    assert blocked.json()["detail"] == "refresh_cross_site_blocked"
+
+    fetched = client.post(
+        "/api/auth/refresh", headers={"Sec-Fetch-Site": "cross-site"}
+    )
+    assert fetched.status_code == 403
+
+    # The cookie is untouched: the real SPA can still rotate it.
+    assert client.post("/api/auth/refresh").status_code == 200
+
+
+def test_refresh_accepts_the_site_and_frontend_origins(client: TestClient, monkeypatch):
+    settings = get_settings()
+    register(client)
+    monkeypatch.setattr(settings, "REFRESH_ALLOWED_ORIGINS", "https://app.example.com")
+
+    assert (
+        client.post(
+            "/api/auth/refresh",
+            headers={"Origin": settings.FRONTEND_URL, "Sec-Fetch-Site": "same-site"},
+        ).status_code
+        == 200
+    )
+    assert (
+        client.post(
+            "/api/auth/refresh", headers={"Origin": "https://app.example.com/"}
+        ).status_code
+        == 200
+    )
+
+
 def test_refresh_with_access_token_cookie_fails(client: TestClient):
     user_id = register(client).json()["user"]["id"]
     access_token, _ = create_token(user_id, "access")

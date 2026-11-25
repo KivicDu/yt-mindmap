@@ -89,3 +89,16 @@ def test_public_environments_reject_an_unknown_samesite_value():
 def test_local_environments_still_allow_insecure_cookies():
     settings = make_settings(APP_ENV="development", COOKIE_SECURE=False)
     assert settings.COOKIE_SECURE is False
+
+
+def test_refresh_origins_come_from_the_spa_and_api_urls():
+    settings = make_settings(
+        FRONTEND_URL="https://app.example.com/",
+        OAUTH_CALLBACK_BASE="https://api.example.com",
+        REFRESH_ALLOWED_ORIGINS="https://admin.example.com, ",
+    )
+    assert settings.refresh_allowed_origins == {
+        "https://app.example.com",
+        "https://api.example.com",
+        "https://admin.example.com",
+    }

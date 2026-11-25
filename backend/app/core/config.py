@@ -8,6 +8,7 @@ must be overridden in production -- ``JWT_SECRET_KEY`` especially.
 from functools import lru_cache
 from pathlib import Path
 from typing import Literal
+from urllib.parse import urlsplit
 
 from pydantic import model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -77,6 +78,9 @@ class Settings(BaseSettings):
     COOKIE_SECURE: bool = False  # must be True behind HTTPS in production
     COOKIE_SAMESITE: str = "lax"  # "lax" locally, "none" + secure when cross-site
     COOKIE_DOMAIN: str | None = None
+    # Browser origins allowed to rotate the refresh cookie. Defaults to the SPA
+    # and the API host; add more only when the SPA is served elsewhere.
+    REFRESH_ALLOWED_ORIGINS: str = ""
 
     # OAuth. Leave the client id/secret empty to keep the buttons disabled; the
     # routes then send the browser back to /login with an explanatory error.
@@ -167,6 +171,24 @@ class Settings(BaseSettings):
             if self.COOKIE_SAMESITE not in {"lax", "strict", "none"}:
                 raise ValueError("COOKIE_SAMESITE must be lax, strict or none")
         return self
+
+    @property
+    def refresh_allowed_origins(self) -> set[str]:
+        """Origins whose scripts may call /api/auth/refresh with the cookie."""
+
+        def origin_of(url: str) -> str | None:
+            parsed = urlsplit(url)
+            if parsed.scheme in {"http", "https"} and parsed.netloc:
+                return f"{parsed.scheme}://{parsed.netloc}"
+            return None
+
+        origins = {origin_of(self.FRONTEND_URL), origin_of(self.OAUTH_CALLBACK_BASE)}
+        origins.update(
+            item.strip().rstrip("/")
+            for item in self.REFRESH_ALLOWED_ORIGINS.split(",")
+            if item.strip()
+        )
+        return {value for value in origins if value}
 
     @property
     def is_sqlite(self) -> bool:
