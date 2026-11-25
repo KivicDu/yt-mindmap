@@ -7,6 +7,7 @@ import {
   collapseOlderBranches,
   collectIds,
   findFirstNew,
+  nodeIdOf,
   type MapNode,
   type MarkmapNode,
 } from '../lib/mindmapTree'
@@ -403,6 +404,60 @@ const TreeMap = forwardRef<MindMapHandle, TreeMapProps>(
       void instance.centerNode(root, { left: 0, right: 0, top: 0, bottom: 0 })
     }
 
+    /**
+     * A deep-linked node may sit inside a folded branch. Unfold its ancestors
+     * on the data markmap already holds (not through `render`, which would
+     * immediately re-apply "focus recent" folding), then pan it into view.
+     */
+    const focusNode = (id: string) => {
+      const instance = mm.current
+      const root = instance?.state?.data as MarkmapNode | null
+      if (!instance || !root) return
+
+      let found = false
+      const visit = (node: MarkmapNode, ancestors: MarkmapNode[]): boolean => {
+        if (nodeIdOf(node) === id) {
+          for (const ancestor of ancestors) {
+            if (ancestor.payload && 'fold' in ancestor.payload) {
+              const payload = { ...ancestor.payload }
+              delete payload.fold
+              ancestor.payload = payload
+            }
+          }
+          return true
+        }
+        return (node.children ?? []).some((child) => visit(child, [...ancestors, node]))
+      }
+      found = visit(root, [])
+      if (!found) return
+
+      void instance.setData(root as any).then(async () => {
+        const fresh = instance.state.data as MarkmapNode | null
+        let target: MarkmapNode | null = null
+        const locate = (node: MarkmapNode): boolean => {
+          if (nodeIdOf(node) === id) {
+            target = node
+            return true
+          }
+          return (node.children ?? []).some(locate)
+        }
+        if (fresh) locate(fresh)
+        if (target) {
+          try {
+            await instance.ensureVisible(target as MarkmapNode as any, {
+              left: 56,
+              right: 56,
+              top: 40,
+              bottom: 56,
+            })
+          } catch {
+            // Reveal is cosmetic; the selection ring is the essential part.
+          }
+        }
+        applySelection(id)
+      })
+    }
+
     const getSvg = () => refSvg.current
 
     const getBounds = () => {
@@ -449,7 +504,7 @@ const TreeMap = forwardRef<MindMapHandle, TreeMapProps>(
       }
     }
 
-    useImperativeHandle(ref, () => ({ updateTree, zoom, fit, center, getSvg, getBounds }))
+    useImperativeHandle(ref, () => ({ updateTree, zoom, fit, center, focusNode, getSvg, getBounds }))
 
     return (
       <svg

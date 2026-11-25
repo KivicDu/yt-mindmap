@@ -19,7 +19,8 @@ import {
   getSharedBySlug,
   type SharedProjectView,
 } from '../../lib/projects'
-import { normalizeTree, type MapNode } from '../../lib/mindmapTree'
+import { findNodeById, normalizeTree, type MapNode } from '../../lib/mindmapTree'
+import { parseDeepLink } from '../../lib/deepLink'
 import { watchUrl, playerErrorMessage, type PlayerErrorInfo } from '../../lib/youtube'
 import { PlaybackClock } from '../../lib/playbackClock'
 import { PlaybackTime } from '../../components/PlaybackTime'
@@ -89,6 +90,9 @@ function SharedProject() {
   const nodesRef = useRef<MapNode[]>([])
   const titleRef = useRef('')
   const sessionRef = useRef<string | null>(null)
+  // A share link keeps its query string: the reader may copy it onwards. The
+  // jump itself is consumed only once, even if auth state changes mid-load.
+  const deepLinkRef = useRef(parseDeepLink(location.search))
 
   const applyNodes = useCallback((nodes: MapNode[], focusNew: boolean) => {
     const normalized = normalizeTree(nodes)
@@ -109,6 +113,10 @@ function SharedProject() {
         // The lazy map may already be mounted (or may mount later), so push
         // the snapshot now and let onReady push it again if it is not.
         applyNodes(view.project.nodes, false)
+        const linkedNode = deepLinkRef.current.node
+        if (linkedNode && findNodeById(nodesRef.current, linkedNode)) {
+          setSelectedNodeId(linkedNode)
+        }
         sessionRef.current = view.session_id
       })
       .catch((caught) => {
@@ -189,6 +197,10 @@ function SharedProject() {
 
   const handleReady = useCallback(() => {
     applyNodes(nodesRef.current, false)
+    const linked = deepLinkRef.current.node
+    if (linked && findNodeById(nodesRef.current, linked)) {
+      mindmapRef.current?.focusNode?.(linked)
+    }
   }, [applyNodes])
 
   const handleSelectNode = useCallback((nodeId: string) => {
@@ -197,6 +209,12 @@ function SharedProject() {
 
   const onPlayerReady: YouTubeProps['onReady'] = (event) => {
     setPlayer(event.target)
+    const linkedTime = deepLinkRef.current.t
+    if (linkedTime !== null && typeof event.target.seekTo === 'function') {
+      deepLinkRef.current = { ...deepLinkRef.current, t: null }
+      event.target.seekTo(linkedTime, true)
+      playbackClock.set(linkedTime, true)
+    }
   }
 
   const onPlayerError: YouTubeProps['onError'] = (event) => {
@@ -261,7 +279,7 @@ function SharedProject() {
               <Link
                 className="btn btn--primary btn--sm"
                 to="/login"
-                state={{ from: location.pathname }}
+                state={{ from: `${location.pathname}${location.search}` }}
               >
                 Đăng nhập
               </Link>
@@ -269,7 +287,7 @@ function SharedProject() {
               <Link
                 className="btn btn--primary btn--sm"
                 to="/login"
-                state={{ from: location.pathname }}
+                state={{ from: `${location.pathname}${location.search}` }}
               >
                 Đổi tài khoản
               </Link>

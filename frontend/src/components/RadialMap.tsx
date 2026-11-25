@@ -49,6 +49,7 @@ const RadialMap = forwardRef<MindMapHandle, RadialMapProps>(
         zoom: (factor: number) => canvas.current?.zoom(factor),
         fit: () => canvas.current?.fit(),
         center: () => canvas.current?.center(),
+        focusNode: (id: string) => canvas.current?.focusNode?.(id),
         getSvg: () => canvas.current?.getSvg() ?? null,
         getBounds: () => canvas.current?.getBounds() ?? null,
       }),
