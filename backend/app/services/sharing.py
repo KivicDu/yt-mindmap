@@ -12,8 +12,8 @@ public link. That keeps the "xem bằng link, sửa thì phải đăng nhập" r
 to the data instead of relying on the UI.
 """
 
+import re
 import secrets
-import string
 from typing import Any
 
 from sqlalchemy import func, or_, select
@@ -24,9 +24,14 @@ from app.models.project import Project
 from app.models.project_member import ProjectMember
 from app.models.user import User
 
-SLUG_ALPHABET = string.ascii_uppercase + string.digits
-SLUG_LENGTH = 8
 SLUG_PREFIX = "YTMM-"
+# A slug is a bearer capability. 8 chars from a 36-char alphabet is only ~41
+# bits, so new links use 24 random bytes (192 bits) from ``token_urlsafe``.
+SLUG_RANDOM_BYTES = 24
+SLUG_MAX_LENGTH = 64
+# Legacy 8-character slugs stay readable; the server never accepts an unbounded
+# string from a URL as a database lookup key.
+SLUG_BODY_RE = re.compile(r"[A-Za-z0-9_-]{8,59}\Z")
 
 ROLE_OWNER = "owner"
 ROLE_EDITOR = "editor"
@@ -55,8 +60,14 @@ def shareable(project: Project) -> bool:
 
 
 def _new_slug() -> str:
-    body = "".join(secrets.choice(SLUG_ALPHABET) for _ in range(SLUG_LENGTH))
-    return f"{SLUG_PREFIX}{body}"
+    return f"{SLUG_PREFIX}{secrets.token_urlsafe(SLUG_RANDOM_BYTES)}"
+
+
+def is_valid_slug(slug: str | None) -> bool:
+    """Reject malformed or oversized capabilities before any database work."""
+    if not slug or len(slug) > SLUG_MAX_LENGTH or not slug.startswith(SLUG_PREFIX):
+        return False
+    return SLUG_BODY_RE.fullmatch(slug[len(SLUG_PREFIX) :]) is not None
 
 
 def unique_slug(db: Session) -> str:

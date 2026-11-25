@@ -137,27 +137,55 @@ function SharedProject() {
   }, [data, location.pathname])
 
   // The project row is the initial snapshot; the shared live session adds
-  // edits from collaborators as they happen.
+  // edits from collaborators as they happen. The ticket (not the session id)
+  // is the capability, so a revoked link closes the stream server-side.
   useEffect(() => {
-    const session = data?.session_id
-    if (!session) return
-    const source = new EventSource(`${API_BASE}/stream/${session}`)
-    source.onmessage = (event) => {
-      try {
-        const payload = JSON.parse(event.data)
-        if (
-          payload &&
-          (payload.type === 'diff' || payload.type === 'node_edit') &&
-          Array.isArray(payload.nodes)
-        ) {
-          applyNodes(payload.nodes, payload.type === 'diff')
+    let disposed = false
+    let source: EventSource | null = null
+
+    const listen = (ticket: string) => {
+      source?.close()
+      const next = new EventSource(`${API_BASE}/stream/${encodeURIComponent(ticket)}`)
+      source = next
+      next.onmessage = (event) => {
+        try {
+          const payload = JSON.parse(event.data)
+          if (payload?.type === 'stream_expired') {
+            void renew()
+            return
+          }
+          if (payload?.type === 'access_revoked') {
+            next.close()
+            return
+          }
+          if (
+            payload &&
+            (payload.type === 'diff' || payload.type === 'node_edit') &&
+            Array.isArray(payload.nodes)
+          ) {
+            applyNodes(payload.nodes, payload.type === 'diff')
+          }
+        } catch {
+          // A malformed event must not take the whole page down.
         }
-      } catch {
-        // A malformed event must not take the whole page down.
       }
     }
-    return () => source.close()
-  }, [data?.session_id, applyNodes])
+
+    const renew = async () => {
+      try {
+        const view = await getSharedBySlug(slug)
+        if (!disposed && view.stream_ticket) listen(view.stream_ticket)
+      } catch {
+        // Keep the snapshot we already have; the link may have been revoked.
+      }
+    }
+
+    if (data?.stream_ticket) listen(data.stream_ticket)
+    return () => {
+      disposed = true
+      source?.close()
+    }
+  }, [data?.stream_ticket, slug, applyNodes])
 
   const handleReady = useCallback(() => {
     applyNodes(nodesRef.current, false)

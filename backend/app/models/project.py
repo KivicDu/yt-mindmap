@@ -81,7 +81,7 @@ class Project(Base, TimestampMixin):
         String(20), default="private", nullable=False
     )
     share_slug: Mapped[str | None] = mapped_column(
-        String(24), unique=True, index=True, nullable=True
+        String(64), unique=True, index=True, nullable=True
     )
     # Role granted by the link itself; invited members carry their own role.
     link_role: Mapped[str] = mapped_column(

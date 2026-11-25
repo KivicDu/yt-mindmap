@@ -2,6 +2,8 @@
 
 from fastapi.testclient import TestClient
 
+from app.services import sharing as sharing_service
+
 NODES = [
     {
         "id": "n1",
@@ -83,6 +85,9 @@ def test_public_link_is_read_only_for_anonymous(client: TestClient):
     assert settings["enabled"] is True
     assert settings["access"] == "anyone"
     assert settings["slug"].startswith("YTMM-")
+    # 24 random bytes become 32 url-safe characters, not 8 from a small alphabet.
+    assert len(settings["slug"]) == 37
+    assert sharing_service.is_valid_slug(settings["slug"]) is True
 
     response = client.get(f"/api/share/{settings['slug']}")
     assert response.status_code == 200, response.text
@@ -360,6 +365,22 @@ def test_shared_list_supports_sort_and_pagination(client: TestClient, db_session
     ).json()
     assert page["total"] == 3
     assert [item["title"] for item in page["items"]] == ["Zeta"]
+
+
+def test_malformed_or_oversized_slugs_are_rejected_before_lookup(client: TestClient):
+    assert sharing_service.is_valid_slug("YTMM-8F2K9QZ1") is True  # legacy links
+    assert sharing_service.is_valid_slug("YTMM-short") is False
+    assert sharing_service.is_valid_slug("YTMM-" + "A" * 200) is False
+    assert sharing_service.is_valid_slug("A" * 200) is False
+
+    oversized = client.get("/api/share/" + "A" * 200)
+    assert oversized.status_code == 404
+    assert oversized.json()["detail"]["code"] == "share_not_found"
+
+    # The metadata route is a cheap SSI lookup; a bad slug must not fetch either.
+    metadata = client.get("/api/share/meta", params={"slug": "A" * 200})
+    assert metadata.status_code == 200
+    assert "og:title" in metadata.text
 
 
 

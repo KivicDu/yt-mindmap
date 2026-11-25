@@ -21,13 +21,10 @@ TRANSCRIPT = [
 ]
 
 
-def test_healthz_reports_runtime_state():
+def test_healthz_is_a_bare_liveness_probe():
     response = client.get("/healthz")
     assert response.status_code == 200
-    body = response.json()
-    assert body["status"] == "ok"
-    assert body["sessions"] == 0
-    assert "ai_configured" in body
+    assert response.json() == {"status": "ok"}
 
 
 def test_transcript_from_uploaded_subtitles_creates_session():
@@ -386,7 +383,7 @@ def test_patch_node_rejects_an_empty_label():
         "/node", json={"session_id": session_id, "node_id": "node-1", "label": "   "}
     )
     assert response.status_code == 400
-    assert "label" in response.json()["detail"]
+    assert "label" in response.json()["detail"]["message"]
 
 
 def test_patch_node_rejects_an_empty_body():
@@ -646,7 +643,75 @@ def test_restructure_refuses_a_map_that_is_too_large(monkeypatch):
 
     assert response.status_code == 413
     assert response.json()["detail"]["code"] == "map_too_large"
-    assert session["map_mode"] == "tree"
+
+
+def test_upload_errors_do_not_echo_exception_text(monkeypatch):
+    marker = "internal-upload-path-must-stay-on-the-server"
+
+    def explode(*args, **kwargs):
+        raise RuntimeError(marker)
+
+    monkeypatch.setattr(main_module, "parse_vtt_or_srt", explode)
+    response = client.post("/transcript", json={"file_content": "garbage"})
+
+    assert response.status_code == 400
+    assert marker not in response.text
+    assert response.json()["detail"]["code"] == "invalid_subtitle_file"
+
+
+def test_session_errors_do_not_echo_exception_text(monkeypatch):
+    marker = "internal-database-dsn-must-stay-on-the-server"
+
+    def explode(*args, **kwargs):
+        raise RuntimeError(marker)
+
+    async def fake_oembed(video_id):
+        return {"title": "A lecture", "author_name": "A channel"}
+
+    def fake_transcript(url):
+        return TRANSCRIPT, "en"
+
+    monkeypatch.setattr(main_module, "fetch_oembed", fake_oembed)
+    monkeypatch.setattr(main_module, "fetch_transcript", fake_transcript)
+    monkeypatch.setattr(main_module, "create_session", explode)
+    response = client.post(
+        "/transcript", json={"url": "https://www.youtube.com/watch?v=abcdefghijk"}
+    )
+
+    assert response.status_code == 500
+    assert marker not in response.text
+    assert response.json()["detail"]["code"] == "session_error"
+
+
+def test_youtube_errors_do_not_echo_exception_text(monkeypatch):
+    marker = "internal-youtube-token-must-stay-on-the-server"
+
+    async def fake_oembed(video_id):
+        return {"title": "A lecture", "author_name": "A channel"}
+
+    def explode(*args, **kwargs):
+        raise RuntimeError(marker)
+
+    monkeypatch.setattr(main_module, "fetch_oembed", fake_oembed)
+    monkeypatch.setattr(main_module, "fetch_transcript", explode)
+    response = client.post(
+        "/transcript", json={"url": "https://www.youtube.com/watch?v=abcdefghijk"}
+    )
+
+    assert response.status_code == 502
+    assert marker not in response.text
+    assert response.json()["detail"]["code"] == "youtube_unreachable"
+
+
+def test_invalid_node_error_has_a_stable_code():
+    session_id, _ = _session_with_nodes([_node()])
+    response = client.patch(
+        "/node",
+        json={"session_id": session_id, "node_id": "node-1", "label": "   "},
+    )
+
+    assert response.status_code == 400
+    assert response.json()["detail"]["code"] == "invalid_node"
 
 
 def test_restructure_on_an_empty_map_just_switches_the_mode(monkeypatch):

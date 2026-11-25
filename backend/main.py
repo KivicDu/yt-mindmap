@@ -31,7 +31,7 @@ from app.middleware.rate_limit import RateLimitMiddleware
 from app.models.project import Project
 from app.models.user import User
 from app.schemas.project import AutosaveRequest
-from app.services import content_classifier, content_policy, video_visuals
+from app.services import content_classifier, content_policy, stream_tickets, video_visuals
 from app.services import projects as project_service
 from app.services import sharing as sharing_service
 from chunking import chunk_time_range, is_seek_backward, select_chunk
@@ -205,6 +205,15 @@ def find_project_session(project_id: str) -> str | None:
     return None
 
 
+def stream_ticket_for_session(session_id: str | None, user_id: str | None) -> str | None:
+    """Give a caller of the share endpoint a ticket for its live session."""
+    session = sessions.get(session_id) if session_id else None
+    if session is None:
+        return None
+    ticket, _ = stream_tickets.issue(session, user_id)
+    return ticket
+
+
 def project_for_session(db: Session, session: dict[str, Any]) -> Project | None:
     project_id = session.get("project_id")
     return db.get(Project, project_id) if project_id else None
@@ -263,6 +272,25 @@ def assert_can_edit_session(
             },
         )
     return project
+
+
+# The event loop sleeps 0.5s per tick; re-checking every 10 ticks keeps a
+# revoked viewer out within ~5s without a database query on every heartbeat.
+STREAM_RECHECK_TICKS = 10
+
+
+def can_stream_session(db: Session, session: dict[str, Any], user_id: str | None) -> bool:
+    """A live stream obeys the same access rules as the share page.
+
+    Guest sessions have no project row; their random session id (now the ticket)
+    is the capability. Project-backed streams ask the sharing service, so
+    turning sharing off, deleting a project or removing a member closes them.
+    """
+    project = project_for_session(db, session)
+    if project is None:
+        return True
+    user = db.get(User, user_id) if user_id else None
+    return sharing_service.role_for(db, project, user) is not None
 
 
 load_video_cache()
@@ -415,16 +443,9 @@ async def root():
 
 @app.get("/healthz")
 async def healthz():
-    return {
-        "status": "ok",
-        "sessions": len(sessions),
-        "cached_videos": len(video_cache),
-        "ai_configured": ai_engine.configured,
-        "ai_model": ai_engine.model_name,
-        # Empty unless GEMINI_BASE_URL points at a mock or proxy.
-        "ai_base_url": ai_engine.base_url,
-        "ai_tokens": dict(ai_engine.usage_totals),
-    }
+    # A liveness probe needs one bit. Model names, proxy URLs and counters are
+    # deployment details that must not be handed to an anonymous caller.
+    return {"status": "ok"}
 
 async def fetch_oembed(video_id: str) -> dict[str, Any]:
     """Public video metadata from oEmbed. A network failure returns checked=False.
@@ -778,16 +799,21 @@ async def get_transcript(
                 **session_payload(session_id),
             }
         except ValueError as e:
-            raise HTTPException(
-                status_code=400,
-                detail={"code": "invalid_subtitle_file", "message": str(e)},
-            ) from e
-        except Exception as e:
+            logger.warning("Invalid uploaded subtitle: %s", e)
             raise HTTPException(
                 status_code=400,
                 detail={
                     "code": "invalid_subtitle_file",
-                    "message": f"Failed to parse transcript: {str(e)}",
+                    "message": "Không đọc được phụ đề đã tải lên. Kiểm tra lại định dạng file.",
+                },
+            ) from e
+        except Exception as e:
+            logger.warning("Could not parse uploaded subtitle: %s", e)
+            raise HTTPException(
+                status_code=400,
+                detail={
+                    "code": "invalid_subtitle_file",
+                    "message": "Không đọc được phụ đề đã tải lên. Kiểm tra lại định dạng file.",
                 },
             ) from e
 
@@ -818,11 +844,12 @@ async def get_transcript(
                 detail={"code": e.code, "message": e.message},
             ) from e
         except Exception as e:
+            logger.warning("Could not fetch YouTube transcript: %s", e)
             raise HTTPException(
                 status_code=502,
                 detail={
                     "code": "youtube_unreachable",
-                    "message": f"Failed to fetch transcript: {str(e)}",
+                    "message": "Không lấy được phụ đề từ YouTube. Thử lại sau vài phút.",
                 },
             ) from e
 
@@ -931,11 +958,12 @@ async def get_transcript(
                 **session_payload(session_id),
             }
         except Exception as e:
+            logger.warning("Could not create a study session: %s", e)
             raise HTTPException(
                 status_code=500,
                 detail={
                     "code": "session_error",
-                    "message": f"Could not create the session: {str(e)}",
+                    "message": "Không tạo được phiên học. Thử lại sau vài phút.",
                 },
             ) from e
 
@@ -948,25 +976,73 @@ async def get_transcript(
     )
 
 
-@app.get("/stream/{session_id}")
-async def stream_updates(session_id: str):
+@app.post("/session/{session_id}/stream-ticket")
+async def create_stream_ticket(
+    session_id: str,
+    user: User | None = Depends(get_optional_user),
+    db: Session = Depends(get_db),
+):
+    """Mint an opaque ticket for one stream, after checking the share role."""
     cleanup_sessions()
+    session = sessions.get(session_id)
+    if session is None:
+        raise HTTPException(
+            status_code=404,
+            detail={
+                "code": "session_lost",
+                "message": "Phiên học đã hết hạn. Mở lại dự án để tiếp tục.",
+            },
+        )
+    allowed = can_stream_session(db, session, user.id if user else None)
+    if not allowed:
+        raise HTTPException(
+            status_code=403,
+            detail={
+                "code": "stream_forbidden",
+                "message": "Bạn không có quyền xem sơ đồ này.",
+            },
+        )
+    ticket, expires_in = stream_tickets.issue(session, user.id if user else None)
+    return {"ticket": ticket, "expires_in": expires_in}
+
+
+@app.get("/stream/{ticket}")
+async def stream_updates(ticket: str, db: Session = Depends(get_db)):
+    cleanup_sessions()
+    if stream_tickets.resolve(sessions, ticket) is None:
+        raise HTTPException(
+            status_code=403,
+            detail={
+                "code": "stream_ticket_invalid",
+                "message": "Liên kết xem trực tiếp đã hết hạn. Tải lại trang.",
+            },
+        )
 
     async def event_generator():
         last_event = 0
+        ticks = 0
         while True:
-            session = sessions.get(session_id)
-            if not session:
-                yield {"data": json.dumps({"type": "session_lost"})}
+            found = stream_tickets.resolve(sessions, ticket)
+            if found is None:
+                yield {"data": json.dumps({"type": "stream_expired"})}
                 break
+            _, session, record = found
             session["last_active"] = time.time()
+            if ticks % STREAM_RECHECK_TICKS == 0:
+                try:
+                    allowed = can_stream_session(db, session, record.get("user_id"))
+                except Exception:
+                    logger.exception("Could not re-check SSE access")
+                    allowed = False
+                if not allowed:
+                    yield {"data": json.dumps({"type": "access_revoked"})}
+                    break
             events = session.get("events", [])
             while last_event < len(events):
                 event = events[last_event]
                 last_event += 1
-                yield {
-                    "data": json.dumps(event.get("data", {}))
-                }
+                yield {"data": json.dumps(event.get("data", {}))}
+            ticks += 1
             await asyncio.sleep(0.5)
 
     return EventSourceResponse(event_generator())
@@ -1273,7 +1349,14 @@ async def edit_node(
             pinned=request.pinned,
         )
     except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e)) from e
+        logger.warning("Invalid node update: %s", e)
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "code": "invalid_node",
+                "message": "label must not be empty",
+            },
+        ) from e
 
     if node is None:
         raise HTTPException(status_code=404, detail="node_not_found")

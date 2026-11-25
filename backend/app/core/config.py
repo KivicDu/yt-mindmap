@@ -91,6 +91,9 @@ class Settings(BaseSettings):
     RATE_LIMIT_ENABLED: bool = True
     RATE_LIMIT_AUTH_PER_MINUTE: int = 30
     RATE_LIMIT_AI_PER_MINUTE: int = 240
+    # Outbound YouTube calls, share lookups and SSE connections are GETs, so
+    # the POST-only limits do not touch them.
+    RATE_LIMIT_GET_PER_MINUTE: int = 120
     AI_DAILY_QUOTA_PER_USER: int = 5000
     AI_DAILY_QUOTA_ANONYMOUS: int = 1000
     # Only enable behind a reverse proxy that overwrites X-Forwarded-For;
@@ -146,6 +149,19 @@ class Settings(BaseSettings):
                     f"{MIN_PRODUCTION_SECRET_LENGTH} characters, without a "
                     f"development prefix, in {self.APP_ENV}"
                 )
+        return self
+
+    @model_validator(mode="after")
+    def _guard_production_cookie(self) -> "Settings":
+        """A session cookie sent over plaintext HTTP is a stolen session."""
+        if self.APP_ENV in {"staging", "production"}:
+            if not self.COOKIE_SECURE:
+                raise ValueError(
+                    "COOKIE_SECURE must be true when cookies are used over "
+                    f"HTTPS in {self.APP_ENV}"
+                )
+            if self.COOKIE_SAMESITE not in {"lax", "strict", "none"}:
+                raise ValueError("COOKIE_SAMESITE must be lax, strict or none")
         return self
 
     @property

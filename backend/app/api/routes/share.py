@@ -33,7 +33,7 @@ def shared_project_metadata(
     db: Session = Depends(get_db),
 ) -> Response:
     """Render safe social metadata for public share URLs during nginx SSI."""
-    project = sharing_service.get_by_slug(db, slug)
+    project = sharing_service.get_by_slug(db, slug) if sharing_service.is_valid_slug(slug) else None
     shareable = project is not None and sharing_service.shareable(project)
     if shareable and project is not None and project.visibility == "unlisted":
         title = f"{project.title} — sơ đồ tư duy | yt-mindmap"
@@ -77,6 +77,14 @@ def read_shared_project(
     user: User | None = Depends(get_optional_user),
     db: Session = Depends(get_db),
 ):
+    if not sharing_service.is_valid_slug(slug):
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail={
+                "code": "share_not_found",
+                "message": "This share link does not exist or has been turned off.",
+            },
+        )
     project = sharing_service.get_by_slug(db, slug)
     if project is None or project.visibility == "private":
         raise HTTPException(
@@ -128,10 +136,14 @@ def read_shared_project(
     session_id = None
     # Imported lazily: main.py mounts the API router, so a module-level import
     # would be circular.
+    stream_ticket = None
     try:
-        from main import find_project_session
+        from main import find_project_session, stream_ticket_for_session
 
         session_id = find_project_session(project.id)
+        # The share endpoint already authorised `role`, so the ticket inherits
+        # that decision instead of letting the browser send a raw session id.
+        stream_ticket = stream_ticket_for_session(session_id, user.id if user else None)
     except Exception:  # pragma: no cover - only possible during app shutdown
         session_id = None
 
@@ -142,4 +154,5 @@ def read_shared_project(
         "requires_login": user is None and project.visibility == "invited",
         "owner_name": owner.display_name if owner else "Chủ dự án",
         "session_id": session_id,
+        "stream_ticket": stream_ticket,
     }

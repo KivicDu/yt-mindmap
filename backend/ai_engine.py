@@ -582,7 +582,9 @@ class MindMapAI:
                 "new_nodes": [],
                 "should_update": False,
                 "summary": summary_so_far,
-                "error": str(e),
+                # The exception text stays in the server log; clients only get
+                # a stable code they can map to Vietnamese copy.
+                "error": "ai_unavailable",
             }
 
     def classify_video(
@@ -635,7 +637,7 @@ class MindMapAI:
             return {"nodes": parse_restructure_payload(response.text or ""), "mode": mode}
         except Exception as e:
             logger.warning("Mind map restructure failed: %s", describe_error(e))
-            return {"nodes": [], "mode": mode, "error": str(e)}
+            return {"nodes": [], "mode": mode, "error": "ai_unavailable"}
 
 
 ai_engine = MindMapAI()

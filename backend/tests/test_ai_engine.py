@@ -182,7 +182,7 @@ class TestGenerateIncrementalUpdate:
             time_range=(10.0, 20.0),
         )
 
-        assert "error" in result
+        assert result["error"] == "ai_unavailable"
         assert result["should_update"] is False
         assert len(engine.client.models.calls) == 1
         assert sleeps == []
@@ -335,7 +335,7 @@ class TestRestructure:
     def test_bad_json_is_reported_not_raised(self, engine):
         engine.client = FakeClient([FakeResponse("not json")])
         result = engine.restructure("- [Topic](#seek-1.0)", "bubble")
-        assert "error" in result
+        assert result["error"] == "ai_unavailable"
         assert result["nodes"] == []
 
     def test_usage_is_recorded(self, engine):

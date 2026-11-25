@@ -17,7 +17,7 @@ from fastapi import Request
 from fastapi.responses import JSONResponse
 
 from app.core.config import get_settings
-from app.services.rate_limit import Limit, ai_limiter, ai_quota, auth_limiter
+from app.services.rate_limit import Limit, ai_limiter, ai_quota, auth_limiter, get_limiter
 from app.utils.security import decode_token
 
 # Only POSTs that either create accounts/sessions or can trigger an AI call.
@@ -51,6 +51,22 @@ def is_ai_path(path: str) -> bool:
     return path in AI_PATHS or any(pattern.fullmatch(path) for pattern in AI_PATH_PATTERNS)
 
 
+# GETs used to be unbounded: each one can call YouTube, query a share slug, or
+# hold an SSE socket open. Paths with a parameter need patterns for the same
+# reason as the AI restructure route.
+GET_PATHS = frozenset({"/video-info", "/transcript/languages", "/transcript/track"})
+GET_PATH_PATTERNS = (
+    re.compile(r"^/stream/[^/]+$"),
+    re.compile(r"^/api/share/[^/]+$"),
+    re.compile(r"^/api/share/meta$"),
+)
+
+
+def is_get_limited(path: str) -> bool:
+    """True for GET endpoints that cost an outbound call or a held socket."""
+    return path in GET_PATHS or any(pattern.fullmatch(path) for pattern in GET_PATH_PATTERNS)
+
+
 class RateLimitMiddleware:
     def __init__(self, app) -> None:
         self.app = app
@@ -68,6 +84,13 @@ class RateLimitMiddleware:
         request = Request(scope)
         path = scope.get("path", "")
         method = scope.get("method", "")
+
+        if method == "GET" and is_get_limited(path):
+            limit = Limit("get", settings.RATE_LIMIT_GET_PER_MINUTE)
+            retry_after = get_limiter.hit(f"get:{_client_ip(request)}", limit)
+            if retry_after is not None:
+                await _reject(scope, receive, send, retry_after, "rate_limited")
+                return
 
         if method == "POST" and path in AUTH_PATHS:
             limit = Limit("auth", settings.RATE_LIMIT_AUTH_PER_MINUTE)

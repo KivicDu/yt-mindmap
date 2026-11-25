@@ -91,6 +91,7 @@ class DailyQuota:
 
 auth_limiter = SlidingWindowLimiter()
 ai_limiter = SlidingWindowLimiter()
+get_limiter = SlidingWindowLimiter()
 ai_quota = DailyQuota()
 
 
@@ -98,4 +99,5 @@ def reset_rate_limits() -> None:
     """Clear every counter (tests and local development reloads)."""
     auth_limiter.reset()
     ai_limiter.reset()
+    get_limiter.reset()
     ai_quota.reset()

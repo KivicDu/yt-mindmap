@@ -33,7 +33,7 @@ import {
   type LocalDraft,
   type ProjectVersionSummary,
 } from '../../lib/projects'
-import { getAccessToken, refreshSession } from '../../lib/api'
+import { apiFetch, getAccessToken, refreshSession } from '../../lib/api'
 import { exportMap, type ExportFormat } from '../../lib/mapExport'
 import {
   contentMode,
@@ -1097,36 +1097,64 @@ function App() {
   useEffect(() => {
     eventSourceRef.current?.close()
     if (!sessionId) return
+    let disposed = false
 
-    const es = new EventSource(`${API_BASE}/stream/${sessionId}`)
-    es.onmessage = (event) => {
+    const listen = (ticket: string) => {
+      if (disposed) return
+      const es = new EventSource(`${API_BASE}/stream/${encodeURIComponent(ticket)}`)
+      es.onmessage = (event) => {
+        try {
+          const data = JSON.parse(event.data)
+          if (data?.type === 'session_lost') {
+            es.close()
+            recreateSession()
+            return
+          }
+          if (data?.type === 'stream_expired') {
+            void renew()
+            return
+          }
+          if (data?.type === 'access_revoked') {
+            es.close()
+            return
+          }
+          if (data?.type === 'restructure' && isContentMode(data.map_mode)) {
+            // Another tab rewrote the map for a new mode; this one is up to date.
+            setBuiltMode(data.map_mode)
+            setRebuildOffer(null)
+          }
+          if (data && Array.isArray(data.nodes) && mindmapRef.current) {
+            applyNodes(data.nodes, data?.type === 'diff')
+          }
+          if (typeof data?.summary === 'string') setSummary(data.summary)
+        } catch (err) {
+          console.error('SSE parse error', err)
+        }
+      }
+      es.onerror = () => {
+        // keep retrying via native EventSource
+      }
+      eventSourceRef.current = es
+    }
+
+    // EventSource cannot send a bearer header, so exchange the access token
+    // for an opaque ticket before opening the socket.
+    const renew = async () => {
       try {
-        const data = JSON.parse(event.data)
-        if (data?.type === 'session_lost') {
-          es.close()
-          recreateSession()
-          return
-        }
-        if (data?.type === 'restructure' && isContentMode(data.map_mode)) {
-          // Another tab rewrote the map for a new mode; this one is up to date.
-          setBuiltMode(data.map_mode)
-          setRebuildOffer(null)
-        }
-        if (data && Array.isArray(data.nodes) && mindmapRef.current) {
-          applyNodes(data.nodes, data?.type === 'diff')
-        }
-        if (typeof data?.summary === 'string') setSummary(data.summary)
-      } catch (err) {
-        console.error('SSE parse error', err)
+        const issued = await apiFetch<{ ticket: string }>(
+          `/session/${encodeURIComponent(sessionId)}/stream-ticket`,
+          { method: 'POST' },
+        )
+        listen(issued.ticket)
+      } catch {
+        // A revoked stream stays closed; the next navigation retries.
       }
     }
-    es.onerror = () => {
-      // keep retrying via native EventSource
-    }
-    eventSourceRef.current = es
 
+    void renew()
     return () => {
-      es.close()
+      disposed = true
+      eventSourceRef.current?.close()
       eventSourceRef.current = null
     }
   }, [sessionId, recreateSession, applyNodes])
