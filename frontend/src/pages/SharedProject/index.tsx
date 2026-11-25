@@ -6,7 +6,7 @@
  * button into the full workspace, where they can actually change the map.
  */
 
-import { lazy, Suspense, useCallback, useEffect, useRef, useState } from 'react'
+import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Link, useLocation, useParams } from 'react-router-dom'
 import YouTube from 'react-youtube'
 import type { YouTubeProps } from 'react-youtube'
@@ -21,6 +21,12 @@ import {
 } from '../../lib/projects'
 import { findNodeById, normalizeTree, type MapNode } from '../../lib/mindmapTree'
 import { parseDeepLink } from '../../lib/deepLink'
+import { buildChapters } from '../../lib/chapters'
+import { mapToMarkdown } from '../../lib/mapExport'
+import { isMapLayout, isMapPalette } from '../../lib/mapStyle'
+import ChapterRail from '../../components/ChapterRail'
+import ReaderOutline from '../../components/ReaderOutline'
+import TranscriptPanel from '../../components/TranscriptPanel'
 import { watchUrl, playerErrorMessage, type PlayerErrorInfo } from '../../lib/youtube'
 import { PlaybackClock } from '../../lib/playbackClock'
 import { PlaybackTime } from '../../components/PlaybackTime'
@@ -85,6 +91,9 @@ function SharedProject() {
   const [isPlaying, setIsPlaying] = useState(false)
   const [playbackClock] = useState(() => new PlaybackClock())
   const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null)
+  // Reader surfaces (chapters, outline) follow live edits too, not just the
+  // snapshot in the URL payload.
+  const [readerNodes, setReaderNodes] = useState<MapNode[]>([])
 
   const mindmapRef = useRef<MindMapHandle>(null)
   const nodesRef = useRef<MapNode[]>([])
@@ -97,6 +106,7 @@ function SharedProject() {
   const applyNodes = useCallback((nodes: MapNode[], focusNew: boolean) => {
     const normalized = normalizeTree(nodes)
     nodesRef.current = normalized
+    setReaderNodes(normalized)
     mindmapRef.current?.updateTree(titleRef.current, normalized, { focusNew })
   }, [])
 
@@ -254,6 +264,12 @@ function SharedProject() {
     return () => window.clearInterval(interval)
   }, [player, isPlaying, playbackClock])
 
+  const chapters = useMemo(() => buildChapters(readerNodes), [readerNodes])
+  const outline = useMemo(
+    () => mapToMarkdown({ title: data?.project.title ?? '', nodes: readerNodes }),
+    [data?.project.title, readerNodes],
+  )
+
   if (loading) {
     return (
       <div className="shared-shell">
@@ -408,6 +424,15 @@ function SharedProject() {
                 <strong>{project.title}</strong>
               </div>
 
+              {project.summary_so_far && (
+                <div className="summary-card reader-summary">
+                  <div className="summary-card__head">
+                    <span className="summary-card__label">Tóm tắt bài giảng</span>
+                  </div>
+                  <p>{project.summary_so_far}</p>
+                </div>
+              )}
+
               <dl className="session__rows">
                 <div>
                   <dt>Người chia sẻ</dt>
@@ -449,6 +474,46 @@ function SharedProject() {
                 </p>
               </div>
             </div>
+
+            <section className="reader-section" aria-label="Ghi chú theo thứ tự">
+              <div className="reader-section__head">
+                <h3>Đọc theo thứ tự</h3>
+                <span>{readerNodes.length} ý</span>
+              </div>
+              <ReaderOutline markdown={outline} onSeek={handleSeek} />
+            </section>
+
+            <section
+              className="reader-section reader-section--transcript"
+              aria-label="Phụ đề bài giảng"
+            >
+              <div className="reader-section__head">
+                <h3>Phụ đề</h3>
+                <span>Tìm đoạn rồi bấm để tua video</span>
+              </div>
+              <TranscriptPanel
+                entries={project.transcript ?? []}
+                playbackClock={playbackClock}
+                onSeek={handleSeek}
+                language={project.transcript_language}
+                languages={[]}
+                languagesLoading={false}
+                languagesError=""
+                onLoadLanguages={() => {}}
+                onSelectLanguage={() => {}}
+                languageBusy={false}
+                canEdit={false}
+                canChangeLanguage={false}
+                bilingual={false}
+                onToggleBilingual={() => {}}
+                secondary={[]}
+                secondaryLanguage={null}
+                secondaryBusy={false}
+                secondaryError=""
+                onSelectSecondary={() => {}}
+                readOnly
+              />
+            </section>
           </div>
         </section>
 
@@ -465,6 +530,9 @@ function SharedProject() {
           </header>
 
           <div className="panel__body panel__body--canvas">
+            {chapters.length > 0 && (
+              <ChapterRail chapters={chapters} clock={playbackClock} onSeek={handleSeek} />
+            )}
             <Suspense fallback={<div className="canvas-loading">Đang tải sơ đồ…</div>}>
               <MindMap
                 ref={mindmapRef}
@@ -472,6 +540,8 @@ function SharedProject() {
                 onSelect={handleSelectNode}
                 selectedId={selectedNodeId}
                 onReady={handleReady}
+                layout={isMapLayout(project.map_layout) ? project.map_layout : undefined}
+                palette={isMapPalette(project.map_palette) ? project.map_palette : undefined}
               />
             </Suspense>
 

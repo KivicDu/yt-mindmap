@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { exportSlug, mapToMarkdown } from './mapExport'
+import { exportSlug, mapToMarkdown, parseStudyOutline } from './mapExport'
 import type { MapNode } from './mindmapTree'
 
 const NODES: MapNode[] = [
@@ -44,5 +44,22 @@ describe('mapToMarkdown', () => {
 
   it('uses a fallback title for an untitled map', () => {
     expect(mapToMarkdown({ title: '', nodes: [] })).toBe('# Mind map\n\n')
+  })
+})
+
+describe('parseStudyOutline', () => {
+  it('recovers depth, playable timestamps and notes from the export', () => {
+    const items = parseStudyOutline(mapToMarkdown({ title: 'Bài giảng', nodes: NODES }))
+
+    expect(items).toEqual([
+      { depth: 0, seconds: 0, label: 'Root', notes: [] },
+      { depth: 1, seconds: 65, label: 'Ý chính', notes: ['ghi chú', 'dòng 2'] },
+    ])
+  })
+
+  it('keeps untimed ideas and ignores headings', () => {
+    expect(parseStudyOutline('# Tên\n\n- Ý không có mốc\n')).toEqual([
+      { depth: 0, seconds: null, label: 'Ý không có mốc', notes: [] },
+    ])
   })
 })

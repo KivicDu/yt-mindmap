@@ -113,6 +113,46 @@ export function mapToMarkdown({ title, nodes }: Pick<MapExportSource, 'title' | 
   return `${lines.join('\n')}\n`
 }
 
+/** One line of the study outline, as rendered on a read-only share page. */
+export interface StudyOutlineItem {
+  depth: number
+  /** Seconds for a timestamped idea, else null. */
+  seconds: number | null
+  label: string
+  notes: string[]
+}
+
+/**
+ * Turn the exported outline back into display items. Parsing the markdown we
+ * already produce keeps the reader view and the downloaded notes identical.
+ */
+export function parseStudyOutline(markdown: string): StudyOutlineItem[] {
+  const items: StudyOutlineItem[] = []
+  for (const line of markdown.split('\n')) {
+    const note = /^\s*>\s?(.*)$/.exec(line)
+    if (note) {
+      if (items.length > 0) items[items.length - 1].notes.push(note[1])
+      continue
+    }
+    const bullet = /^(\s*)-\s+(.*)$/.exec(line)
+    if (!bullet) continue
+
+    const stamp = /^\[(\d+):(\d{2})(?::(\d{2}))?\]\s+(.*)$/.exec(bullet[2])
+    const seconds = stamp
+      ? stamp[3] !== undefined
+        ? Number(stamp[1]) * 3600 + Number(stamp[2]) * 60 + Number(stamp[3])
+        : Number(stamp[1]) * 60 + Number(stamp[2])
+      : null
+    items.push({
+      depth: Math.floor(bullet[1].length / 2),
+      seconds,
+      label: stamp ? stamp[4] : bullet[2],
+      notes: [],
+    })
+  }
+  return items
+}
+
 interface TextFragment {
   text: string
   x: number
