@@ -46,6 +46,10 @@ class Settings(BaseSettings):
     # Auth
     JWT_SECRET_KEY: str = DEFAULT_JWT_SECRET_KEY
     JWT_ALGORITHM: str = "HS256"
+    # Issuer/audience stop a token minted for another service (or a leaked
+    # staging token) from being accepted here even if the signing key matches.
+    JWT_ISSUER: str = "yt-mindmap"
+    JWT_AUDIENCE: str = "yt-mindmap-web"
     ACCESS_TOKEN_TTL_MINUTES: int = 15
     REFRESH_TOKEN_TTL_DAYS: int = 14
 

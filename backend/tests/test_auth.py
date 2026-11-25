@@ -1,8 +1,13 @@
 """Auth endpoints, exercised against an in-memory SQLite database."""
 
+from datetime import UTC, datetime, timedelta
+from uuid import uuid4
+
+import jwt
 from fastapi.testclient import TestClient
 from sqlalchemy.orm import Session
 
+from app.core.config import get_settings
 from app.models.user import User
 from app.utils.security import create_token
 
@@ -77,6 +82,38 @@ def test_me_rejects_a_refresh_token(client: TestClient):
     refresh_token, _ = create_token(user_id, "refresh")
     response = client.get("/api/auth/me", headers={"Authorization": f"Bearer {refresh_token}"})
     assert response.status_code == 401
+
+
+def test_me_rejects_tokens_without_the_expected_issuer_and_audience(
+    client: TestClient, db_session: Session
+):
+    user_id = register(client).json()["user"]["id"]
+    settings = get_settings()
+    now = datetime.now(UTC)
+    base = {
+        "sub": user_id,
+        "typ": "access",
+        "iat": now,
+        "exp": now + timedelta(minutes=5),
+        "jti": uuid4().hex,
+    }
+    for extra in (
+        {},  # neither claim
+        {"iss": settings.JWT_ISSUER},  # no audience
+        {"aud": settings.JWT_AUDIENCE},  # no issuer
+        {"iss": "another-service", "aud": settings.JWT_AUDIENCE},
+        {"iss": settings.JWT_ISSUER, "aud": "another-app"},
+    ):
+        token = jwt.encode(
+            base | extra, settings.JWT_SECRET_KEY, algorithm=settings.JWT_ALGORITHM
+        )
+        assert (
+            client.get(
+                "/api/auth/me", headers={"Authorization": f"Bearer {token}"}
+            ).status_code
+            == 401
+        )
+    assert db_session.query(User).count() == 1
 
 
 def test_refresh_rotates_the_cookie_and_returns_a_new_access_token(client: TestClient):

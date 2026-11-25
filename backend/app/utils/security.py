@@ -55,6 +55,8 @@ def create_token(subject: str, token_type: TokenType) -> tuple[str, int]:
     payload = {
         "sub": subject,
         "typ": token_type,
+        "iss": settings.JWT_ISSUER,
+        "aud": settings.JWT_AUDIENCE,
         "iat": now,
         "exp": now + ttl,
         "jti": uuid4().hex,
@@ -71,6 +73,8 @@ def decode_token(token: str, expected_type: TokenType) -> dict[str, Any] | None:
             token,
             settings.JWT_SECRET_KEY,
             algorithms=[settings.JWT_ALGORITHM],
+            audience=settings.JWT_AUDIENCE,
+            issuer=settings.JWT_ISSUER,
         )
     except InvalidTokenError:
         return None
