@@ -107,6 +107,22 @@ const SvgMapCanvas = forwardRef<MindMapHandle, SvgMapCanvasProps>(
       }))
     }, [])
 
+    const focusNode = useCallback(
+      (id: string) => {
+        const box = layout.boxes.find((item) => item.id === id)
+        const svg = refSvg.current
+        if (!box || !svg) return
+        const rect = svg.getBoundingClientRect()
+        userMoved.current = true
+        setView((current) => ({
+          ...current,
+          x: rect.width / 2 - box.x * current.k,
+          y: rect.height / 2 - box.y * current.k,
+        }))
+      },
+      [layout],
+    )
+
     useImperativeHandle(
       ref,
       () => ({
@@ -114,6 +130,7 @@ const SvgMapCanvas = forwardRef<MindMapHandle, SvgMapCanvasProps>(
         zoom,
         fit,
         center,
+        focusNode,
         getSvg: () => refSvg.current,
         getBounds: () => {
           const { x1, y1, x2, y2 } = layout.bounds
@@ -121,7 +138,7 @@ const SvgMapCanvas = forwardRef<MindMapHandle, SvgMapCanvasProps>(
           return { x1, y1, x2, y2 }
         },
       }),
-      [zoom, fit, center, layout],
+      [zoom, fit, center, focusNode, layout],
     )
 
     const handlePointerDown = (event: ReactPointerEvent<SVGSVGElement>) => {

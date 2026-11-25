@@ -15,6 +15,8 @@ export interface MindMapHandle {
   zoom: (factor: number) => void
   fit: () => void
   center: () => void
+  /** Reveal and centre one node, unfolding its ancestors when necessary. */
+  focusNode?: (nodeId: string) => void
   /** Live SVG element, used by the export menu. */
   getSvg: () => SVGSVGElement | null
   /** Content bounds in map coordinates, before the pan/zoom transform. */

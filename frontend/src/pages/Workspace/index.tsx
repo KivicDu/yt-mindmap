@@ -28,6 +28,7 @@ import {
   listProjectVersions,
   readLocalDraft,
   restoreProjectVersion,
+  shareUrl,
   updateProject,
   writeLocalDraft,
   type LocalDraft,
@@ -53,6 +54,7 @@ import {
 import { SkeletonList } from '../../components/ui/Skeleton'
 import { useToast } from '../../components/ui/useToast'
 import { buildChapters } from '../../lib/chapters'
+import { parseDeepLink, stripDeepLinkFromSearch, type DeepLink } from '../../lib/deepLink'
 import { isTypingTarget, shortcutFor } from '../../lib/shortcuts'
 import { PlaybackClock } from '../../lib/playbackClock'
 import { PlaybackProgress, PlaybackTime } from '../../components/PlaybackTime'
@@ -236,6 +238,11 @@ function App() {
   const tabRefs = useRef<Record<string, HTMLButtonElement | null>>({})
   const styleRef = useRef(mapStyle)
   const builtModeRef = useRef(builtMode)
+  // Read once, before the mount effect removes the params from the URL. The
+  // jump is a one-time action, not a persistent filter on the workspace.
+  const deepLinkRef = useRef<DeepLink>(parseDeepLink(window.location.search))
+  const pendingFocusRef = useRef<string | null>(null)
+  const shareSlugRef = useRef<string | null>(null)
 
   const setStatus = useCallback((text: string, kind: StatusKind = 'idle') => {
     setStatusState({ kind, text })
@@ -261,9 +268,10 @@ function App() {
   // the style over whatever the learner picks next.
   useEffect(() => {
     const search = window.location.search
-    if (!styleFromSearch(search)) return
-    const rest = stripStyleFromSearch(search)
-    navigate(`${window.location.pathname}${rest}`, { replace: true })
+    const rest = stripDeepLinkFromSearch(stripStyleFromSearch(search))
+    if (rest !== search) {
+      navigate(`${window.location.pathname}${rest}`, { replace: true })
+    }
     // Runs once: the params are gone after the first pass.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
@@ -359,6 +367,37 @@ function App() {
     mindmapRef.current?.updateTree(titleRef.current, normalized, { focusNew })
   }, [])
 
+  /** Select a linked node and reveal it once its renderer exists. */
+  const showLinkedNode = useCallback((id: string) => {
+    if (!findNodeById(nodesRef.current, id)) return
+    setSelectedNodeId(id)
+    if (mindmapRef.current?.focusNode) mindmapRef.current.focusNode(id)
+    else pendingFocusRef.current = id
+  }, [])
+
+  /** Copy a link that opens the shared project at this moment and idea. */
+  const copyMomentLink = useCallback(async () => {
+    const base = shareSlugRef.current
+      ? shareUrl(shareSlugRef.current)
+      : `${window.location.origin}${projectIdRef.current ? `/app/${projectIdRef.current}` : window.location.pathname}`
+    const link = new URL(base)
+    const seconds = Math.floor(playbackClock.getSnapshot())
+    if (seconds > 0) link.searchParams.set('t', String(seconds))
+    if (selectedNodeId) link.searchParams.set('node', selectedNodeId)
+    try {
+      await navigator.clipboard.writeText(link.toString())
+      toast.show({
+        message:
+          seconds > 0 || selectedNodeId
+            ? 'Đã sao chép link tới thời điểm và nhánh này'
+            : 'Đã sao chép link dự án',
+        tone: 'success',
+      })
+    } catch {
+      toast.show({ message: 'Không sao chép được link. Hãy kiểm tra quyền clipboard.', tone: 'error' })
+    }
+  }, [playbackClock, selectedNodeId, toast])
+
   const applyLoadResult = (data: any, vid: string, label: string) => {
     if (data.session_id) {
       setSessionId(data.session_id)
@@ -399,6 +438,9 @@ function App() {
     setSecondaryBusy(false)
     setSecondaryError('')
 
+    shareSlugRef.current =
+      typeof data.share_slug === 'string' && data.share_slug ? data.share_slug : null
+
     const resolvedTitle = data.title || vid || DEFAULT_TITLE
     titleRef.current = resolvedTitle
     setMapTitle(resolvedTitle)
@@ -406,6 +448,7 @@ function App() {
     if (Array.isArray(data.nodes)) {
       applyNodes(data.nodes, false)
     }
+    if (deepLinkRef.current.node) showLinkedNode(deepLinkRef.current.node)
 
     if (data.role === 'owner' || data.role === 'editor' || data.role === 'viewer') {
       setRole(data.role)
@@ -800,9 +843,17 @@ function App() {
 
   const onPlayerReady: YouTubeProps['onReady'] = (event) => {
     setPlayer(event.target)
-    // Deliberately silent: the player becoming ready is visible on screen, and
-    // announcing it here would overwrite the more useful "đã tải phụ đề" line
-    // that almost always arrives at the same moment.
+    // A `?t=` link is a one-time jump. Apply it here, where the YouTube instance
+    // really exists, rather than in the mount effect where `player` is still
+    // null. Clear it so a player reload cannot yank the learner back.
+    const linkedTime = deepLinkRef.current.t
+    if (linkedTime !== null && typeof event.target.seekTo === 'function') {
+      deepLinkRef.current = { ...deepLinkRef.current, t: null }
+      event.target.seekTo(linkedTime, true)
+      currentTimeRef.current = linkedTime
+      playbackClock.set(linkedTime, true)
+      setStatus(`Đã tua đến ${formatTime(linkedTime)} từ link`, 'idle')
+    }
   }
 
   const onPlayerError: YouTubeProps['onError'] = (event) => {
@@ -1161,6 +1212,11 @@ function App() {
 
   const handleMindMapReady = useCallback(() => {
     mindmapRef.current?.updateTree(titleRef.current, nodesRef.current, { focusNew: false })
+    const pending = pendingFocusRef.current
+    if (pending && findNodeById(nodesRef.current, pending)) {
+      pendingFocusRef.current = null
+      mindmapRef.current?.focusNode?.(pending)
+    }
   }, [])
 
   const handleSelectNode = useCallback((nodeId: string) => {
@@ -1967,6 +2023,17 @@ function App() {
                     <dd>{videoId ? <PlaybackTime clock={playbackClock} /> : '—'}</dd>
                   </div>
                 </dl>
+
+                <div className="session__moment">
+                  <button
+                    className="btn btn--outline btn--sm"
+                    type="button"
+                    onClick={() => void copyMomentLink()}
+                  >
+                    Sao chép link tới đây
+                  </button>
+                  <span>Gồm thời điểm phát và nhánh đang chọn.</span>
+                </div>
 
                 <div className="session__hint">
                   <span className="session__hint-title">Mẹo</span>

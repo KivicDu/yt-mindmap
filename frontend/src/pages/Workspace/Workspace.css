@@ -663,6 +663,18 @@
   overflow-wrap: anywhere;
 }
 
+.session__moment {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.session__moment span {
+  font-size: 11.5px;
+  color: var(--ink-3);
+}
+
 .session__hint {
   padding: 10px 12px;
   border: 1px solid var(--accent-line);
