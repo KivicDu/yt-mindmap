@@ -43,7 +43,12 @@ AI_PATHS = frozenset({"/transcript", "/update-map"})
 # A path parameter means an exact-match set misses the restructure call, which
 # is a full AI call of its own (ADR 0013). Keep this as a pattern, not a route
 # string, so `/session/{id}/node` and friends stay outside the AI quota.
-AI_PATH_PATTERNS = (re.compile(r"^/session/[^/]+/restructure$"),)
+AI_PATH_PATTERNS = (
+    re.compile(r"^/session/[^/]+/restructure$"),
+    # ADR 0014: quiz generation and idea grading can both spend an AI call.
+    re.compile(r"^/api/projects/[^/]+/quiz$"),
+    re.compile(r"^/api/projects/[^/]+/attempt$"),
+)
 
 
 def is_ai_path(path: str) -> bool:

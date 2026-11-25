@@ -70,6 +70,12 @@ class Project(Base, TimestampMixin):
         DateTime(timezone=True), index=True, nullable=True
     )
 
+    # Opt-in review reminder (ADR 0014). NULL means off — a learner who never
+    # toggles "Nhắc tôi ôn lại" sees no new dashboard UI at all.
+    next_review_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), index=True, nullable=True
+    )
+
     # Accent-stripped text of the title, nodes, summary and transcript. Search
     # reads this single column instead of walking every JSON blob on each query.
     search_text: Mapped[str] = mapped_column(Text, default="", nullable=False)
