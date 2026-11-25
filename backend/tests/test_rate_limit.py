@@ -4,7 +4,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from app.core.config import get_settings
-from app.middleware.rate_limit import is_ai_path
+from app.middleware.rate_limit import is_ai_path, is_get_limited
 from app.services.rate_limit import reset_rate_limits
 
 
@@ -128,3 +128,36 @@ def test_restructure_consumes_the_daily_ai_quota(
     assert first.status_code != 429
     assert second.status_code == 429
     assert second.json()["detail"] == "ai_quota_exceeded"
+
+
+@pytest.mark.parametrize(
+    "path",
+    [
+        "/video-info",
+        "/transcript/languages",
+        "/transcript/track",
+        "/stream/session-123",
+        "/api/share/meta",
+        "/api/share/YTMM-ABC12345",
+    ],
+)
+def test_expensive_get_paths_are_recognised(path):
+    assert is_get_limited(path) is True
+
+
+@pytest.mark.parametrize("path", ["/healthz", "/", "/api/auth/providers"])
+def test_cheap_get_paths_are_not_counted(path):
+    assert is_get_limited(path) is False
+
+
+def test_share_lookups_are_rate_limited_per_ip(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+):
+    monkeypatch.setattr(get_settings(), "RATE_LIMIT_GET_PER_MINUTE", 1)
+
+    first = client.get("/api/share/meta?slug=not-a-real-slug")
+    second = client.get("/api/share/meta?slug=not-a-real-slug")
+
+    assert first.status_code == 200
+    assert second.status_code == 429
+    assert second.json()["detail"] == "rate_limited"

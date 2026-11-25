@@ -91,6 +91,9 @@ class Settings(BaseSettings):
     RATE_LIMIT_ENABLED: bool = True
     RATE_LIMIT_AUTH_PER_MINUTE: int = 30
     RATE_LIMIT_AI_PER_MINUTE: int = 240
+    # Outbound YouTube calls, share lookups and SSE connections are GETs, so
+    # the POST-only limits do not touch them.
+    RATE_LIMIT_GET_PER_MINUTE: int = 120
     AI_DAILY_QUOTA_PER_USER: int = 5000
     AI_DAILY_QUOTA_ANONYMOUS: int = 1000
     # Only enable behind a reverse proxy that overwrites X-Forwarded-For;
