@@ -231,7 +231,7 @@ yt-mindmap/
 - [ADR 0011](docs/adr/0011-learning-workflow.md) — trash, tags, versions, chapters and bilingual captions
 - [ADR 0012](docs/adr/0012-audio-fallback-asr.md) — audio fallback for videos without captions (accepted design, no code yet)
 - [ADR 0013](docs/adr/0013-thinking-map-content.md) — the map type decides what the AI extracts
-- [ADR 0014](docs/adr/0014-self-check-and-review.md) — self-check and optional review (design only)
+- [ADR 0014](docs/adr/0014-self-check-and-review.md) — self-check and optional review (shipped)
 - [Backup and restore](docs/backup-restore.md) — `pg_dump` scripts and the restore runbook
 - [Contributing workflow](CONTRIBUTING.md) — branch model and commit conventions
 

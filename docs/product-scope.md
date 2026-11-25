@@ -41,8 +41,8 @@ Nói rõ để không bị hiểu nhầm:
 | Chặng | Câu hỏi của người học | Vai trò của map | Tình trạng |
 |---|---|---|---|
 | **a. Khi nghe** | "Mình đang ở đâu trong bài?" | Bản đồ sống, đọc lướt, tự thu gọn | Có |
-| **b. Khi ôn** | "Quên đoạn này thì nhảy tới đâu?" | Bản chỉ mục có timestamp | Có (thiếu cảnh báo phút trống) |
-| **c. Sau khi ôn** | "Mình nắm được bao nhiêu?" | Map bị che, người học dựng lại | Thiết kế xong (ADR 0014), chưa code |
+| **b. Khi ôn** | "Quên đoạn này thì nhảy tới đâu?" | Bản chỉ mục có timestamp | Có (kèm cảnh báo phút trống) |
+| **c. Sau khi ôn** | "Mình nắm được bao nhiêu?" | Map bị che, người học dựng lại | Có (ADR 0014) |
 
 Ba chặng dùng **cùng một map**. Chặng c không tạo map khác — nó che map đã có.
 Kết quả tự kiểm là hai phân số đếm được (ví dụ *9/12 nhánh, 4/6 ý chính*), **không**

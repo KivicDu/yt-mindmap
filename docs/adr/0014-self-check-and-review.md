@@ -2,7 +2,9 @@
 
 ## Status
 
-Proposed — design only. Nothing in this ADR is implemented yet.
+Accepted 2026-11-26 — implemented in backend PR #31 and frontend PR #32.
+The review reminder is opt-in (`next_review_at = NULL` by default) and the
+answer key stays server-side.
 
 ## Context
 
