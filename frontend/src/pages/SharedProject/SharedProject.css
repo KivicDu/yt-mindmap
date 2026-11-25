@@ -29,6 +29,46 @@
   text-transform: uppercase;
 }
 
+/* Reader surfaces: the share page is for someone who did not build the map. */
+.reader-summary p {
+  max-height: 150px;
+  overflow-y: auto;
+}
+
+.reader-section {
+  padding-top: 12px;
+  margin-top: 12px;
+  border-top: 1px solid var(--line);
+}
+
+.reader-section__head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+
+.reader-section__head h3 {
+  margin: 0;
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  color: var(--ink);
+}
+
+.reader-section__head span {
+  font-size: 11px;
+  color: var(--ink-3);
+}
+
+.reader-section--transcript {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-height: 240px;
+}
+
 .shared-shell {
   display: grid;
   place-items: center;

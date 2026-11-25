@@ -32,6 +32,8 @@ interface TranscriptPanelProps {
   secondaryBusy: boolean
   secondaryError: string
   onSelectSecondary: (code: string) => void
+  /** Reader mode: keep search and click-to-seek, hide track controls. */
+  readOnly?: boolean
 }
 
 /** Diacritic-insensitive search: "tong quan" still finds "Tổng quan". */
@@ -80,6 +82,7 @@ function TranscriptPanel({
   secondaryBusy,
   secondaryError,
   onSelectSecondary,
+  readOnly = false,
 }: TranscriptPanelProps) {
   const [query, setQuery] = useState('')
   const listRef = useRef<HTMLOListElement>(null)
@@ -158,42 +161,46 @@ function TranscriptPanel({
           />
         </label>
 
-        <label className="transcript__lang" title="Chọn ngôn ngữ phụ đề">
-          <span className="sr-only">Ngôn ngữ phụ đề</span>
-          <select
-            value={language ?? ''}
-            disabled={!canEdit || !canChangeLanguage || languageBusy || entries.length === 0}
-            onFocus={onLoadLanguages}
-            onMouseDown={onLoadLanguages}
-            onChange={(event) => {
-              const code = event.target.value
-              if (code && code !== language) onSelectLanguage(code)
-            }}
-          >
-            {!language && <option value="">Tự động</option>}
-            {language && !languages.some((item) => item.code === language) && (
-              <option value={language}>{currentName}</option>
-            )}
-            {languages.map((item) => (
-              <option key={item.code} value={item.code}>
-                {item.name}
-                {item.generated ? ' (tự động)' : ''}
-              </option>
-            ))}
-            {languagesLoading && <option value="">Đang tải…</option>}
-          </select>
-        </label>
+        {!readOnly && (
+          <>
+            <label className="transcript__lang" title="Chọn ngôn ngữ phụ đề">
+            <span className="sr-only">Ngôn ngữ phụ đề</span>
+            <select
+              value={language ?? ''}
+              disabled={!canEdit || !canChangeLanguage || languageBusy || entries.length === 0}
+              onFocus={onLoadLanguages}
+              onMouseDown={onLoadLanguages}
+              onChange={(event) => {
+                const code = event.target.value
+                if (code && code !== language) onSelectLanguage(code)
+              }}
+            >
+              {!language && <option value="">Tự động</option>}
+              {language && !languages.some((item) => item.code === language) && (
+                <option value={language}>{currentName}</option>
+              )}
+              {languages.map((item) => (
+                <option key={item.code} value={item.code}>
+                  {item.name}
+                  {item.generated ? ' (tự động)' : ''}
+                </option>
+              ))}
+              {languagesLoading && <option value="">Đang tải…</option>}
+            </select>
+          </label>
 
-        <button
-          className={`transcript__bilingual${bilingual ? ' is-active' : ''}`}
-          type="button"
-          aria-pressed={bilingual}
-          disabled={!canChangeLanguage || entries.length === 0}
-          title="Hiện thêm một track phụ đề khác bên dưới"
-          onClick={onToggleBilingual}
-        >
-          Song ngữ
-        </button>
+          <button
+            className={`transcript__bilingual${bilingual ? ' is-active' : ''}`}
+            type="button"
+            aria-pressed={bilingual}
+            disabled={!canChangeLanguage || entries.length === 0}
+            title="Hiện thêm một track phụ đề khác bên dưới"
+            onClick={onToggleBilingual}
+          >
+            Song ngữ
+          </button>
+          </>
+        )}
 
         {bilingual && (
           <label className="transcript__lang" title="Chọn ngôn ngữ phụ đề thứ hai">
@@ -238,7 +245,9 @@ function TranscriptPanel({
 
       {entries.length === 0 ? (
         <p className="transcript__empty">
-          Chưa có phụ đề cho video này. Tải file .srt/.vtt hoặc chọn video khác.
+          {readOnly
+            ? 'Sơ đồ này chưa có phụ đề.'
+            : 'Chưa có phụ đề cho video này. Tải file .srt/.vtt hoặc chọn video khác.'}
         </p>
       ) : filtered.length === 0 ? (
         <p className="transcript__empty">Không tìm thấy đoạn nào khớp “{query.trim()}”.</p>
