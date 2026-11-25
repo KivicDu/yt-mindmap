@@ -29,6 +29,12 @@ MAX_CLASSIFY_REASON_CHARS = 160
 MAX_RETRIES = 3
 RETRY_BASE_DELAY = 1.0
 REQUEST_TIMEOUT = 60
+# ADR 0014: idea questions are short, and the answer key stays on the server.
+MAX_QUIZ_QUESTIONS = 8
+MIN_QUIZ_QUESTIONS = 5
+MAX_QUIZ_QUESTION_CHARS = 300
+MAX_QUIZ_KEY_CHARS = 300
+MAX_QUIZ_ANSWER_CHARS = 500
 DEFAULT_MODEL = "gemini-2.5-flash"
 # Long provider messages are useful once, not 800 times.
 MAX_LOGGED_ERROR_CHARS = 300
@@ -305,6 +311,43 @@ Return ONLY this JSON object (no markdown fences, no extra text):
 }}"""
 
 
+def build_quiz_prompt(markdown: str) -> str:
+    """Ask for 5–8 map-only idea questions with a short answer key each.
+
+    The input is regenerated from the stored node tree (`tree_to_markdown`), so
+    the model sees the map and nothing else — no transcript, no playhead, no
+    video call. That is what lets a months-old map still be checked offline.
+    """
+    return f"""You write a short self-check for a learner who has already studied a mind map.
+
+Use ONLY the map below. Do not use a transcript, a video, or outside knowledge.
+Write the questions and answer keys in the SAME LANGUAGE as the map.
+Ask {MIN_QUIZ_QUESTIONS} to {MAX_QUIZ_QUESTIONS} questions covering the top-level topics and their main ideas.
+Each "expected" is a short answer key made of words that appear in the map — never a new fact.
+Do not put timestamps in the questions.
+
+Return ONLY this JSON object (no markdown fences, no extra text):
+{{
+  "questions": [
+    {{"prompt": "What is the main idea of ...?", "expected": "the idea, in the map's words"}}
+  ]
+}}
+
+MAP (markdown):
+{markdown}"""
+
+
+def build_grade_prompt(expected: str, learner: str) -> str:
+    """The only prompt that may see a learner's free-text answer."""
+    return f"""A learner is checking whether they still recall one idea from a mind map.
+
+Expected idea: {expected}
+Learner's answer: {learner}
+
+Does the learner's answer express the same idea? Ignore wording and grammar; judge meaning only.
+Answer strictly from these two lines. Return ONLY JSON (no fences): {{"same": true}} or {{"same": false}}"""
+
+
 def _load_json_object(text: str) -> dict[str, Any]:
     """Unwrap a JSON object from a model reply.
 
@@ -323,6 +366,46 @@ def parse_restructure_payload(text: str) -> list[dict[str, Any]]:
     """Read the rewritten tree from a restructure reply."""
     nodes = _load_json_object(text).get("nodes")
     return nodes if isinstance(nodes, list) else []
+
+
+def parse_quiz_payload(text: str) -> list[dict[str, str]]:
+    """Validate a quiz reply; a malformed reply yields no idea questions."""
+    try:
+        data = _load_json_object(text)
+    except (ValueError, TypeError):
+        return []
+    raw = data.get("questions")
+    if not isinstance(raw, list):
+        return []
+    questions: list[dict[str, str]] = []
+    for index, item in enumerate(raw[:MAX_QUIZ_QUESTIONS]):
+        if not isinstance(item, dict):
+            continue
+        prompt = str(item.get("prompt") or "").strip()[:MAX_QUIZ_QUESTION_CHARS]
+        expected = str(item.get("expected") or "").strip()[:MAX_QUIZ_KEY_CHARS]
+        if prompt and expected:
+            questions.append(
+                {"id": f"q{index + 1}", "prompt": prompt, "expected": expected}
+            )
+    return questions
+
+
+def parse_grade_payload(text: str) -> bool | None:
+    """Return the model's yes/no, or None when the reply is unusable."""
+    try:
+        data = _load_json_object(text)
+    except (ValueError, TypeError):
+        return None
+    value = data.get("same")
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        lowered = value.strip().lower()
+        if lowered in {"true", "yes", "correct", "đúng"}:
+            return True
+        if lowered in {"false", "no", "incorrect", "sai"}:
+            return False
+    return None
 
 
 def parse_classification(text: str) -> dict[str, Any]:
@@ -638,6 +721,31 @@ class MindMapAI:
         except Exception as e:
             logger.warning("Mind map restructure failed: %s", describe_error(e))
             return {"nodes": [], "mode": mode, "error": "ai_unavailable"}
+
+    def generate_quiz(self, markdown: str) -> dict[str, Any]:
+        """Idea questions from the map. The recall half works even if this fails."""
+        if not (markdown or "").strip() or not self.client:
+            return {"questions": [], "error": "ai_unavailable"}
+
+        try:
+            response = self._generate_with_retry(build_quiz_prompt(markdown))
+            self._record_usage(response)
+            return {"questions": parse_quiz_payload(response.text or "")}
+        except Exception as e:
+            logger.warning("Quiz generation failed: %s", describe_error(e))
+            return {"questions": [], "error": "ai_unavailable"}
+
+    def grade_idea(self, expected: str, learner: str) -> bool | None:
+        """Break a tie in the ambiguous band; None means "keep the local mark"."""
+        if not self.client:
+            return None
+        try:
+            response = self._generate_with_retry(build_grade_prompt(expected, learner))
+            self._record_usage(response)
+            return parse_grade_payload(response.text or "")
+        except Exception as e:
+            logger.warning("Idea grading failed: %s", describe_error(e))
+            return None
 
 
 ai_engine = MindMapAI()

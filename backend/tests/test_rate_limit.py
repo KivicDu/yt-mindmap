@@ -78,7 +78,13 @@ def test_rate_limiting_can_be_disabled(client: TestClient, monkeypatch: pytest.M
 
 @pytest.mark.parametrize(
     "path",
-    ["/transcript", "/update-map", "/session/abc123/restructure"],
+    [
+        "/transcript",
+        "/update-map",
+        "/session/abc123/restructure",
+        "/api/projects/abc123/quiz",
+        "/api/projects/abc123/attempt",
+    ],
 )
 def test_known_ai_paths_are_recognised(path):
     assert is_ai_path(path) is True

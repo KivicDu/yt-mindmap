@@ -7,12 +7,14 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import Session, sessionmaker
 from sqlalchemy.pool import StaticPool
 
+import ai_engine as ai_module
 import main as main_module
 from app.core.config import get_settings
 from app.db.base import Base
 from app.db.session import get_db
 from app.services.content_classifier import reset_classifier_cache
 from app.services.rate_limit import reset_rate_limits
+from app.services.review import reset_quiz_cache
 
 # SQLite is a test double only: models use portable column types and the app
 # itself runs on PostgreSQL. StaticPool keeps one in-memory database alive
@@ -39,10 +41,14 @@ def isolated_state(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setattr(settings, "CONTENT_CLASSIFIER_ENABLED", False)
     # Visual sampling is a separate opt-in; keep tests from opening sockets.
     monkeypatch.setattr(settings, "CONTENT_VISUAL_CHECK_ENABLED", False)
+    # No test may ever reach the model provider. The real engine is constructed
+    # at import time and may hold a client; replace it with the offline branch.
+    monkeypatch.setattr(ai_module.ai_engine, "client", None)
     # Older sharing fixtures create projects directly, without a video verdict.
     # Layer 3 is exercised explicitly in test_share_policy.py with it enabled.
     monkeypatch.setattr(settings, "CONTENT_SHARE_REQUIRE_VERIFIED", False)
     reset_classifier_cache()
+    reset_quiz_cache()
     main_module.sessions.clear()
     main_module.video_cache.clear()
     reset_rate_limits()
@@ -50,6 +56,7 @@ def isolated_state(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     main_module.sessions.clear()
     main_module.video_cache.clear()
     reset_rate_limits()
+    reset_quiz_cache()
 
 
 @pytest.fixture()
