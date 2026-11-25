@@ -151,6 +151,19 @@ class Settings(BaseSettings):
                 )
         return self
 
+    @model_validator(mode="after")
+    def _guard_production_cookie(self) -> "Settings":
+        """A session cookie sent over plaintext HTTP is a stolen session."""
+        if self.APP_ENV in {"staging", "production"}:
+            if not self.COOKIE_SECURE:
+                raise ValueError(
+                    "COOKIE_SECURE must be true when cookies are used over "
+                    f"HTTPS in {self.APP_ENV}"
+                )
+            if self.COOKIE_SAMESITE not in {"lax", "strict", "none"}:
+                raise ValueError("COOKIE_SAMESITE must be lax, strict or none")
+        return self
+
     @property
     def is_sqlite(self) -> bool:
         return self.DATABASE_URL.startswith("sqlite")

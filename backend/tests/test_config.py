@@ -52,5 +52,40 @@ def test_public_environments_reject_development_secret_prefixes(app_env, secret)
 
 @pytest.mark.parametrize("app_env", ["staging", "production"])
 def test_public_environments_accept_a_unique_secret(app_env):
-    settings = make_settings(APP_ENV=app_env, JWT_SECRET_KEY=STRONG_SECRET)
+    settings = make_settings(
+        APP_ENV=app_env, JWT_SECRET_KEY=STRONG_SECRET, COOKIE_SECURE=True
+    )
     assert settings.JWT_SECRET_KEY == STRONG_SECRET
+
+
+@pytest.mark.parametrize("app_env", ["staging", "production"])
+def test_public_environments_require_secure_cookies(app_env):
+    with pytest.raises(ValidationError, match="COOKIE_SECURE"):
+        make_settings(
+            APP_ENV=app_env,
+            JWT_SECRET_KEY=STRONG_SECRET,
+            COOKIE_SECURE=False,
+        )
+
+
+@pytest.mark.parametrize("app_env", ["staging", "production"])
+def test_public_environments_accept_secure_cookies(app_env):
+    settings = make_settings(
+        APP_ENV=app_env, JWT_SECRET_KEY=STRONG_SECRET, COOKIE_SECURE=True
+    )
+    assert settings.COOKIE_SECURE is True
+
+
+def test_public_environments_reject_an_unknown_samesite_value():
+    with pytest.raises(ValidationError, match="COOKIE_SAMESITE"):
+        make_settings(
+            APP_ENV="production",
+            JWT_SECRET_KEY=STRONG_SECRET,
+            COOKIE_SECURE=True,
+            COOKIE_SAMESITE="sometimes",
+        )
+
+
+def test_local_environments_still_allow_insecure_cookies():
+    settings = make_settings(APP_ENV="development", COOKIE_SECURE=False)
+    assert settings.COOKIE_SECURE is False
