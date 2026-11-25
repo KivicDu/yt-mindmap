@@ -33,7 +33,7 @@ def shared_project_metadata(
     db: Session = Depends(get_db),
 ) -> Response:
     """Render safe social metadata for public share URLs during nginx SSI."""
-    project = sharing_service.get_by_slug(db, slug)
+    project = sharing_service.get_by_slug(db, slug) if sharing_service.is_valid_slug(slug) else None
     shareable = project is not None and sharing_service.shareable(project)
     if shareable and project is not None and project.visibility == "unlisted":
         title = f"{project.title} — sơ đồ tư duy | yt-mindmap"
@@ -77,6 +77,14 @@ def read_shared_project(
     user: User | None = Depends(get_optional_user),
     db: Session = Depends(get_db),
 ):
+    if not sharing_service.is_valid_slug(slug):
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail={
+                "code": "share_not_found",
+                "message": "This share link does not exist or has been turned off.",
+            },
+        )
     project = sharing_service.get_by_slug(db, slug)
     if project is None or project.visibility == "private":
         raise HTTPException(
