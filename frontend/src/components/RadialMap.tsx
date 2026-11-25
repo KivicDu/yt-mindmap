@@ -13,6 +13,7 @@ interface RadialMapProps {
   selectedId?: string | null
   collapseOld?: boolean
   onReady?: () => void
+  maskedIds?: string[]
 }
 
 const COLLAPSE_KEEP_LAST = 3
@@ -23,18 +24,19 @@ const COLLAPSE_KEEP_LAST = 3
  * the workspace pushes into it.
  */
 const RadialMap = forwardRef<MindMapHandle, RadialMapProps>(
-  ({ kind, palette, onSeek, onSelect, selectedId, collapseOld, onReady }, ref) => {
+  ({ kind, palette, onSeek, onSelect, selectedId, collapseOld, onReady, maskedIds }, ref) => {
     const canvas = useRef<MindMapHandle>(null)
     const [tree, setTree] = useState<{ title: string; nodes: MapNode[] }>({
       title: 'Lecture Mind Map',
       nodes: [],
     })
 
+    const masked = useMemo(() => new Set(maskedIds ?? []), [maskedIds])
     const layout = useMemo(() => {
-      const root = buildMapData(tree)
+      const root = buildMapData(tree, { maskedIds: masked })
       if (collapseOld) collapseOlderBranches(root, COLLAPSE_KEEP_LAST)
       return layoutRadial(root, kind)
-    }, [tree, kind, collapseOld])
+    }, [tree, kind, collapseOld, masked])
 
     useEffect(() => {
       onReady?.()

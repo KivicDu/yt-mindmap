@@ -104,6 +104,27 @@ describe('nodeToMarkmap', () => {
     expect(data.children[0].content).toContain('href="#seek-3.0"')
     expect(data.children[0].content).toContain('data-node-id="c"')
   })
+
+  it('masks a sampled label and its children but keeps the timestamp', () => {
+    const parent = node('p', 'Bí mật', {
+      time: 90,
+      note: 'ghi chú riêng',
+      children: [node('c', 'Con')],
+    })
+    const data = nodeToMarkmap(parent, 1, new Set(['p']))
+    expect(data.content).toContain('mm-masked')
+    expect(data.content).toContain('[1:30]')
+    expect(data.content).not.toContain('Bí mật')
+    expect(data.content).not.toContain('ghi chú')
+    expect(data.children[0].content).toContain('mm-masked')
+    expect(data.children[0].content).not.toContain('Con')
+  })
+
+  it('leaves unsampled branches readable', () => {
+    const data = nodeToMarkmap(node('a', 'A', { children: [node('b', 'B')] }), 1, new Set(['b']))
+    expect(data.content).toContain('>A<')
+    expect(data.children[0].content).toContain('mm-masked')
+  })
 })
 
 describe('buildMapData', () => {

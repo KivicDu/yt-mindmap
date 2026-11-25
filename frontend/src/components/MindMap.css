@@ -106,6 +106,15 @@
   vertical-align: 1px;
 }
 
+/* Self-check (ADR 0014): the node keeps its place and timestamp, only the
+   learner's own answer is hidden until they submit. */
+.mindmap .mm-masked {
+  color: var(--ink-3);
+  font-weight: 500;
+  letter-spacing: 0.16em;
+  cursor: default;
+}
+
 .mindmap .mm-pin {
   margin-right: 4px;
   font-size: 0.8em;

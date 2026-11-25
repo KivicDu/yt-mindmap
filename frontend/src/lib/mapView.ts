@@ -37,4 +37,6 @@ export interface MindMapProps {
   onReady?: () => void
   layout?: MapLayout
   palette?: MapPalette
+  /** ADR 0014 self-check: hide these labels (and their notes) while checking. */
+  maskedIds?: string[]
 }

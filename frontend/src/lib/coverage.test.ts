@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { findEmptyMinutes, lectureDuration } from './coverage'
+import { findEmptyMinutes, lectureDuration, minuteRangesFromTimes } from './coverage'
 import type { MapNode } from './mindmapTree'
 import type { TranscriptCue } from './projects'
 
@@ -20,7 +20,8 @@ const node = (time: number): MapNode => ({
 describe('lectureDuration', () => {
   it('uses the end of the last cue', () => {
     expect(lectureDuration(cues)).toBe(360)
-    expect(lectureDuration([{ start: 12, duration: 3.5, text: 'x' }])).toBe(15.5)
+    const one: TranscriptCue[] = [{ start: 12, duration: 3.5, text: 'x' }]
+    expect(lectureDuration(one)).toBe(15.5)
   })
 })
 
@@ -46,5 +47,13 @@ describe('findEmptyMinutes', () => {
 
   it('ignores a timestamp beyond the end of the lecture', () => {
     expect(findEmptyMinutes([node(999)], cues)).toEqual([])
+  })
+})
+
+describe('minuteRangesFromTimes', () => {
+  it('merges adjacent weak answers and drops out-of-range times', () => {
+    expect(minuteRangesFromTimes([10, 70, 130, 999], 360)).toEqual([
+      { start: 0, end: 180, minutes: 3 },
+    ])
   })
 })

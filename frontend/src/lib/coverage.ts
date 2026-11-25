@@ -26,11 +26,48 @@ function timed(value: number | null | undefined): value is number {
 }
 
 /** Lecture length from the cues; a saved project carries no separate duration. */
-export function lectureDuration(cues: TranscriptCue[]): number {
+export function lectureDuration(cues: Array<{ start: number; duration: number }>): number {
   return cues.reduce(
     (latest, cue) => Math.max(latest, cue.start + Math.max(0, cue.duration || 0)),
     0,
   )
+}
+
+/** Merge a set of minute buckets into contiguous ranges. */
+function rangesFromBuckets(buckets: Set<number>): EmptyMinuteRange[] {
+  if (buckets.size === 0) return []
+  const ranges: EmptyMinuteRange[] = []
+  let first = -1
+  let last = -1
+  const flush = () => {
+    if (first >= 0) {
+      ranges.push({ start: first * 60, end: (last + 1) * 60, minutes: last - first + 1 })
+    }
+    first = -1
+    last = -1
+  }
+
+  const ordered = [...buckets].sort((a, b) => a - b)
+  for (const minute of ordered) {
+    if (first >= 0 && minute === last + 1) {
+      last = minute
+    } else {
+      flush()
+      first = minute
+      last = minute
+    }
+  }
+  flush()
+  return ranges
+}
+
+/** Buckets containing at least one of the given times (used for weak ranges). */
+export function minuteRangesFromTimes(times: number[], duration: number): EmptyMinuteRange[] {
+  const buckets = new Set<number>()
+  for (const time of times) {
+    if (timed(time) && time < duration) buckets.add(Math.floor(time / 60))
+  }
+  return rangesFromBuckets(buckets)
 }
 
 /** Merge consecutive uncovered minute buckets into ranges. */
@@ -48,25 +85,10 @@ export function findEmptyMinutes(nodes: MapNode[], cues: TranscriptCue[]): Empty
   // empty. Stay quiet until there is something to compare against.
   if (covered.size === 0) return []
 
-  const ranges: EmptyMinuteRange[] = []
-  let first = -1
-  let last = -1
-  const flush = () => {
-    if (first >= 0) {
-      ranges.push({ start: first * 60, end: (last + 1) * 60, minutes: last - first + 1 })
-    }
-    first = -1
-    last = -1
-  }
-
+  const empty = new Set<number>()
   const totalMinutes = Math.floor((duration - 1) / 60) + 1
   for (let minute = 0; minute < totalMinutes; minute += 1) {
-    if (covered.has(minute)) flush()
-    else {
-      if (first < 0) first = minute
-      last = minute
-    }
+    if (!covered.has(minute)) empty.add(minute)
   }
-  flush()
-  return ranges
+  return rangesFromBuckets(empty)
 }
