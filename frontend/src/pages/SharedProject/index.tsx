@@ -22,6 +22,8 @@ import {
 import { findNodeById, normalizeTree, type MapNode } from '../../lib/mindmapTree'
 import { parseDeepLink } from '../../lib/deepLink'
 import { buildChapters } from '../../lib/chapters'
+import { findEmptyMinutes } from '../../lib/coverage'
+import CoverageNotice from '../../components/CoverageNotice'
 import { mapToMarkdown } from '../../lib/mapExport'
 import { isMapLayout, isMapPalette } from '../../lib/mapStyle'
 import ChapterRail from '../../components/ChapterRail'
@@ -269,6 +271,10 @@ function SharedProject() {
     () => mapToMarkdown({ title: data?.project.title ?? '', nodes: readerNodes }),
     [data?.project.title, readerNodes],
   )
+  const emptyMinutes = useMemo(
+    () => findEmptyMinutes(readerNodes, data?.project.transcript ?? []),
+    [data?.project.transcript, readerNodes],
+  )
 
   if (loading) {
     return (
@@ -432,6 +438,8 @@ function SharedProject() {
                   <p>{project.summary_so_far}</p>
                 </div>
               )}
+
+              {videoId && <CoverageNotice ranges={emptyMinutes} onSeek={handleSeek} />}
 
               <dl className="session__rows">
                 <div>
