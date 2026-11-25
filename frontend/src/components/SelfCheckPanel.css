@@ -1,0 +1,272 @@
+/* ADR 0014: a quiet card inside the session panel. No scores, no streaks. */
+
+.self-check-entry {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 10px 12px;
+  border: 1px solid var(--line-2);
+  border-radius: var(--r-md);
+  background: var(--paper-2);
+}
+
+.self-check-entry strong {
+  font-size: 12.5px;
+  font-weight: 550;
+  color: var(--ink);
+}
+
+.self-check-entry p {
+  margin: 0;
+  font-size: 11.5px;
+  line-height: 1.5;
+  color: var(--ink-3);
+}
+
+.self-check-entry .btn {
+  align-self: flex-start;
+  margin-top: 2px;
+}
+
+.self-check {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 12px;
+  border: 1px solid var(--accent-line);
+  border-radius: var(--r-md);
+  background: var(--surface);
+}
+
+.self-check__head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.self-check__head > div {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.self-check__head strong {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--ink);
+}
+
+.self-check__label {
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--ink-3);
+}
+
+.self-check__intro,
+.self-check__note,
+.self-check__busy,
+.self-check__error,
+.self-check__message {
+  margin: 0;
+  font-size: 11.5px;
+  line-height: 1.55;
+  color: var(--ink-3);
+}
+
+.self-check__error {
+  color: var(--danger-ink, var(--ink));
+}
+
+.self-check__message {
+  font-size: 12.5px;
+  color: var(--ink);
+}
+
+.self-check__questions,
+.self-check__items ol {
+  display: flex;
+  flex-direction: column;
+  gap: 9px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  counter-reset: self-check;
+}
+
+.self-check__questions label,
+.self-check__idea {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  font-size: 11.5px;
+  color: var(--ink-2);
+}
+
+.self-check__questions textarea,
+.self-check__idea textarea {
+  width: 100%;
+  padding: 7px 8px;
+  border: 1px solid var(--line-2);
+  border-radius: var(--r-sm);
+  background: var(--paper);
+  color: var(--ink);
+  font: inherit;
+  line-height: 1.5;
+  resize: vertical;
+}
+
+.self-check__questions textarea:focus-visible,
+.self-check__idea textarea:focus-visible {
+  outline: 2px solid var(--accent-line);
+  outline-offset: 1px;
+}
+
+.self-check__idea {
+  padding-top: 8px;
+  border-top: 1px solid var(--line);
+}
+
+.self-check__actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.self-check__fractions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.self-check__fractions > div {
+  display: flex;
+  flex: 1 1 120px;
+  flex-direction: column;
+  gap: 3px;
+  padding: 8px 10px;
+  border: 1px solid var(--line-2);
+  border-radius: var(--r-sm);
+  background: var(--paper-2);
+}
+
+.self-check__fractions span {
+  font-size: 10.5px;
+  color: var(--ink-3);
+}
+
+.self-check__fractions strong {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--ink);
+}
+
+.self-check__weak {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.self-check__weak > div {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+}
+
+.self-check__items {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.self-check__items h4 {
+  margin: 0;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--ink-3);
+}
+
+.self-check__item {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 8px 9px;
+  border: 1px solid var(--line-2);
+  border-radius: var(--r-sm);
+}
+
+.self-check__item-head {
+  display: flex;
+  align-items: baseline;
+  gap: 7px;
+}
+
+.self-check__verdict {
+  flex: none;
+  padding: 1px 6px;
+  border-radius: 999px;
+  background: var(--paper-2);
+  color: var(--ink-3);
+  font-size: 10px;
+  font-weight: 600;
+}
+
+.self-check__verdict.is-right {
+  background: var(--accent-soft);
+  color: var(--accent-ink);
+}
+
+.self-check__prompt {
+  font-size: 11.5px;
+  color: var(--ink);
+}
+
+.self-check__answer,
+.self-check__key {
+  margin: 0;
+  font-size: 11.5px;
+  line-height: 1.5;
+  color: var(--ink-2);
+  overflow-wrap: anywhere;
+}
+
+.self-check__key {
+  color: var(--ink-3);
+}
+
+.self-check__override {
+  align-self: flex-start;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--accent-ink);
+  font-size: 11px;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+  cursor: pointer;
+}
+
+.self-check__override:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+
+.self-check__reminder {
+  display: flex;
+  align-items: flex-start;
+  gap: 7px;
+  font-size: 11.5px;
+  color: var(--ink-2);
+  cursor: pointer;
+}
+
+.self-check__reminder input {
+  margin-top: 2px;
+  accent-color: var(--accent);
+}
+
+.self-check__reminder small {
+  color: var(--ink-3);
+}

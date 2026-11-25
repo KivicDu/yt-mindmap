@@ -57,6 +57,7 @@ import { buildChapters } from '../../lib/chapters'
 import { parseDeepLink, stripDeepLinkFromSearch, type DeepLink } from '../../lib/deepLink'
 import { findEmptyMinutes } from '../../lib/coverage'
 import CoverageNotice from '../../components/CoverageNotice'
+import SelfCheckPanel from '../../components/SelfCheckPanel'
 import { isTypingTarget, shortcutFor } from '../../lib/shortcuts'
 import { PlaybackClock } from '../../lib/playbackClock'
 import { PlaybackProgress, PlaybackTime } from '../../components/PlaybackTime'
@@ -179,6 +180,8 @@ function App() {
   const [ownerName, setOwnerName] = useState<string | null>(null)
   const [summary, setSummary] = useState('')
   const [detailTab, setDetailTab] = useState<DetailTab>('session')
+  const [selfCheckOpen, setSelfCheckOpen] = useState(false)
+  const [maskedIds, setMaskedIds] = useState<string[]>([])
   const [versions, setVersions] = useState<ProjectVersionSummary[]>([])
   const [versionsLoading, setVersionsLoading] = useState(false)
   const [versionsError, setVersionsError] = useState('')
@@ -245,6 +248,17 @@ function App() {
   const deepLinkRef = useRef<DeepLink>(parseDeepLink(window.location.search))
   const pendingFocusRef = useRef<string | null>(null)
   const shareSlugRef = useRef<string | null>(null)
+
+  const focusMapNode = useCallback((id: string) => {
+    mindmapRef.current?.focusNode?.(id)
+  }, [])
+
+  // A check belongs to one project; changing projects must never leave its
+  // masked labels behind.
+  useEffect(() => {
+    setSelfCheckOpen(false)
+    setMaskedIds([])
+  }, [routeProjectId])
 
   const setStatus = useCallback((text: string, kind: StatusKind = 'idle') => {
     setStatusState({ kind, text })
@@ -2010,6 +2024,39 @@ function App() {
 
                 <CoverageNotice ranges={emptyMinutes} onSeek={handleSeek} />
 
+                {!selfCheckOpen && projectId && canEdit && authStatus === 'authenticated' && (
+                  <div className="self-check-entry">
+                    <span className="coverage-notice__label">Ôn lại</span>
+                    <strong>Kiểm tra lại bài này</strong>
+                    <p>
+                      Nhãn vài nhánh sẽ bị che. Tự nhớ lại rồi mới xem đáp án — chỉ đếm nhánh
+                      và ý bạn nắm được.
+                    </p>
+                    <button
+                      className="btn btn--outline btn--sm"
+                      type="button"
+                      onClick={() => setSelfCheckOpen(true)}
+                    >
+                      Bắt đầu tự kiểm
+                    </button>
+                  </div>
+                )}
+
+                {selfCheckOpen && projectId && (
+                  <SelfCheckPanel
+                    projectId={projectId}
+                    nodes={nodesRef.current}
+                    cues={transcript}
+                    onSeek={handleSeek}
+                    onFocusTarget={focusMapNode}
+                    onMaskedIdsChange={setMaskedIds}
+                    onClose={() => {
+                      setSelfCheckOpen(false)
+                      setMaskedIds([])
+                    }}
+                  />
+                )}
+
                 <dl className="session__rows">
                   <div>
                     <dt>Video</dt>
@@ -2166,6 +2213,7 @@ function App() {
                 onReady={handleMindMapReady}
                 layout={mapStyle.layout}
                 palette={mapStyle.palette}
+                maskedIds={maskedIds}
               />
             </Suspense>
 
