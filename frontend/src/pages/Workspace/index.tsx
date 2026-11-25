@@ -55,6 +55,8 @@ import { SkeletonList } from '../../components/ui/Skeleton'
 import { useToast } from '../../components/ui/useToast'
 import { buildChapters } from '../../lib/chapters'
 import { parseDeepLink, stripDeepLinkFromSearch, type DeepLink } from '../../lib/deepLink'
+import { findEmptyMinutes } from '../../lib/coverage'
+import CoverageNotice from '../../components/CoverageNotice'
 import { isTypingTarget, shortcutFor } from '../../lib/shortcuts'
 import { PlaybackClock } from '../../lib/playbackClock'
 import { PlaybackProgress, PlaybackTime } from '../../components/PlaybackTime'
@@ -1422,6 +1424,11 @@ function App() {
   // `mapVersion` is the render trigger for the mutable tree in `nodesRef`.
   // eslint-disable-next-line react-hooks/exhaustive-deps
   const chapters = useMemo(() => buildChapters(nodesRef.current), [mapVersion])
+  const emptyMinutes = useMemo(() => {
+    // `mapVersion` is the render trigger for the mutable tree in `nodesRef`.
+    void mapVersion
+    return findEmptyMinutes(nodesRef.current, transcript)
+  }, [mapVersion, transcript])
 
   return (
     <div className="app-shell">
@@ -2000,6 +2007,8 @@ function App() {
                       'Tóm tắt sẽ xuất hiện khi video được phân tích. Bấm “Cập nhật” hoặc phát video để bắt đầu.'}
                   </p>
                 </div>
+
+                <CoverageNotice ranges={emptyMinutes} onSeek={handleSeek} />
 
                 <dl className="session__rows">
                   <div>
