@@ -72,6 +72,22 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/auth", tags=["auth"])
 
 
+def _refresh_request_allowed(request: Request) -> bool:
+    """Reject cross-site attempts to rotate the HttpOnly refresh cookie.
+
+    SameSite cookies are the first defence; the origin/fetch-site check keeps
+    the endpoint safe even when a deployment must set SameSite=None. Requests
+    without either header are treated as non-browser clients (curl, tests).
+    """
+    fetch_site = request.headers.get("sec-fetch-site")
+    if fetch_site and fetch_site.lower() not in {"same-origin", "same-site", "none"}:
+        return False
+    origin = request.headers.get("origin")
+    if not origin:
+        return True
+    return origin.rstrip("/") in get_settings().refresh_allowed_origins
+
+
 def _auth_response(response: Response, db: Session, user: User) -> AuthResponse:
     access_token, expires_in = create_token(user.id, "access")
     refresh_token = issue_refresh_token(db, user.id)
@@ -123,21 +139,33 @@ def refresh(
     db: Session = Depends(get_db),
 ) -> AccessTokenResponse:
     settings = get_settings()
+    if not _refresh_request_allowed(request):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN, detail="refresh_cross_site_blocked"
+        )
     refresh_token = request.cookies.get(settings.REFRESH_COOKIE_NAME)
     if not refresh_token:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="missing_refresh_token")
 
-    user_id = consume_refresh_token(db, refresh_token)
-    if user_id is None:
+    outcome = consume_refresh_token(db, refresh_token)
+    if outcome.reuse_detected:
+        # A revoked token came back: the whole chain is now dead. Log the event
+        # without the token itself, which is a bearer credential.
+        logger.warning("Refresh token reuse detected for user %s", outcome.user_id or "unknown")
+        clear_session_cookies(response)
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED, detail="refresh_reuse_detected"
+        )
+    if outcome.user_id is None:
         clear_session_cookies(response)
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="invalid_refresh_token")
-    user = db.get(User, user_id)
+    user = db.get(User, outcome.user_id)
     if user is None:
         clear_session_cookies(response)
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="invalid_refresh_token")
 
     access_token, expires_in = create_token(user.id, "access")
-    new_refresh_token = issue_refresh_token(db, user.id)
+    new_refresh_token = issue_refresh_token(db, user.id, outcome.family_id)
     set_session_cookies(response, new_refresh_token)
     return AccessTokenResponse(access_token=access_token, expires_in=expires_in)
 

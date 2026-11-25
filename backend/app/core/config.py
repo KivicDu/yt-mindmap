@@ -8,6 +8,7 @@ must be overridden in production -- ``JWT_SECRET_KEY`` especially.
 from functools import lru_cache
 from pathlib import Path
 from typing import Literal
+from urllib.parse import urlsplit
 
 from pydantic import model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -46,6 +47,10 @@ class Settings(BaseSettings):
     # Auth
     JWT_SECRET_KEY: str = DEFAULT_JWT_SECRET_KEY
     JWT_ALGORITHM: str = "HS256"
+    # Issuer/audience stop a token minted for another service (or a leaked
+    # staging token) from being accepted here even if the signing key matches.
+    JWT_ISSUER: str = "yt-mindmap"
+    JWT_AUDIENCE: str = "yt-mindmap-web"
     ACCESS_TOKEN_TTL_MINUTES: int = 15
     REFRESH_TOKEN_TTL_DAYS: int = 14
 
@@ -73,6 +78,9 @@ class Settings(BaseSettings):
     COOKIE_SECURE: bool = False  # must be True behind HTTPS in production
     COOKIE_SAMESITE: str = "lax"  # "lax" locally, "none" + secure when cross-site
     COOKIE_DOMAIN: str | None = None
+    # Browser origins allowed to rotate the refresh cookie. Defaults to the SPA
+    # and the API host; add more only when the SPA is served elsewhere.
+    REFRESH_ALLOWED_ORIGINS: str = ""
 
     # OAuth. Leave the client id/secret empty to keep the buttons disabled; the
     # routes then send the browser back to /login with an explanatory error.
@@ -152,6 +160,13 @@ class Settings(BaseSettings):
         return self
 
     @model_validator(mode="after")
+    def _guard_debug_email_links(self) -> "Settings":
+        """Never bypass the inbox with one-time links on a public server."""
+        if self.APP_ENV in {"staging", "production"} and self.DEBUG_EMAIL_LINKS:
+            raise ValueError(f"DEBUG_EMAIL_LINKS must be false in {self.APP_ENV}")
+        return self
+
+    @model_validator(mode="after")
     def _guard_production_cookie(self) -> "Settings":
         """A session cookie sent over plaintext HTTP is a stolen session."""
         if self.APP_ENV in {"staging", "production"}:
@@ -163,6 +178,24 @@ class Settings(BaseSettings):
             if self.COOKIE_SAMESITE not in {"lax", "strict", "none"}:
                 raise ValueError("COOKIE_SAMESITE must be lax, strict or none")
         return self
+
+    @property
+    def refresh_allowed_origins(self) -> set[str]:
+        """Origins whose scripts may call /api/auth/refresh with the cookie."""
+
+        def origin_of(url: str) -> str | None:
+            parsed = urlsplit(url)
+            if parsed.scheme in {"http", "https"} and parsed.netloc:
+                return f"{parsed.scheme}://{parsed.netloc}"
+            return None
+
+        origins = {origin_of(self.FRONTEND_URL), origin_of(self.OAUTH_CALLBACK_BASE)}
+        origins.update(
+            item.strip().rstrip("/")
+            for item in self.REFRESH_ALLOWED_ORIGINS.split(",")
+            if item.strip()
+        )
+        return {value for value in origins if value}
 
     @property
     def is_sqlite(self) -> bool:

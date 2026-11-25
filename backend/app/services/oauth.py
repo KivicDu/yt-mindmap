@@ -3,16 +3,22 @@
 The flow is the plain server-side one:
 
 1. ``GET /api/auth/{provider}`` redirects the browser to the provider inside an
-   ``authorize`` URL carrying a random ``state`` value (also stored in a cookie).
+   ``authorize`` URL carrying a random ``state`` and a PKCE S256 challenge.
+   Both the state and the matching code verifier are stored in a short-lived
+   HttpOnly cookie.
 2. The provider sends the browser back to
    ``/api/auth/{provider}/callback?code=...&state=...``.
-3. The callback compares the two ``state`` values, exchanges the code for a
-   token, reads the profile and signs the user in.
+3. The callback compares the state and redeems the code with the verifier,
+   then reads the profile and signs the user in.
 
 Nothing provider-specific leaks into the routes: this module turns whatever the
 provider sends into one :class:`OAuthIdentity`.
 """
 
+import base64
+import hashlib
+import re
+import secrets
 from dataclasses import dataclass
 from urllib.parse import urlencode
 
@@ -34,6 +40,23 @@ HTTP_TIMEOUT_SECONDS = 10.0
 
 # GitHub's API rejects requests without a User-Agent.
 GITHUB_HEADERS = {"Accept": "application/vnd.github+json", "User-Agent": "yt-mindmap"}
+
+# PKCE S256: the verifier stays in a short-lived HttpOnly cookie; only its hash
+# goes to the provider, so an intercepted authorization code cannot be redeemed.
+PKCE_METHOD = "S256"
+PKCE_VERIFIER_BYTES = 48  # token_urlsafe -> 64 URL-safe characters
+PKCE_VERIFIER_RE = re.compile(r"[A-Za-z0-9._~-]{43,128}\Z")
+
+
+def new_code_verifier() -> str:
+    """Return a fresh verifier that satisfies RFC 7636 for both providers."""
+    return secrets.token_urlsafe(PKCE_VERIFIER_BYTES)
+
+
+def code_challenge(verifier: str) -> str:
+    """S256 challenge: base64url(SHA-256(verifier)) without padding."""
+    digest = hashlib.sha256(verifier.encode("ascii")).digest()
+    return base64.urlsafe_b64encode(digest).decode("ascii").rstrip("=")
 
 
 class OAuthError(Exception):
@@ -100,10 +123,12 @@ def redirect_uri(provider: str) -> str:
     return f"{base}/api/auth/{provider}/callback"
 
 
-def build_authorize_url(provider: str, state: str) -> str:
+def build_authorize_url(provider: str, state: str, code_challenge_value: str) -> str:
     config = _config(provider)
     if config is None:
         raise OAuthError("unknown_provider", provider=provider)
+    if not PKCE_VERIFIER_RE.fullmatch(code_challenge_value):
+        raise OAuthError("pkce_invalid", provider=provider)
 
     params = {
         "client_id": config.client_id,
@@ -111,6 +136,8 @@ def build_authorize_url(provider: str, state: str) -> str:
         "response_type": "code",
         "scope": config.scope,
         "state": state,
+        "code_challenge": code_challenge_value,
+        "code_challenge_method": PKCE_METHOD,
     }
     if provider == "google":
         # `offline` is not needed: only the profile is read once at login.
@@ -136,10 +163,12 @@ def _get_json(url: str, token: str, headers: dict[str, str] | None = None) -> ob
     return response.json()
 
 
-def _exchange_code(provider: str, code: str) -> str:
+def _exchange_code(provider: str, code: str, code_verifier: str) -> str:
     config = _config(provider)
     if config is None:
         raise OAuthError("unknown_provider", provider=provider)
+    if not PKCE_VERIFIER_RE.fullmatch(code_verifier):
+        raise OAuthError("pkce_invalid", provider=provider)
 
     payload = {
         "client_id": config.client_id,
@@ -147,6 +176,7 @@ def _exchange_code(provider: str, code: str) -> str:
         "code": code,
         "redirect_uri": redirect_uri(provider),
         "grant_type": "authorization_code",
+        "code_verifier": code_verifier,
     }
     try:
         body = _post_form(config.token_url, payload)
@@ -171,7 +201,8 @@ def _google_identity(token: str) -> OAuthIdentity:
     email = profile.get("email")
     if not isinstance(email, str) or not email:
         raise OAuthError("email_unavailable", provider="google")
-    if profile.get("email_verified") is False:
+    # A missing claim is not consent: treat it exactly like an explicit false.
+    if profile.get("email_verified") is not True:
         raise OAuthError("email_unverified", provider="google")
 
     name = profile.get("name") or profile.get("given_name") or email.split("@")[0]
@@ -193,26 +224,33 @@ def _github_identity(token: str) -> OAuthIdentity:
     if not isinstance(profile, dict):
         raise OAuthError("profile_fetch_failed", provider="github")
 
-    email = profile.get("email")
-    # `email` is null when the user keeps it private, so ask for the address
-    # list and keep only an address GitHub marks as verified.
-    if not isinstance(email, str) or not email:
-        try:
-            addresses = _get_json(GITHUB_EMAILS_URL, token, GITHUB_HEADERS)
-        except (httpx.HTTPError, ValueError) as error:
-            raise OAuthError("profile_fetch_failed", provider="github") from error
+    # The public profile `email` may be unverified; GitHub's own email list is
+    # the only source we trust. Check it even when the profile has an address.
+    try:
+        addresses = _get_json(GITHUB_EMAILS_URL, token, GITHUB_HEADERS)
+    except (httpx.HTTPError, ValueError) as error:
+        raise OAuthError("profile_fetch_failed", provider="github") from error
 
-        verified = [
-            item
-            for item in (addresses if isinstance(addresses, list) else [])
-            if isinstance(item, dict) and item.get("verified")
-        ]
-        primary = next((item for item in verified if item.get("primary")), None)
-        chosen = primary or (verified[0] if verified else None)
-        email = chosen.get("email") if chosen else None
-
-    if not isinstance(email, str) or not email:
+    verified = [
+        item
+        for item in (addresses if isinstance(addresses, list) else [])
+        if isinstance(item, dict)
+        and item.get("verified") is True
+        and isinstance(item.get("email"), str)
+        and item["email"].strip()
+    ]
+    if not verified:
         raise OAuthError("email_unavailable", provider="github")
+
+    profile_email = profile.get("email")
+    if isinstance(profile_email, str) and profile_email:
+        wanted = profile_email.strip().lower()
+        if not any(item["email"].strip().lower() == wanted for item in verified):
+            raise OAuthError("email_unverified", provider="github")
+
+    primary = next((item for item in verified if item.get("primary") is True), None)
+    chosen = primary or verified[0]
+    email = chosen["email"].strip()
 
     name = profile.get("name") or profile.get("login") or email.split("@")[0]
     return OAuthIdentity(
@@ -221,17 +259,18 @@ def _github_identity(token: str) -> OAuthIdentity:
         email=email,
         display_name=str(name)[:80],
         avatar_url=profile.get("avatar_url") or None,
+        email_verified=True,
     )
 
 
-def exchange_code(provider: str, code: str) -> OAuthIdentity:
+def exchange_code(provider: str, code: str, code_verifier: str) -> OAuthIdentity:
     """Turn an authorization code into a normalised identity or raise OAuthError."""
     if provider not in PROVIDERS:
         raise OAuthError("unknown_provider", provider=provider)
     if not is_configured(provider):
         raise OAuthError("oauth_not_configured", provider=provider)
 
-    token = _exchange_code(provider, code)
+    token = _exchange_code(provider, code, code_verifier)
     identity = _google_identity(token) if provider == "google" else _github_identity(token)
     if not identity.provider_id:
         raise OAuthError("profile_fetch_failed", provider=provider)

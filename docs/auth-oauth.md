@@ -152,17 +152,20 @@ psql postgresql://ytmindmap:ytmindmap@127.0.0.1:5432/ytmindmap \
 ```
 Browser                    API (localhost:8001)              Provider
   |  GET /api/auth/google        |                                 |
-  |----------------------------->| 302 + state cookie              |
+  |----------------------------->| 302 + state/PKCE cookie         |
   | 302 to accounts.google.com ----------------------------------->|
   |                              |                                 |
   |  GET /callback?code&state ------------------------------------>|
+  |                              |  redeem code with verifier      |
   |                              |  login_redirect() with cookies  |
   | 302 to /dashboard <----------|                                 |
 ```
 
-- The `state` value is random (`secrets.token_urlsafe`), stored in an HttpOnly
-  cookie scoped to `/api/auth`, and compared with `compare_digest` on return.
-  It expires after 10 minutes.
+- The `state` value is random (`secrets.token_urlsafe`), stored with a PKCE
+  `code_verifier` in one HttpOnly cookie scoped to `/api/auth`, and compared with
+  `compare_digest` on return. The authorize URL carries only the S256 challenge;
+  the verifier goes straight to the token endpoint. Both providers support S256.
+  The cookie expires after 10 minutes.
 - The callback sets the same two cookies as a password login: the HttpOnly
   refresh token and the readable `ytmm_session` hint. The SPA then calls
   `/auth/refresh` and `/auth/me` as usual — no token ever appears in the URL.
@@ -177,8 +180,16 @@ Signing in with Google/GitHub using an email that already has a password account
 - `provider_id` becomes `google:<sub>` / `github:<id>`;
 - the password keeps working, and `provider` stays `local` so the dashboard still
   says “Email & mật khẩu”;
-- the account is marked `email_verified` because the provider verified it;
+- the account is marked `email_verified` only when the provider explicitly
+  reports a verified address: Google's `email_verified: true` (a missing claim is
+  rejected) and GitHub's verified primary address from `/user/emails`;
 - the avatar is filled in only when it was empty.
+
+Refresh cookies rotate on every `/auth/refresh`. Replaying an old cookie revokes
+the whole rotation family and returns `refresh_reuse_detected`. The route also
+rejects requests whose `Origin` or `Sec-Fetch-Site` says they came from another
+site, even when `COOKIE_SAMESITE=none`. Set `REFRESH_ALLOWED_ORIGINS` if the SPA
+is hosted somewhere other than `FRONTEND_URL` or the API's `OAUTH_CALLBACK_BASE`.
 
 ## Troubleshooting
 
@@ -190,9 +201,11 @@ Signing in with Google/GitHub using an email that already has a password account
 | `origin_mismatch` (Google) | `http://localhost:5173` is missing from *Authorized JavaScript origins*. Not needed for this server-side flow, but harmless to keep. |
 | `redirect_uri is not associated with this application` (GitHub) | The registered callback URL must match exactly, including the port and path. |
 | Google shows "access blocked" | The client is on a different project than the configured app, or the account is outside an *Internal* audience. With only `openid email profile`, *Testing* mode accepts any Google account. |
-| `error=oauth_state_mismatch` | The state cookie expired (10 min) or the callback was opened twice. Start again from `/login`. |
+| `error=oauth_state_mismatch` | The state cookie expired (10 min), the callback was opened twice, or the cookie predates PKCE. Start again from `/login`. |
 | Signed in, then immediately logged out | Frontend and API are on different hosts (e.g. `127.0.0.1` vs `localhost`), so the cookies are not shared. Use one host name for both. |
 | `error=email_unavailable` | GitHub account has no verified email address. Add one on GitHub or use email sign-up. |
+| `error=email_unverified` | The provider did not explicitly confirm the address (Google omits `email_verified`, or GitHub's public email is unverified). Verify it with the provider first. |
+| `403 refresh_cross_site_blocked` | A script on another origin tried to rotate the refresh cookie. Set `REFRESH_ALLOWED_ORIGINS` if that origin is your own SPA. |
 | Buttons stay disabled after editing `.env` | The API caches settings per process; restart uvicorn and hard-reload `/login`. |
 
 ## Tests

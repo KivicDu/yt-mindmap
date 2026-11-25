@@ -1,8 +1,13 @@
 """Auth endpoints, exercised against an in-memory SQLite database."""
 
+from datetime import UTC, datetime, timedelta
+from uuid import uuid4
+
+import jwt
 from fastapi.testclient import TestClient
 from sqlalchemy.orm import Session
 
+from app.core.config import get_settings
 from app.models.user import User
 from app.utils.security import create_token
 
@@ -79,6 +84,38 @@ def test_me_rejects_a_refresh_token(client: TestClient):
     assert response.status_code == 401
 
 
+def test_me_rejects_tokens_without_the_expected_issuer_and_audience(
+    client: TestClient, db_session: Session
+):
+    user_id = register(client).json()["user"]["id"]
+    settings = get_settings()
+    now = datetime.now(UTC)
+    base = {
+        "sub": user_id,
+        "typ": "access",
+        "iat": now,
+        "exp": now + timedelta(minutes=5),
+        "jti": uuid4().hex,
+    }
+    for extra in (
+        {},  # neither claim
+        {"iss": settings.JWT_ISSUER},  # no audience
+        {"aud": settings.JWT_AUDIENCE},  # no issuer
+        {"iss": "another-service", "aud": settings.JWT_AUDIENCE},
+        {"iss": settings.JWT_ISSUER, "aud": "another-app"},
+    ):
+        token = jwt.encode(
+            base | extra, settings.JWT_SECRET_KEY, algorithm=settings.JWT_ALGORITHM
+        )
+        assert (
+            client.get(
+                "/api/auth/me", headers={"Authorization": f"Bearer {token}"}
+            ).status_code
+            == 401
+        )
+    assert db_session.query(User).count() == 1
+
+
 def test_refresh_rotates_the_cookie_and_returns_a_new_access_token(client: TestClient):
     register(client)
     first_cookie = client.cookies.get("ytmm_refresh_token")
@@ -103,6 +140,43 @@ def test_refresh_without_cookie_fails(client: TestClient):
     assert response.json()["detail"] == "missing_refresh_token"
 
 
+def test_refresh_rejects_a_cross_site_request(client: TestClient):
+    register(client)
+    blocked = client.post(
+        "/api/auth/refresh", headers={"Origin": "https://evil.example"}
+    )
+    assert blocked.status_code == 403
+    assert blocked.json()["detail"] == "refresh_cross_site_blocked"
+
+    fetched = client.post(
+        "/api/auth/refresh", headers={"Sec-Fetch-Site": "cross-site"}
+    )
+    assert fetched.status_code == 403
+
+    # The cookie is untouched: the real SPA can still rotate it.
+    assert client.post("/api/auth/refresh").status_code == 200
+
+
+def test_refresh_accepts_the_site_and_frontend_origins(client: TestClient, monkeypatch):
+    settings = get_settings()
+    register(client)
+    monkeypatch.setattr(settings, "REFRESH_ALLOWED_ORIGINS", "https://app.example.com")
+
+    assert (
+        client.post(
+            "/api/auth/refresh",
+            headers={"Origin": settings.FRONTEND_URL, "Sec-Fetch-Site": "same-site"},
+        ).status_code
+        == 200
+    )
+    assert (
+        client.post(
+            "/api/auth/refresh", headers={"Origin": "https://app.example.com/"}
+        ).status_code
+        == 200
+    )
+
+
 def test_refresh_with_access_token_cookie_fails(client: TestClient):
     user_id = register(client).json()["user"]["id"]
     access_token, _ = create_token(user_id, "access")
@@ -115,6 +189,46 @@ def test_refresh_with_access_token_cookie_fails(client: TestClient):
     response = client.post("/api/auth/refresh")
     assert response.status_code == 401
     assert response.json()["detail"] == "invalid_refresh_token"
+
+
+def test_replaying_a_rotated_token_revokes_the_whole_family(client: TestClient):
+    register(client)
+    first = client.cookies.get("ytmm_refresh_token")
+    assert client.post("/api/auth/refresh").status_code == 200
+    second = client.cookies.get("ytmm_refresh_token")
+    assert second and second != first
+
+    client.cookies.clear()
+    client.cookies.set("ytmm_refresh_token", first)
+    replay = client.post("/api/auth/refresh")
+    assert replay.status_code == 401
+    assert replay.json()["detail"] == "refresh_reuse_detected"
+
+    # The fresh token from the same login chain is dead too.
+    client.cookies.clear()
+    client.cookies.set("ytmm_refresh_token", second)
+    assert client.post("/api/auth/refresh").status_code == 401
+
+
+def test_replay_does_not_sign_out_an_unrelated_login(client: TestClient):
+    register(client)
+    first_family = client.cookies.get("ytmm_refresh_token")
+    assert client.post("/api/auth/refresh").status_code == 200
+
+    client.cookies.clear()
+    assert client.post(
+        "/api/auth/login", json={"email": "kivic@example.com", "password": "hunter2pass"}
+    ).status_code == 200
+    other_family = client.cookies.get("ytmm_refresh_token")
+    assert other_family and other_family != first_family
+
+    client.cookies.clear()
+    client.cookies.set("ytmm_refresh_token", first_family)
+    assert client.post("/api/auth/refresh").json()["detail"] == "refresh_reuse_detected"
+
+    client.cookies.clear()
+    client.cookies.set("ytmm_refresh_token", other_family)
+    assert client.post("/api/auth/refresh").status_code == 200
 
 
 def test_logout_clears_the_cookie(client: TestClient):
