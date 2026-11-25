@@ -26,6 +26,10 @@ class RefreshToken(Base):
         index=True,
         nullable=False,
     )
+    # Rotation keeps the family id. A replayed token revokes every row in its
+    # family, not just the one already consumed. Nullable for older rows whose
+    # tokens were minted before families existed.
+    family_id: Mapped[str | None] = mapped_column(String(32), index=True, nullable=True)
     expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     revoked_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True

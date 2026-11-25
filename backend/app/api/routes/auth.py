@@ -127,17 +127,25 @@ def refresh(
     if not refresh_token:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="missing_refresh_token")
 
-    user_id = consume_refresh_token(db, refresh_token)
-    if user_id is None:
+    outcome = consume_refresh_token(db, refresh_token)
+    if outcome.reuse_detected:
+        # A revoked token came back: the whole chain is now dead. Log the event
+        # without the token itself, which is a bearer credential.
+        logger.warning("Refresh token reuse detected for user %s", outcome.user_id or "unknown")
+        clear_session_cookies(response)
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED, detail="refresh_reuse_detected"
+        )
+    if outcome.user_id is None:
         clear_session_cookies(response)
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="invalid_refresh_token")
-    user = db.get(User, user_id)
+    user = db.get(User, outcome.user_id)
     if user is None:
         clear_session_cookies(response)
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="invalid_refresh_token")
 
     access_token, expires_in = create_token(user.id, "access")
-    new_refresh_token = issue_refresh_token(db, user.id)
+    new_refresh_token = issue_refresh_token(db, user.id, outcome.family_id)
     set_session_cookies(response, new_refresh_token)
     return AccessTokenResponse(access_token=access_token, expires_in=expires_in)
 

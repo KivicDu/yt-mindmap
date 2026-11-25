@@ -47,8 +47,14 @@ def _ttl(token_type: TokenType) -> timedelta:
     return timedelta(days=settings.REFRESH_TOKEN_TTL_DAYS)
 
 
-def create_token(subject: str, token_type: TokenType) -> tuple[str, int]:
-    """Return ``(token, lifetime_in_seconds)`` for one user id."""
+def create_token(
+    subject: str, token_type: TokenType, family_id: str | None = None
+) -> tuple[str, int]:
+    """Return ``(token, lifetime_in_seconds)`` for one user id.
+
+    ``family_id`` is only meaningful for refresh tokens: it ties one rotated
+    chain together so a replayed token can revoke the whole chain.
+    """
     settings = get_settings()
     now = datetime.now(UTC)
     ttl = _ttl(token_type)
@@ -61,6 +67,8 @@ def create_token(subject: str, token_type: TokenType) -> tuple[str, int]:
         "exp": now + ttl,
         "jti": uuid4().hex,
     }
+    if token_type == "refresh":
+        payload["fam"] = family_id or uuid4().hex
     token = jwt.encode(payload, settings.JWT_SECRET_KEY, algorithm=settings.JWT_ALGORITHM)
     return token, int(ttl.total_seconds())
 

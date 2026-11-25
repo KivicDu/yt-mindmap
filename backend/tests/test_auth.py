@@ -154,6 +154,46 @@ def test_refresh_with_access_token_cookie_fails(client: TestClient):
     assert response.json()["detail"] == "invalid_refresh_token"
 
 
+def test_replaying_a_rotated_token_revokes_the_whole_family(client: TestClient):
+    register(client)
+    first = client.cookies.get("ytmm_refresh_token")
+    assert client.post("/api/auth/refresh").status_code == 200
+    second = client.cookies.get("ytmm_refresh_token")
+    assert second and second != first
+
+    client.cookies.clear()
+    client.cookies.set("ytmm_refresh_token", first)
+    replay = client.post("/api/auth/refresh")
+    assert replay.status_code == 401
+    assert replay.json()["detail"] == "refresh_reuse_detected"
+
+    # The fresh token from the same login chain is dead too.
+    client.cookies.clear()
+    client.cookies.set("ytmm_refresh_token", second)
+    assert client.post("/api/auth/refresh").status_code == 401
+
+
+def test_replay_does_not_sign_out_an_unrelated_login(client: TestClient):
+    register(client)
+    first_family = client.cookies.get("ytmm_refresh_token")
+    assert client.post("/api/auth/refresh").status_code == 200
+
+    client.cookies.clear()
+    assert client.post(
+        "/api/auth/login", json={"email": "kivic@example.com", "password": "hunter2pass"}
+    ).status_code == 200
+    other_family = client.cookies.get("ytmm_refresh_token")
+    assert other_family and other_family != first_family
+
+    client.cookies.clear()
+    client.cookies.set("ytmm_refresh_token", first_family)
+    assert client.post("/api/auth/refresh").json()["detail"] == "refresh_reuse_detected"
+
+    client.cookies.clear()
+    client.cookies.set("ytmm_refresh_token", other_family)
+    assert client.post("/api/auth/refresh").status_code == 200
+
+
 def test_logout_clears_the_cookie(client: TestClient):
     register(client)
     response = client.post("/api/auth/logout")

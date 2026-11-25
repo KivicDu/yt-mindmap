@@ -129,7 +129,7 @@ def test_password_change_revokes_other_devices(client: TestClient):
     response = client.post("/api/auth/refresh")
 
     assert response.status_code == 401
-    assert response.json()["detail"] == "invalid_refresh_token"
+    assert response.json()["detail"] == "refresh_reuse_detected"
 
 
 def test_password_change_rejects_an_oauth_only_account(
@@ -170,7 +170,7 @@ def test_logout_revokes_the_refresh_token(client: TestClient):
     response = client.post("/api/auth/refresh")
 
     assert response.status_code == 401
-    assert response.json()["detail"] == "invalid_refresh_token"
+    assert response.json()["detail"] == "refresh_reuse_detected"
 
 
 def test_refresh_token_rotation_rejects_replay(client: TestClient):
@@ -186,7 +186,7 @@ def test_refresh_token_rotation_rejects_replay(client: TestClient):
     response = client.post("/api/auth/refresh")
 
     assert response.status_code == 401
-    assert response.json()["detail"] == "invalid_refresh_token"
+    assert response.json()["detail"] == "refresh_reuse_detected"
 
 
 # ---------------------------------------------------------------- verification
