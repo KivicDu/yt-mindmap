@@ -73,6 +73,22 @@ def test_log_backend_writes_to_the_log_and_skips_smtp(
     assert "Nội dung" in caplog.text
 
 
+def test_log_backend_redacts_one_time_links(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+):
+    monkeypatch.setattr(get_settings(), "EMAIL_BACKEND", "log")
+    secret = "one-time-reset-secret"
+    link = f"http://localhost:5173/reset-password?token={secret}&x=1"
+
+    with caplog.at_level("INFO"):
+        emailer.send_email("reader@example.com", "Đặt lại mật khẩu", f"Mở {link}")
+
+    assert "reader@example.com" in caplog.text
+    assert "reset-password" in caplog.text
+    assert secret not in caplog.text
+    assert "token=[REDACTED]" in caplog.text
+
+
 def test_smtp_backend_sends_the_message(
     monkeypatch: pytest.MonkeyPatch, smtp_settings
 ):

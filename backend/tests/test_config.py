@@ -91,6 +91,16 @@ def test_local_environments_still_allow_insecure_cookies():
     assert settings.COOKIE_SECURE is False
 
 
+def test_public_environments_reject_debug_email_links():
+    with pytest.raises(ValidationError, match="DEBUG_EMAIL_LINKS"):
+        make_settings(
+            APP_ENV="production",
+            JWT_SECRET_KEY=STRONG_SECRET,
+            COOKIE_SECURE=True,
+            DEBUG_EMAIL_LINKS=True,
+        )
+
+
 def test_refresh_origins_come_from_the_spa_and_api_urls():
     settings = make_settings(
         FRONTEND_URL="https://app.example.com/",

@@ -160,6 +160,13 @@ class Settings(BaseSettings):
         return self
 
     @model_validator(mode="after")
+    def _guard_debug_email_links(self) -> "Settings":
+        """Never bypass the inbox with one-time links on a public server."""
+        if self.APP_ENV in {"staging", "production"} and self.DEBUG_EMAIL_LINKS:
+            raise ValueError(f"DEBUG_EMAIL_LINKS must be false in {self.APP_ENV}")
+        return self
+
+    @model_validator(mode="after")
     def _guard_production_cookie(self) -> "Settings":
         """A session cookie sent over plaintext HTTP is a stolen session."""
         if self.APP_ENV in {"staging", "production"}:

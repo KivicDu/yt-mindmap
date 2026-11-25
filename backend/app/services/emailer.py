@@ -11,12 +11,21 @@ mail server from holding a request open.
 """
 
 import logging
+import re
 import smtplib
 from email.message import EmailMessage
 
 from app.core.config import get_settings
 
 logger = logging.getLogger(__name__)
+
+# The log backend is a development convenience, but a reset/verification URL
+# printed there is a live credential for anyone who can read server logs.
+ONE_TIME_LINK_RE = re.compile(r"([?&](?:token|code)=)[^&\s\"'<>]+", re.IGNORECASE)
+
+
+def _log_safe(text: str) -> str:
+    return ONE_TIME_LINK_RE.sub(r"\1[REDACTED]", text)
 
 
 class EmailDeliveryError(RuntimeError):
@@ -27,7 +36,7 @@ def send_email(to: str, subject: str, text: str, html: str | None = None) -> Non
     settings = get_settings()
 
     if settings.EMAIL_BACKEND == "log":
-        logger.info("Email to %s\nSubject: %s\n\n%s", to, subject, text)
+        logger.info("Email to %s\nSubject: %s\n\n%s", to, subject, _log_safe(text))
         return
 
     if not settings.SMTP_HOST:
