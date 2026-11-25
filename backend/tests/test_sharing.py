@@ -1,7 +1,8 @@
 """Sharing: link roles, invite-only access, rotation and collaborator writes."""
 
-from app.services import sharing as sharing_service
 from fastapi.testclient import TestClient
+
+from app.services import sharing as sharing_service
 
 NODES = [
     {

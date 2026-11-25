@@ -415,16 +415,9 @@ async def root():
 
 @app.get("/healthz")
 async def healthz():
-    return {
-        "status": "ok",
-        "sessions": len(sessions),
-        "cached_videos": len(video_cache),
-        "ai_configured": ai_engine.configured,
-        "ai_model": ai_engine.model_name,
-        # Empty unless GEMINI_BASE_URL points at a mock or proxy.
-        "ai_base_url": ai_engine.base_url,
-        "ai_tokens": dict(ai_engine.usage_totals),
-    }
+    # A liveness probe needs one bit. Model names, proxy URLs and counters are
+    # deployment details that must not be handed to an anonymous caller.
+    return {"status": "ok"}
 
 async def fetch_oembed(video_id: str) -> dict[str, Any]:
     """Public video metadata from oEmbed. A network failure returns checked=False.
@@ -778,16 +771,21 @@ async def get_transcript(
                 **session_payload(session_id),
             }
         except ValueError as e:
-            raise HTTPException(
-                status_code=400,
-                detail={"code": "invalid_subtitle_file", "message": str(e)},
-            ) from e
-        except Exception as e:
+            logger.warning("Invalid uploaded subtitle: %s", e)
             raise HTTPException(
                 status_code=400,
                 detail={
                     "code": "invalid_subtitle_file",
-                    "message": f"Failed to parse transcript: {str(e)}",
+                    "message": "Không đọc được phụ đề đã tải lên. Kiểm tra lại định dạng file.",
+                },
+            ) from e
+        except Exception as e:
+            logger.warning("Could not parse uploaded subtitle: %s", e)
+            raise HTTPException(
+                status_code=400,
+                detail={
+                    "code": "invalid_subtitle_file",
+                    "message": "Không đọc được phụ đề đã tải lên. Kiểm tra lại định dạng file.",
                 },
             ) from e
 
@@ -818,11 +816,12 @@ async def get_transcript(
                 detail={"code": e.code, "message": e.message},
             ) from e
         except Exception as e:
+            logger.warning("Could not fetch YouTube transcript: %s", e)
             raise HTTPException(
                 status_code=502,
                 detail={
                     "code": "youtube_unreachable",
-                    "message": f"Failed to fetch transcript: {str(e)}",
+                    "message": "Không lấy được phụ đề từ YouTube. Thử lại sau vài phút.",
                 },
             ) from e
 
@@ -931,11 +930,12 @@ async def get_transcript(
                 **session_payload(session_id),
             }
         except Exception as e:
+            logger.warning("Could not create a study session: %s", e)
             raise HTTPException(
                 status_code=500,
                 detail={
                     "code": "session_error",
-                    "message": f"Could not create the session: {str(e)}",
+                    "message": "Không tạo được phiên học. Thử lại sau vài phút.",
                 },
             ) from e
 
@@ -1273,7 +1273,14 @@ async def edit_node(
             pinned=request.pinned,
         )
     except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e)) from e
+        logger.warning("Invalid node update: %s", e)
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "code": "invalid_node",
+                "message": "label must not be empty",
+            },
+        ) from e
 
     if node is None:
         raise HTTPException(status_code=404, detail="node_not_found")
