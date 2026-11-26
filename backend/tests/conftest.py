@@ -56,6 +56,10 @@ def isolated_state(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     # with a fake Data API client; the key is never read from the real env.
     monkeypatch.setattr(settings, "YOUTUBE_SEARCH_ENABLED", False)
     monkeypatch.setattr(settings, "YOUTUBE_DATA_API_KEY", None)
+    # ADR 0017 is exercised in its own tests with fake captions and a fake
+    # verifier reply. Everywhere else the plain generation path stays unchanged.
+    monkeypatch.setattr(settings, "MAP_GROUNDING_ENABLED", False)
+    monkeypatch.setattr(settings, "MAP_VERIFY_MODEL_ENABLED", False)
     reset_classifier_cache()
     reset_search_cache()
     reset_quiz_cache()

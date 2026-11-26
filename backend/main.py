@@ -14,7 +14,7 @@ import uuid
 from typing import Any
 
 import httpx
-from fastapi import Depends, FastAPI, HTTPException, Query
+from fastapi import Depends, FastAPI, HTTPException, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
@@ -22,18 +22,24 @@ from sqlalchemy.orm import Session
 from sse_starlette.sse import EventSourceResponse
 from starlette.concurrency import run_in_threadpool
 
-from ai_engine import MAX_RESTRUCTURE_CHARS, ai_engine, normalize_mode
+from ai_engine import MAX_RESTRUCTURE_CHARS, ai_engine, nodes_to_markdown, normalize_mode
 from app.api.deps import get_current_user, get_optional_user
 from app.api.router import api_router
 from app.core.config import get_settings
 from app.db.base import utcnow
 from app.db.session import SessionLocal, get_db
-from app.middleware.rate_limit import RateLimitMiddleware
+from app.middleware.rate_limit import RateLimitMiddleware, charge_extra_ai_unit
 from app.models.project import Project
 from app.models.user import User
 from app.models.video_transcript import VideoTranscript
 from app.schemas.project import AutosaveRequest, OutputLanguageRequest
-from app.services import content_classifier, content_policy, stream_tickets, video_visuals
+from app.services import (
+    content_classifier,
+    content_policy,
+    map_verifier,
+    stream_tickets,
+    video_visuals,
+)
 from app.services import projects as project_service
 from app.services import sharing as sharing_service
 from app.services.asr_jobs import (
@@ -1375,6 +1381,7 @@ async def stream_updates(ticket: str, db: Session = Depends(get_db)):
 @app.post("/update-map")
 async def update_map(
     request: UpdateMapRequest,
+    http_request: Request,
     user: User | None = Depends(get_optional_user),
     db: Session = Depends(get_db),
 ):
@@ -1450,6 +1457,18 @@ async def update_map(
 
         time_range = chunk_time_range(chunk)
 
+        # ADR 0017: grounding is on by default. The model repair stage is one
+        # extra Gemini call, so it is charged here (the middleware charged the
+        # generation call already) and degrades to deterministic-only if the
+        # daily budget is spent.
+        settings = get_settings()
+        grounding_enabled = settings.MAP_GROUNDING_ENABLED
+        use_verifier = grounding_enabled and settings.MAP_VERIFY_MODEL_ENABLED
+        if use_verifier and not ai_engine.configured:
+            use_verifier = False
+        if use_verifier and not charge_extra_ai_unit(http_request):
+            use_verifier = False
+
         ai_result = await asyncio.to_thread(
             ai_engine.generate_incremental_update,
             current_markdown=current_markdown,
@@ -1471,6 +1490,27 @@ async def update_map(
                 "chunk_size": len(chunk),
             }
 
+        raw_nodes = ai_result.get("new_nodes") or []
+        verification = {"checked": 0, "grounded": 0, "repaired": 0, "dropped": 0, "model_used": False}
+        if grounding_enabled:
+            outcome = await asyncio.to_thread(
+                map_verifier.verify_and_repair,
+                raw_nodes,
+                transcript,
+                use_model=use_verifier,
+                language=session.get("output_language"),
+                default_time=float(time_range[0]),
+            )
+            raw_nodes = outcome["nodes"]
+            verification = outcome["stats"]
+            # The diff must describe the tree we actually store, not the raw
+            # model reply that still contains nodes the verifier dropped.
+            markdown_diff = nodes_to_markdown(
+                raw_nodes, default_time=float(time_range[0])
+            )
+        else:
+            markdown_diff = ai_result.get("markdown_diff") or ""
+
         # The chunk was processed: advance even when nothing new was found,
         # otherwise the same chunk would be sent to the AI on every tick.
         new_consumed = max(consumed_until, time_range[1])
@@ -1478,7 +1518,7 @@ async def update_map(
         if ai_result.get("summary"):
             session["summary_so_far"] = ai_result["summary"]
 
-        if ai_result.get("should_update") and ai_result.get("markdown_diff"):
+        if ai_result.get("should_update") and markdown_diff:
             # Keep the state the AI is about to replace, so the user can roll
             # back a chunk that derails the map. Throttled inside snapshot().
             if project is not None:
@@ -1486,7 +1526,7 @@ async def update_map(
                     db, project, author_id=user.id if user else None
                 )
             new_nodes = normalize_nodes(
-                ai_result.get("new_nodes") or [],
+                raw_nodes,
                 default_time=float(time_range[0]),
             )
             session["nodes"] = merge_nodes(session.get("nodes", []), new_nodes)
@@ -1495,9 +1535,10 @@ async def update_map(
             cache_video_map(session.get("video_id"), session)
             event_data = {
                 "type": "diff",
-                "markdown_diff": ai_result["markdown_diff"],
+                "markdown_diff": markdown_diff,
                 "chunk_range": time_range,
                 "new_nodes": new_nodes,
+                "verification": verification,
                 # Full state, so a client that missed an event can resync.
                 "nodes": session["nodes"],
                 "markdown": session["markdown"],
@@ -1512,6 +1553,7 @@ async def update_map(
                 "should_update": True,
                 "consumed_until": new_consumed,
                 "summary": session.get("summary_so_far", ""),
+                "verification": verification,
             }
 
         cache_video_map(session.get("video_id"), session)
@@ -1522,6 +1564,7 @@ async def update_map(
             "consumed_until": new_consumed,
             "chunk_size": len(chunk),
             "summary": session.get("summary_so_far", ""),
+            "verification": verification,
         }
     finally:
         lock.release()
@@ -1834,7 +1877,12 @@ async def restructure_map(
             },
         )
 
-    nodes = normalize_nodes(outcome.get("nodes") or [])
+    # ADR 0017: a restructure keeps the timestamps, so the caption evidence can
+    # be carried over without another verification or model call.
+    restructured = map_verifier.carry_evidence(
+        session.get("nodes", []), outcome.get("nodes") or []
+    )
+    nodes = normalize_nodes(restructured)
     if not nodes:
         # An empty reply must never replace a map the learner already has.
         raise HTTPException(

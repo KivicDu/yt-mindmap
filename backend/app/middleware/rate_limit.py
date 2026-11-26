@@ -134,6 +134,27 @@ class RateLimitMiddleware:
         await self.app(scope, receive, send)
 
 
+def charge_extra_ai_unit(request: Request) -> bool:
+    """Charge the ADR 0017 verifier call made inside ``/update-map``.
+
+    The middleware already charged one unit when the request arrived. A route
+    that spends a second Gemini call must account for it here, otherwise the
+    daily quota would silently undercount. Returns False when the budget is
+    gone; the route then falls back to deterministic-only checking.
+    """
+    settings = get_settings()
+    if not settings.RATE_LIMIT_ENABLED:
+        return True
+    subject = _subject(request)
+    daily_limit = (
+        settings.AI_DAILY_QUOTA_PER_USER
+        if subject.startswith("user:")
+        else settings.AI_DAILY_QUOTA_ANONYMOUS
+    )
+    allowed, _ = ai_quota.consume(f"ai:{subject}", daily_limit)
+    return allowed
+
+
 def _client_ip(request: Request) -> str:
     settings = get_settings()
     ip = request.client.host if request.client else "unknown"
