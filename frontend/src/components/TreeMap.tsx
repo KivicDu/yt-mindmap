@@ -11,7 +11,7 @@ import {
   type MapNode,
   type MarkmapNode,
 } from '../lib/mindmapTree'
-import { mapWheelGesture } from '../lib/mapGestures'
+import { consumeWheel, mapWheelGesture } from '../lib/mapGestures'
 import { styleVars, type MapPalette } from '../lib/mapStyle'
 import type { MindMapHandle, MindMapProps } from '../lib/mapView'
 import './MindMap.css'
@@ -263,17 +263,23 @@ const TreeMap = forwardRef<MindMapHandle, TreeMapProps>(
     /**
      * markmap's own wheel-to-pan listener is installed through d3 `.on()`,
      * which Safari treats as passive: its `preventDefault()` is ignored and
-     * the whole page scrolls along with the map. Bind our own non-passive
-     * listener and let d3 keep the pinch (ctrl+wheel) path to itself.
+     * the whole page scrolls along with the map. We bind a capture-phase,
+     * non-passive listener instead and cancel every wheel before Safari can
+     * turn a horizontal swipe into back/forward navigation. `scrollForPan`
+     * keeps d3 away from plain wheels, so stopping those here is safe; pinch
+     * (ctrl+wheel) still reaches d3 for zooming.
      */
     const handleWheel = useCallback((event: WheelEvent) => {
-      if (event.ctrlKey) return
+      const isPinch = event.ctrlKey
+      // Cancel before checking the renderer: Safari decides about history
+      // navigation on the raw wheel event, not after our gesture handling.
+      consumeWheel(event, !isPinch)
+      if (isPinch) return
       const svg = refSvg.current
       const instance = mm.current
       if (!svg || !instance) return
       const gesture = mapWheelGesture(event, svg.getBoundingClientRect())
       if (gesture.type !== 'pan') return
-      event.preventDefault()
       const current = (svg as any).__zoom
       if (!current) return
       // Same translation markmap uses: move by the finger delta in screen
@@ -306,7 +312,7 @@ const TreeMap = forwardRef<MindMapHandle, TreeMapProps>(
           color: colorFor,
           lineWidth: (node: any) => ((node?.state?.depth ?? 0) <= 1 ? 2 : 1.25),
         })
-        svg.addEventListener('wheel', handleWheel, { passive: false })
+        svg.addEventListener('wheel', handleWheel, { passive: false, capture: true })
         // markmap rewrites every node's `class` attribute on each render — and
         // it renders again from its own ResizeObserver, after `setData` has
         // resolved. Applying the ring once is therefore not enough: it can be
@@ -335,7 +341,7 @@ const TreeMap = forwardRef<MindMapHandle, TreeMapProps>(
         if (highlightTimer.current) {
           window.clearTimeout(highlightTimer.current)
         }
-        refSvg.current?.removeEventListener('wheel', handleWheel)
+        refSvg.current?.removeEventListener('wheel', handleWheel, true)
         selectionObserver.current?.disconnect()
         selectionObserver.current = null
         mm.current?.destroy()

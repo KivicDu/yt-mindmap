@@ -7,6 +7,9 @@
   flex-direction: column;
   height: 100dvh;
   overflow: hidden;
+  /* Belt and braces for the narrow layout, where the shell scrolls: never
+     chain an unconsumed horizontal delta up to the window. */
+  overscroll-behavior-x: none;
   background: var(--paper);
   color: var(--ink);
 }
@@ -391,6 +394,10 @@
 .panel--canvas {
   grid-area: canvas;
   background: var(--paper);
+  /* A swipe that reaches the edge of the canvas must not be handed to the
+     window: Safari would read the leftover horizontal delta as a back/forward
+     navigation and flip the page. */
+  overscroll-behavior: none;
 }
 
 .panel__head {
@@ -448,6 +455,7 @@
 
 .panel__body--canvas {
   background: var(--paper);
+  overscroll-behavior: none;
 }
 
 .panel__body--details {

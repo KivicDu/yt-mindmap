@@ -7,7 +7,7 @@ import {
   forwardRef,
 } from 'react'
 import type { KeyboardEvent, PointerEvent as ReactPointerEvent } from 'react'
-import { mapWheelGesture } from '../lib/mapGestures'
+import { consumeWheel, mapWheelGesture } from '../lib/mapGestures'
 import { branchColor, styleVars, type MapStyle } from '../lib/mapStyle'
 import type { SvgLayout } from '../lib/svgLayout'
 import type { MindMapHandle } from '../lib/mapView'
@@ -175,9 +175,12 @@ const SvgMapCanvas = forwardRef<MindMapHandle, SvgMapCanvasProps>(
 
     const handleWheel = useCallback((event: WheelEvent) => {
       // React attaches `wheel` to the root as a passive listener, so calling
-      // preventDefault there is ignored and the browser still scrolls or
-      // pinch-zooms the whole page. This handler is bound natively instead.
-      event.preventDefault()
+      // preventDefault there is ignored and the browser still scrolls, pinch-
+      // zooms the page, or reads a horizontal swipe as back/forward navigation.
+      // Cancel in the capture phase, before any descendant can chain the delta
+      // upward. Every gesture here is ours, including pinch, so nothing needs
+      // to travel on to another wheel handler.
+      consumeWheel(event)
       const rect = refSvg.current?.getBoundingClientRect()
       if (!rect) return
       const gesture = mapWheelGesture(event, rect)
@@ -205,8 +208,8 @@ const SvgMapCanvas = forwardRef<MindMapHandle, SvgMapCanvasProps>(
     useEffect(() => {
       const svg = refSvg.current
       if (!svg) return
-      svg.addEventListener('wheel', handleWheel, { passive: false })
-      return () => svg.removeEventListener('wheel', handleWheel)
+      svg.addEventListener('wheel', handleWheel, { passive: false, capture: true })
+      return () => svg.removeEventListener('wheel', handleWheel, true)
     }, [handleWheel])
 
     const handleClick = (event: React.MouseEvent<SVGSVGElement>) => {
