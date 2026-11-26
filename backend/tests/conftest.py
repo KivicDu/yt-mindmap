@@ -12,6 +12,7 @@ import main as main_module
 from app.core.config import get_settings
 from app.db.base import Base
 from app.db.session import get_db
+from app.services.asr_jobs import reset_asr_jobs
 from app.services.content_classifier import reset_classifier_cache
 from app.services.rate_limit import reset_rate_limits
 from app.services.review import reset_quiz_cache
@@ -47,14 +48,19 @@ def isolated_state(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     # Older sharing fixtures create projects directly, without a video verdict.
     # Layer 3 is exercised explicitly in test_share_policy.py with it enabled.
     monkeypatch.setattr(settings, "CONTENT_SHARE_REQUIRE_VERIFIED", False)
+    # ADR 0012 stays off unless a test explicitly turns it on, and no test may
+    # reach a provider: the fake Gemini client is injected per test.
+    monkeypatch.setattr(settings, "ASR_ENABLED", False)
     reset_classifier_cache()
     reset_quiz_cache()
     main_module.sessions.clear()
     main_module.video_cache.clear()
+    reset_asr_jobs()
     reset_rate_limits()
     yield
     main_module.sessions.clear()
     main_module.video_cache.clear()
+    reset_asr_jobs()
     reset_rate_limits()
     reset_quiz_cache()
 

@@ -4,6 +4,7 @@ import {
   isCaptionOnlyProblem,
   listTranscriptLanguages,
   playerErrorMessage,
+  transcriptSourceLabel,
   TranscriptLanguagesError,
   transcriptErrorMessage,
   transcriptStatusText,
@@ -57,6 +58,31 @@ describe('YouTube error messages', () => {
     expect(transcriptErrorMessage('content_too_short')).toContain('quá ngắn')
     expect(transcriptErrorMessage('video_blocked')).not.toContain('.srt')
     expect(transcriptErrorMessage('content_sensitive')).not.toContain('.srt')
+  })
+
+  it('keeps the ASR failures informative but non-blocking', () => {
+    for (const code of [
+      'asr_sign_in_required',
+      'asr_quota_exceeded',
+      'asr_too_long',
+      'asr_audio_blocked',
+      'asr_failed',
+    ]) {
+      expect(isCaptionOnlyProblem(code)).toBe(true)
+      expect(transcriptErrorMessage(code)).not.toContain('undefined')
+    }
+    expect(transcriptErrorMessage('asr_disabled')).toContain('.srt')
+    expect(isCaptionOnlyProblem('asr_disabled')).toBe(false)
+  })
+})
+
+describe('transcriptSourceLabel', () => {
+  it('names the provenance shown on the workspace and dashboard', () => {
+    expect(transcriptSourceLabel('youtube_manual')).toBe('Phụ đề của YouTube')
+    expect(transcriptSourceLabel('youtube_auto')).toContain('tự động')
+    expect(transcriptSourceLabel('asr')).toContain('nghe audio')
+    expect(transcriptSourceLabel('upload')).toContain('tải lên')
+    expect(transcriptSourceLabel(undefined)).toBeNull()
   })
 })
 

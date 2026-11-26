@@ -72,17 +72,53 @@ export type TranscriptErrorCode =
   | 'content_not_lecture'
   | 'content_too_short'
   | 'content_sensitive'
+  | 'asr_sign_in_required'
+  | 'asr_disabled'
+  | 'asr_quota_exceeded'
+  | 'asr_too_long'
+  | 'asr_audio_blocked'
+  | 'asr_failed'
+  | 'asr_job_not_found'
   | string
 
+/** ADR 0012: where the current cues came from. */
+export type TranscriptSource =
+  | 'youtube_manual'
+  | 'youtube_auto'
+  | 'upload'
+  | 'asr'
+  | undefined
+
+export function transcriptSourceLabel(source: TranscriptSource): string | null {
+  switch (source) {
+    case 'youtube_manual':
+      return 'Phụ đề của YouTube'
+    case 'youtube_auto':
+      return 'Phụ đề tự động (YouTube)'
+    case 'asr':
+      return 'IVAN nghe audio'
+    case 'upload':
+      return 'Bạn tải lên'
+    default:
+      return null
+  }
+}
+
 /**
- * Caption problems that do not prevent watching: the player stays on screen and
- * the hint only explains why the mind map is empty.
+ * Caption/audio problems that do not prevent watching: the player stays on
+ * screen and the hint only explains why the mind map is empty. A content-policy
+ * refusal is deliberately not here — an .srt file is never a way around it.
  */
 export function isCaptionOnlyProblem(code: string | undefined): boolean {
   return [
     'transcripts_disabled',
     'no_transcript',
     'empty_transcript',
+    'asr_sign_in_required',
+    'asr_quota_exceeded',
+    'asr_too_long',
+    'asr_audio_blocked',
+    'asr_failed',
   ].includes(String(code))
 }
 
@@ -126,6 +162,18 @@ export function transcriptErrorMessage(code: string | undefined): string {
       return 'Bạn thao tác quá nhanh. Chờ một chút rồi thử lại nhé.'
     case 'ai_quota_exceeded':
       return 'Đã hết hạn mức AI hôm nay. Đăng nhập hoặc thử lại vào ngày mai.'
+    case 'asr_sign_in_required':
+      return 'Đăng nhập để IVAN tự nghe audio cho video không có phụ đề.'
+    case 'asr_disabled':
+      return 'Tính năng nghe audio đang tắt. Bạn có thể tải file .srt/.vtt.'
+    case 'asr_quota_exceeded':
+      return 'Hôm nay bạn đã dùng hết lượt nghe audio. Thử lại vào mai, hoặc tải .srt/.vtt.'
+    case 'asr_too_long':
+      return 'Video dài hơn 3 tiếng nên chưa nghe tự động được. Tải .srt/.vtt giúp nhé.'
+    case 'asr_audio_blocked':
+      return 'Không tải được audio của video này. YouTube có thể đang chặn máy chủ.'
+    case 'asr_failed':
+      return 'Nghe audio không thành công. Thử lại, hoặc tải file .srt/.vtt.'
     default:
       return 'Không tải được phụ đề cho link này. Thử tải file .srt/.vtt bên dưới.'
   }
@@ -163,6 +211,18 @@ export function transcriptStatusText(code: string | undefined): string {
       return 'Thao tác quá nhanh'
     case 'ai_quota_exceeded':
       return 'Hết hạn mức AI hôm nay'
+    case 'asr_sign_in_required':
+      return 'Cần đăng nhập để nghe audio'
+    case 'asr_disabled':
+      return 'Nghe audio đang tắt'
+    case 'asr_quota_exceeded':
+      return 'Hết lượt nghe audio hôm nay'
+    case 'asr_too_long':
+      return 'Video quá dài để nghe tự động'
+    case 'asr_audio_blocked':
+      return 'Không tải được audio'
+    case 'asr_failed':
+      return 'Nghe audio chưa thành công'
     default:
       return 'Không tải được phụ đề'
   }

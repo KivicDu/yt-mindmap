@@ -21,16 +21,23 @@ flowchart LR
         AI[ai_engine.py]
         ST[subtitles.py]
         TR[transcript.py]
+        ASR[asr.py + asr_jobs.py]
     end
 
     GEMINI[(Google Gemini)]
     CAPTIONS[(YouTube captions)]
+    AUDIO[(YouTube audio via yt-dlp)]
     OEMBED[(YouTube oEmbed)]
     CACHE[(backend/data/video_cache.json)]
-    DB[(PostgreSQL: users, projects)]
+    DB[(PostgreSQL: users, projects, video_transcripts)]
 
     UI -->|POST /transcript| API
     API --> TR --> CAPTIONS
+    TR -.->|no captions + ASR_ENABLED| ASR
+    ASR --> AUDIO
+    ASR --> GEMINI
+    ASR --> DB
+    UI -.->|GET /transcript/asr/:id every 2s| API
     UI -->|GET /video-info| API
     API --> OEMBED
     API --> ST
@@ -63,6 +70,12 @@ flowchart LR
   `transcripts_disabled`, `video_unavailable`, `ip_blocked`, …) inside
   `detail`, so the UI translates the reason instead of showing the library's
   stack trace.
+- **Audio fallback is opt-in** (ADR 0012). With `ASR_ENABLED=false`, a caption
+  failure ends as it always did. When enabled, only the three caption-absence
+  codes may start a signed-in, quota-limited background job; `yt-dlp` + `ffmpeg`
+  feed mono mp3 to Gemini, and the cues go through the same content gate and
+  `build_session_from_cues()` path as captions. The browser polls the job every
+  2 s and reuses the normal session payload on `ready`.
 
 ## Live update sequence
 
@@ -111,6 +124,12 @@ sequenceDiagram
 | Gemini thinking is disabled by default (`GEMINI_THINKING_BUDGET=0`) | `ai_engine._config` | Extraction is not reasoning-heavy, and updates run every ~15s |
 | A signed-in session never writes the shared video cache | `main.cache_video_map` | Notes and pins must stay private per account |
 | A saved project is never demoted to a draft, and a draft keeps its id | `services/projects.autosave` | Autosave must not undo an explicit save |
+| ASR runs only with `ASR_ENABLED=true`, only for signed-in users, and never for a policy refusal | `main.preflight`, `main.transcript` | The audio path must not become a content-gate bypass or a default cost |
+| ASR is limited to 3 jobs/user/day and videos ≤ 10,800 s, with ≤ 2 concurrent jobs | `rate_limit.asr_quota`, `asr_jobs` | The provider bill and the worker stay bounded |
+| Only the three caption-absence codes may start ASR; `ip_blocked`, `age_restricted`, `po_token_required` and `video_unavailable` keep their error | `asr.should_attempt_asr` | If the server cannot reach YouTube, downloading audio would fail too |
+| A finished transcript is cached per video and shared; a cache hit consumes no ASR quota | `video_transcripts` | One lecture is paid for once |
+| Audio is a temp file under `data/asr/` deleted in `finally`; uploaded Gemini files are deleted too | `asr.transcribe` | No audio or provider file is retained |
+| `projects.transcript_source` is written on every load path and shown in the UI | `projects.summary/save_session`, Workspace | Never claim "YouTube captions" for IVAN-generated cues |
 
 ## Data model
 
@@ -146,6 +165,7 @@ projects                          # one row = one video (or subtitle file) + one
 ├── title
 ├── nodes / transcript            # the row is authoritative on reopen
 ├── transcript_language
+├── transcript_source            # youtube_manual | youtube_auto | upload | asr
 ├── summary_so_far / consumed_until
 ├── is_draft                      # true = autosave, false = explicitly saved
 ├── visibility                    # private | unlisted | invited
@@ -159,6 +179,19 @@ project_members                  # invitations keyed by email, not user id
 ├── email                        # lower-cased; may not have an account yet
 ├── role                         # viewer | editor
 └── created_at / updated_at
+
+video_transcripts                # ADR 0012: shared ASR cues, not a policy verdict
+├── video_id                     # PK, 11-char YouTube id
+├── language / cues              # JSON cue list
+├── source                       # 'asr'
+├── duration_seconds
+└── created_at
+
+asr_jobs                         # in memory only, one uvicorn worker
+├── job_id / user_id             # only the owner may read or cancel
+├── status / stage / cancelled
+├── started_at / audio_seconds
+└── error                        # {code, message} when failed
 ```
 
 `nodes` is the map; `markdown` is derived by `node_tree.tree_to_markdown` and
@@ -336,6 +369,34 @@ for a given transcript chunk. Only the owner may rename/delete the project or
 change sharing; editor autosave writes the map fields but ignores a supplied
 title.
 
+## Audio fallback sequence (ADR 0012)
+
+```text
+POST /transcript {url}
+  → layer-1 preflight (blocklist / closed allowlist)  ← always first, no exceptions
+  → fetch_transcript(url)
+      ├─ cues → build_session_from_cues() → 200 session payload
+      └─ no_transcript | transcripts_disabled | empty_transcript
+            ├─ ASR_ENABLED=false          → 422, old caption error
+            ├─ anonymous                  → 401 asr_sign_in_required
+            ├─ duration > 10,800 s        → 422 asr_too_long
+            ├─ daily asr quota exhausted  → 429 asr_quota_exceeded
+            ├─ cached video_transcripts   → 200 session payload (no new cost)
+            └─ otherwise                  → 202 {job_id, asr: {stage, …}}
+
+GET /transcript/asr/{job_id}  (owner only, every 2 s)
+  queued → downloading → transcribing → ready {session: <200 payload>}
+                        ↘ failed {error: {code, message}}   ↘ cancelled
+DELETE /transcript/asr/{job_id}  → 200 {status: "cancelled"}
+```
+
+The 202 response is deliberately *not* a session: the map pane shows a plain
+progress panel with elapsed time and **Huỷ** while the player keeps working. On
+`ready`, the browser applies `body.session` through the same `applyLoadResult`
+function used by the ordinary 200 path. Layer 2 classification still runs on the
+resulting cues — the cached transcript is text, not a trust verdict — and
+`content_verified` can only come from an allowlist hit or a `lecture` label.
+
 ## Frontend structure
 
 - `src/router.tsx` — `/` (landing), `/login`, `/register`, `/app` (workspace,
@@ -405,9 +466,12 @@ gzipped).
   the provider HTTP calls, so no credentials or network are needed.
   `tests/test_projects.py` covers CRUD, ownership isolation, draft/saved
   separation, search, autosave reuse, cache isolation and reopening without
-  YouTube.
-- Frontend: `vitest` covers the pure tree helpers, YouTube URL/error helpers and
-  `formatWhen`.
+  YouTube. `tests/test_asr.py` covers the fallback decision table, all three
+  cue parsing paths, the job state machine, owner-only access, cancellation,
+  duration refusal, cache reuse and stable failures with fake downloader and
+  Gemini clients — no provider is called.
+- Frontend: `vitest` covers the pure tree helpers, YouTube URL/error helpers,
+  ASR copy and provenance labels, and `formatWhen`.
 - CI runs lint + tests + production build on every push/PR to `main`/`develop`.
 
 ## Operations
@@ -420,6 +484,10 @@ gzipped).
   `null` when oEmbed could not be reached (the player is still attempted).
 - `GEMINI_BASE_URL` points the AI path at a mock or proxy instead of Google,
   which is how the AI-driven UI path is tested without spending quota.
+- `ASR_ENABLED=false` is the default. Enabling it (after `alembic upgrade head`)
+  adds the ASR job endpoints, the separate `asr:user:<id>` quota and the shared
+  `video_transcripts` cache. The Docker image installs `ffmpeg` and `yt-dlp`;
+  a local backend needs `brew install ffmpeg` plus `requirements.txt`.
 - CORS origins come from `ALLOWED_ORIGINS` (comma separated).
 - `docker compose up --build` runs nginx (port 8080) in front of FastAPI
   (port 8001) with a named volume for the cache.

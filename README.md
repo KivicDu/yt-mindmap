@@ -20,6 +20,7 @@ This project creates a dual-view setup: alongside the YouTube video, there's a d
 - PostgreSQL 18 + SQLAlchemy 2 + Alembic
 - JWT access tokens, HttpOnly refresh cookie, bcrypt password hashing
 - youtube-transcript-api
+- Optional audio fallback: `yt-dlp` + `ffmpeg` → Gemini (ADR 0012, default off)
 - Google Gemini API (`google-genai` SDK)
 - Server-Sent Events (SSE) for real-time updates
 
@@ -33,6 +34,7 @@ This project creates a dual-view setup: alongside the YouTube video, there's a d
 - [x] Minimal diff merging into the mind map
 - [x] Basic controls (pause auto-updates, manual update)
 - [x] Subtitle upload fallback for videos without captions (`.srt` / `.vtt`)
+- [x] Optional ASR fallback: IVAN listens to the audio of a captionless video and produces timestamped cues (`ASR_ENABLED=true`, sign-in + daily quota required; see [ADR 0012](docs/adr/0012-audio-fallback-asr.md))
 - [x] Seek handling (backward seek is ignored, forward jumps are capped per update)
 - [x] Session recovery if the backend restarts mid-lecture
 - [x] Mind map cache per video (reopening a video restores the map instantly)
@@ -229,7 +231,7 @@ yt-mindmap/
 - [ADR 0009](docs/adr/0009-account-recovery.md) — SMTP delivery, password reset and email change
 - [ADR 0010](docs/adr/0010-production-readiness.md) — rate limits, account deletion, legal pages and backups
 - [ADR 0011](docs/adr/0011-learning-workflow.md) — trash, tags, versions, chapters and bilingual captions
-- [ADR 0012](docs/adr/0012-audio-fallback-asr.md) — audio fallback for videos without captions (accepted design, no code yet)
+- [ADR 0012](docs/adr/0012-audio-fallback-asr.md) — audio fallback for videos without captions (implemented, default-off via `ASR_ENABLED`)
 - [ADR 0013](docs/adr/0013-thinking-map-content.md) — the map type decides what the AI extracts
 - [ADR 0014](docs/adr/0014-self-check-and-review.md) — self-check and optional review (shipped)
 - [Backup and restore](docs/backup-restore.md) — `pg_dump` scripts and the restore runbook

@@ -52,7 +52,9 @@ needs neither override: it defaults to `APP_ENV=development`.
 |--------|------|---------|
 | GET | `/` | Health check |
 | GET | `/healthz` | Session count, cache size, model name, token totals (Docker healthcheck) |
-| POST | `/transcript` | Fetch captions from a URL, or parse an uploaded `.srt`/`.vtt` |
+| POST | `/transcript` | Fetch captions from a URL, parse an uploaded `.srt`/`.vtt`, or queue ASR when captions are absent (ADR 0012) |
+| GET | `/transcript/asr/{job_id}` | Poll an ASR job (owner only) |
+| DELETE | `/transcript/asr/{job_id}` | Cancel an ASR job (owner only) |
 | GET | `/stream/{session_id}` | SSE stream of mind map updates |
 | POST | `/update-map` | Process newly watched content, merge new nodes into the tree, return the full tree |
 | PATCH | `/node` | Rename, note or pin one node; returns the full tree and emits a `node_edit` SSE event |
@@ -79,8 +81,27 @@ pytest
 ```
 
 `pytest.ini` adds the backend directory to the import path, so tests run from
-this folder without installing the package. Visual-check tests use a fake HTTP
-client and a fake Gemini client; no test opens a socket.
+this folder without installing the package. Visual-check and ASR tests use a
+fake HTTP client and a fake Gemini client; no test opens a socket or constructs
+a real provider client. Run with `EMAIL_BACKEND=log pytest` so mail delivery is
+never attempted during the suite.
+
+## Audio fallback (ADR 0012)
+
+`ASR_ENABLED` is `false` by default. When a video has no caption track at all,
+enabling it lets signed-in users ask IVAN to listen to the audio: `yt-dlp`
+downloads it, `ffmpeg` converts it to mono 16 kHz mp3, and Gemini returns
+timestamped cues. The job runs in the background (`202` + polling), is limited
+to 3 videos/day/user and 3 hours/video, and its cues are cached per video so a
+repeat view costs nothing. The content gate still runs first, so a blocked
+video can never become an audio job.
+
+Local runs need `ffmpeg` on `PATH` (`brew install ffmpeg`) and the `yt-dlp`
+Python package from `requirements.txt`; the Docker image installs both. See
+[docs/adr/0012-audio-fallback-asr.md](../docs/adr/0012-audio-fallback-asr.md)
+for the boundaries and rollout decision, and `.env.example` for the `ASR_*`
+settings. Migration `0013_asr_fallback` adds the `video_transcripts` table and
+`projects.transcript_source`; run `alembic upgrade head` before enabling.
 
 ## Content gate visual check
 
@@ -101,7 +122,10 @@ entries include a digest of the sampled images. See
 | `node_tree.py` | Node ids, normalisation, merge/dedupe, note/label edits, Markdown projection + legacy parse |
 | `chunking.py` | Pure seek/chunk rules (no FastAPI import) |
 | `subtitles.py` | `.srt` / `.vtt` parser |
-| `transcript.py` | YouTube captions fetcher |
+| `transcript.py` | YouTube captions fetcher (`TranscriptResult` carries manual/auto provenance) |
+| `asr.py` | ADR 0012: audio download, Gemini transcription, defensive cue parsing |
+| `app/services/asr_jobs.py` | In-memory ASR job store, concurrency limit, cancel and TTL sweep |
+| `app/models/video_transcript.py` | Shared per-video transcript cache |
 | `app/services/video_visuals.py` | Bounded, best-effort JPEG sampling for the content classifier |
 | `app/` | Accounts: settings, SQLAlchemy session, `User` model, auth/OAuth routes, services |
 | `alembic/` | Database migrations (`alembic upgrade head`) |

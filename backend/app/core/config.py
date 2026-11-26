@@ -142,6 +142,17 @@ class Settings(BaseSettings):
     # Default to closed; set false only while migrating old rows.
     CONTENT_SHARE_REQUIRE_VERIFIED: bool = True
 
+    # ADR 0012: audio fallback for videos with no captions. Off by default —
+    # enabling it starts billable audio uploads and model calls. The separate
+    # daily counter keeps the general AI allowance untouched.
+    ASR_ENABLED: bool = False
+    ASR_MODEL: str = "gemini-2.5-flash"
+    ASR_MAX_VIDEO_SECONDS: int = 10_800
+    ASR_DAILY_LIMIT_PER_USER: int = 3
+    ASR_MAX_CONCURRENCY: int = 2
+    ASR_JOB_TTL_SECONDS: int = 3_600
+    ASR_AUDIO_BITRATE: str = "32k"
+
     @model_validator(mode="after")
     def _guard_production_secret(self) -> "Settings":
         """Fail closed instead of serving forgeable tokens in production."""

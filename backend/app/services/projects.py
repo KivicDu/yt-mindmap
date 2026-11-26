@@ -116,6 +116,7 @@ def summary(project: Project) -> dict[str, Any]:
         # The tree is nested, so the top-level list is only the number of roots.
         "node_count": count_nodes(project.nodes or []),
         "transcript_language": project.transcript_language,
+        "transcript_source": project.transcript_source or "youtube_auto",
         "consumed_until": round(float(project.consumed_until or 0.0), 2),
         "created_at": _iso(project.created_at),
         "updated_at": _iso(project.updated_at),
@@ -416,6 +417,11 @@ def save_session(
     project.nodes = session.get("nodes", [])
     project.transcript = session.get("transcript", [])
     project.transcript_language = session.get("language")
+    # Do not let an older session that carries no provenance overwrite a row
+    # that already knows its cues came from audio or an upload.
+    source = session.get("transcript_source")
+    if isinstance(source, str) and source:
+        project.transcript_source = source
     project.summary_so_far = session.get("summary_so_far", "")
     project.consumed_until = float(session.get("consumed_until", 0.0))
     # Only overwrite when this session actually carries a verdict: a session

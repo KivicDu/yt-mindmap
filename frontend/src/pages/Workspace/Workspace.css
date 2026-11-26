@@ -788,6 +788,40 @@
   font-size: 13px;
 }
 
+.asr-progress {
+  position: absolute;
+  inset: 0;
+  z-index: 3;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  justify-content: center;
+  gap: 10px;
+  padding: 32px clamp(20px, 6vw, 72px);
+  background: var(--chrome);
+}
+
+.asr-progress strong {
+  font-size: 15px;
+  color: var(--ink-1);
+}
+
+.asr-progress p {
+  max-width: 46ch;
+  margin: 0;
+  color: var(--ink-3);
+  font-size: 13px;
+  line-height: 1.6;
+}
+
+.asr-progress__meta {
+  display: flex;
+  gap: 16px;
+  color: var(--ink-2);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+
 .canvas-toolbar {
   position: absolute;
   right: 14px;
@@ -896,6 +930,14 @@
 .detail-tabs__item.is-active .detail-tabs__count {
   background: var(--accent-soft);
   color: var(--accent-ink);
+}
+
+.detail-tabs__source {
+  margin-left: 6px;
+  color: var(--ink-3);
+  font-size: 10.5px;
+  font-weight: 400;
+  white-space: nowrap;
 }
 
 .summary-card {

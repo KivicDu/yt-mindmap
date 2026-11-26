@@ -7,6 +7,7 @@ from app.models.project_version import ProjectVersion
 from app.models.refresh_token import RefreshToken
 from app.models.review_attempt import ReviewAttempt
 from app.models.user import User
+from app.models.video_transcript import VideoTranscript
 
 __all__ = [
     "AccountToken",
@@ -16,4 +17,5 @@ __all__ = [
     "RefreshToken",
     "ReviewAttempt",
     "User",
+    "VideoTranscript",
 ]

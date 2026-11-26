@@ -68,11 +68,13 @@ import {
   listTranscriptLanguages,
   playerErrorMessage,
   transcriptErrorMessage,
+  transcriptSourceLabel,
   transcriptStatusText,
   TranscriptLanguagesError,
   watchUrl,
   type PlayerErrorInfo,
   type TranscriptLanguage,
+  type TranscriptSource,
   type VideoInfo,
 } from '../../lib/youtube'
 
@@ -104,6 +106,28 @@ class RequestError extends Error {
   }
 }
 
+interface AsrQueuedResult {
+  kind: 'asr'
+  jobId: string
+  videoId: string
+  title: string | null
+  maxSeconds: number
+}
+
+interface TranscriptSessionResult {
+  kind: 'session'
+  data: any
+}
+
+type TranscriptFetchResult = AsrQueuedResult | TranscriptSessionResult
+
+interface AsrProgress {
+  jobId: string
+  stage: string
+  elapsedSeconds: number
+  maxSeconds: number
+}
+
 const API_BASE = import.meta.env.VITE_API_BASE || 'http://localhost:8001'
 const DEFAULT_TITLE = 'Lecture Mind Map'
 const AUTO_UPDATE_SECONDS = 15
@@ -118,19 +142,20 @@ type DetailTab = 'session' | 'transcript' | 'history'
  * live-session module, so they need the bearer token attached by hand. A
  * shared editor's writes must be attributable, and a viewer must stay read-only.
  */
-async function sessionRequest(
+async function authedFetch(
   path: string,
-  method: string,
-  body: unknown,
+  method: string = 'GET',
+  body?: unknown,
 ): Promise<Response> {
   const send = () => {
-    const headers: Record<string, string> = { 'Content-Type': 'application/json' }
+    const headers: Record<string, string> = {}
+    if (body !== undefined) headers['Content-Type'] = 'application/json'
     const token = getAccessToken()
     if (token) headers.Authorization = `Bearer ${token}`
     return fetch(`${API_BASE}${path}`, {
       method,
       headers,
-      body: JSON.stringify(body),
+      body: body === undefined ? undefined : JSON.stringify(body),
     })
   }
 
@@ -139,6 +164,14 @@ async function sessionRequest(
     if (await refreshSession()) response = await send()
   }
   return response
+}
+
+async function sessionRequest(
+  path: string,
+  method: string,
+  body: unknown,
+): Promise<Response> {
+  return authedFetch(path, method, body)
 }
 
 function App() {
@@ -159,6 +192,8 @@ function App() {
   const [status, setStatusState] = useState<Status>({ kind: 'idle', text: 'Sẵn sàng' })
   const [transcript, setTranscript] = useState<TranscriptEntry[]>([])
   const [transcriptLang, setTranscriptLang] = useState<string | null>(null)
+  const [transcriptSource, setTranscriptSource] = useState<TranscriptSource>(undefined)
+  const [asrProgress, setAsrProgress] = useState<AsrProgress | null>(null)
   const [videoInfo, setVideoInfo] = useState<VideoInfo | null>(null)
   const [playerError, setPlayerError] = useState<PlayerErrorInfo | null>(null)
   const [sessionId, setSessionId] = useState<string | null>(null)
@@ -232,6 +267,7 @@ function App() {
   const lastTriggerRef = useRef(0)
   const currentTimeRef = useRef(0)
   const loadTokenRef = useRef(0)
+  const asrTimerRef = useRef<number | null>(null)
   const sessionIdRef = useRef<string | null>(null)
   const requestUpdateRef = useRef<(atTime?: number) => Promise<void>>(async () => {})
   const nodesRef = useRef<MapNode[]>([])
@@ -444,6 +480,11 @@ function App() {
       setTranscript(data.transcript)
     }
     setTranscriptLang(typeof data.language === 'string' ? data.language : null)
+    setTranscriptSource(
+      ['youtube_manual', 'youtube_auto', 'upload', 'asr'].includes(data.transcript_source)
+        ? data.transcript_source
+        : undefined,
+    )
     setSummary(typeof data.summary === 'string' ? data.summary : '')
     setLanguages([])
     setLanguagesError('')
@@ -480,13 +521,124 @@ function App() {
     setStatus(`${label}${suffix} · ${data.transcript?.length || 0} mục phụ đề`, 'ok')
   }
 
+  const stopAsrPolling = () => {
+    if (asrTimerRef.current !== null) {
+      window.clearTimeout(asrTimerRef.current)
+      asrTimerRef.current = null
+    }
+    setAsrProgress(null)
+  }
+
+  const pollAsrJob = (
+    jobId: string,
+    id: string,
+    maxSeconds: number,
+    token: number,
+  ) => {
+    const poll = async () => {
+      asrTimerRef.current = null
+      if (token !== loadTokenRef.current) return
+      try {
+        const response = await authedFetch(
+          `/transcript/asr/${encodeURIComponent(jobId)}`,
+        )
+        const body: any = await response.json().catch(() => ({}))
+        if (token !== loadTokenRef.current) return
+        if (!response.ok) {
+          const code = body?.detail?.code
+          stopAsrPolling()
+          setIsLoading(false)
+          setStatus(transcriptStatusText(code), 'error')
+          setUrlError(transcriptErrorMessage(code))
+          return
+        }
+        if (body.status === 'ready' && body.session) {
+          stopAsrPolling()
+          setIsLoading(false)
+          applyLoadResult(body.session, id, 'Đã nghe audio')
+          return
+        }
+        if (body.status === 'failed') {
+          const code = body?.error?.code
+          stopAsrPolling()
+          setIsLoading(false)
+          setStatus(transcriptStatusText(code), isCaptionOnlyProblem(code) ? 'idle' : 'error')
+          setUrlError(transcriptErrorMessage(code))
+          return
+        }
+        if (body.status === 'cancelled') {
+          stopAsrPolling()
+          setIsLoading(false)
+          setStatus('Đã huỷ lượt nghe audio', 'idle')
+          return
+        }
+        setAsrProgress({
+          jobId,
+          stage: String(body.stage || 'queued'),
+          elapsedSeconds: Number(body.elapsed_seconds || 0),
+          maxSeconds,
+        })
+        asrTimerRef.current = window.setTimeout(() => void poll(), 2000)
+      } catch (error: unknown) {
+        if (token !== loadTokenRef.current) return
+        stopAsrPolling()
+        setIsLoading(false)
+        setStatus('Không kiểm tra được tiến trình nghe audio', 'error')
+        setUrlError('Thử tải lại trang, hoặc tải file .srt/.vtt bên dưới.')
+        console.warn('[asr]', error)
+      }
+    }
+    void poll()
+  }
+
+  const cancelAsr = async () => {
+    const jobId = asrProgress?.jobId
+    const token = loadTokenRef.current
+    stopAsrPolling()
+    if (!jobId) return
+    try {
+      await authedFetch(`/transcript/asr/${encodeURIComponent(jobId)}`, 'DELETE')
+    } catch (error: unknown) {
+      console.warn('[asr cancel]', error)
+    }
+    if (token === loadTokenRef.current) {
+      setIsLoading(false)
+      setStatus('Đã huỷ lượt nghe audio', 'idle')
+      setUrlError('')
+    }
+  }
+
+  const applyTranscriptResult = (
+    result: TranscriptFetchResult,
+    id: string,
+    label: string,
+    token: number,
+  ) => {
+    if (token !== loadTokenRef.current) return
+    if (result.kind === 'session') {
+      applyLoadResult(result.data, id, label)
+      return
+    }
+    // 202: the player can start while the job runs. The map pane gets a plain
+    // progress panel and the same applyLoadResult path handles the final cues.
+    setAsrProgress({
+      jobId: result.jobId,
+      stage: 'queued',
+      elapsedSeconds: 0,
+      maxSeconds: result.maxSeconds,
+    })
+    setUrlError('')
+    setStatus('IVAN đang nghe audio để tạo phụ đề…', 'busy')
+    pollAsrJob(result.jobId, id || result.videoId, result.maxSeconds, token)
+  }
+
   const recreateSession = useCallback(async () => {
     if (!videoId) return
     try {
-      const data = await fetchTranscript(
+      const result = await fetchTranscript(
         projectIdRef.current ? { projectId: projectIdRef.current } : { url },
       )
-      applyLoadResult(data, videoId, 'Đã khôi phục phiên làm việc')
+      applyTranscriptResult(result, videoId, 'Đã khôi phục phiên làm việc', loadTokenRef.current)
     } catch (e: any) {
       setStatus(`Không khôi phục được phiên: ${e.message}`, 'error')
     }
@@ -497,39 +649,27 @@ function App() {
    * POST to a session endpoint. These live outside `/api`, so the access token
    * is attached by hand; a guest call simply goes without one.
    */
+  const requestError = async (response: Response, fallback: string) => {
+    const payload = await response.json().catch(() => null)
+    const detail =
+      payload && typeof payload === 'object' && 'detail' in payload ? payload.detail : undefined
+    const code =
+      detail && typeof detail === 'object' && 'code' in detail && typeof detail.code === 'string'
+        ? detail.code
+        : undefined
+    const message =
+      detail && typeof detail === 'object' && 'message' in detail && typeof detail.message === 'string'
+        ? detail.message
+        : typeof detail === 'string'
+          ? detail
+          : fallback
+    return new RequestError(message, code ?? (typeof detail === 'string' ? detail : undefined))
+  }
+
   const postJson = async (path: string, body: unknown, fallback: string) => {
-    const send = () => {
-      const headers: Record<string, string> = { 'Content-Type': 'application/json' }
-      const token = getAccessToken()
-      if (token) headers.Authorization = `Bearer ${token}`
-      return fetch(`${API_BASE}${path}`, {
-        method: 'POST',
-        headers,
-        body: JSON.stringify(body),
-      })
-    }
+    const response = await authedFetch(path, 'POST', body)
 
-    let response = await send()
-    if (response.status === 401 && getAccessToken()) {
-      if (await refreshSession()) response = await send()
-    }
-
-    if (!response.ok) {
-      const payload = await response.json().catch(() => null)
-      const detail =
-        payload && typeof payload === 'object' && 'detail' in payload ? payload.detail : undefined
-      const code =
-        detail && typeof detail === 'object' && 'code' in detail && typeof detail.code === 'string'
-          ? detail.code
-          : undefined
-      const message =
-        detail && typeof detail === 'object' && 'message' in detail && typeof detail.message === 'string'
-          ? detail.message
-          : typeof detail === 'string'
-            ? detail
-            : fallback
-      throw new RequestError(message, code ?? (typeof detail === 'string' ? detail : undefined))
-    }
+    if (!response.ok) throw await requestError(response, fallback)
     return response.json()
   }
 
@@ -540,7 +680,7 @@ function App() {
     initialNodes?: MapNode[]
     resumeAt?: number
     title?: string
-  }) => {
+  }): Promise<TranscriptFetchResult> => {
     const body: any = {}
     if (payload.url) body.url = payload.url
     if (payload.fileContent) body.file_content = payload.fileContent
@@ -552,7 +692,19 @@ function App() {
     // backend ignores this for saved projects, which carry their own.
     body.map_layout = styleRef.current.layout
 
-    return postJson('/transcript', body, 'Không thể tải phụ đề')
+    const response = await authedFetch('/transcript', 'POST', body)
+    if (!response.ok) throw await requestError(response, 'Không thể tải phụ đề')
+    const data: any = await response.json()
+    if (response.status === 202 && data?.status === 'asr_queued' && data.job_id) {
+      return {
+        kind: 'asr',
+        jobId: data.job_id,
+        videoId: String(data.video_id || ''),
+        title: typeof data.title === 'string' ? data.title : null,
+        maxSeconds: Number(data.asr?.max_seconds || 10_800),
+      }
+    }
+    return { kind: 'session', data }
   }
 
   const loadVideo = async (id: string) => {
@@ -564,6 +716,8 @@ function App() {
     setVideoInfo(null)
     setTranscript([])
     setTranscriptLang(null)
+    setTranscriptSource(undefined)
+    stopAsrPolling()
     setSummary('')
     setDetailTab('session')
     setVersions([])
@@ -621,9 +775,8 @@ function App() {
       })
 
     try {
-      const data = await fetchTranscript({ url: watchUrl(id) })
-      if (token !== loadTokenRef.current) return
-      applyLoadResult(data, id, 'Đã tải phụ đề')
+      const result = await fetchTranscript({ url: watchUrl(id) })
+      applyTranscriptResult(result, id, 'Đã tải phụ đề', token)
     } catch (error: unknown) {
       if (token === loadTokenRef.current) {
         const code = error instanceof RequestError ? error.code : undefined
@@ -666,10 +819,12 @@ function App() {
     setStatus(`Đang đọc ${file.name}…`, 'busy')
     try {
       const text = await file.text()
-      const data = await fetchTranscript({ url, fileContent: text })
+      const result = await fetchTranscript({ url, fileContent: text })
       if (token !== loadTokenRef.current) return
       const id = extractVideoId(url)
-      applyLoadResult(data, id || videoId || '', 'Đã tải phụ đề từ file')
+      if (result.kind === 'session') {
+        applyLoadResult(result.data, id || videoId || '', 'Đã tải phụ đề từ file')
+      }
       if (id) setVideoId(id)
       setEditor(null)
     } catch (e: any) {
@@ -691,7 +846,7 @@ function App() {
     setUrl(draft.url)
     setStatus('Đang khôi phục bản nháp…', 'busy')
     try {
-      const data = await fetchTranscript({
+      const result = await fetchTranscript({
         url: draft.url,
         initialNodes: draft.nodes,
         resumeAt: draft.consumedUntil,
@@ -705,7 +860,12 @@ function App() {
           normalizeStyle({ layout: draft.mapLayout, palette: draft.mapPalette }),
         )
       }
-      applyLoadResult(data, id || '', 'Đã khôi phục bản nháp trong trình duyệt')
+      applyTranscriptResult(
+        result,
+        id || '',
+        'Đã khôi phục bản nháp trong trình duyệt',
+        token,
+      )
       setPendingDraft(null)
     } catch (error: unknown) {
       if (token === loadTokenRef.current) {
@@ -757,8 +917,10 @@ function App() {
     setDetailTab('session')
     setVersions([])
     fetchTranscript({ projectId: routeProjectId })
-      .then((data) => {
+      .then((result) => {
         if (token !== loadTokenRef.current) return
+        if (result.kind !== 'session') return
+        const data = result.data
         applyLoadResult(data, data.video_id || '', 'Đã mở dự án')
         setVideoId(data.video_id || null)
         setUrl(data.video_id ? watchUrl(data.video_id) : '')
@@ -1225,6 +1387,13 @@ function App() {
       eventSourceRef.current = null
     }
   }, [sessionId, recreateSession, applyNodes])
+
+  useEffect(
+    () => () => {
+      if (asrTimerRef.current !== null) window.clearTimeout(asrTimerRef.current)
+    },
+    [],
+  )
 
   const handleMindMapReady = useCallback(() => {
     mindmapRef.current?.updateTree(titleRef.current, nodesRef.current, { focusNew: false })
@@ -1839,6 +2008,11 @@ function App() {
                 {transcript.length > 0 && (
                   <span className="detail-tabs__count">{transcript.length}</span>
                 )}
+                {transcriptSourceLabel(transcriptSource) && (
+                  <span className="detail-tabs__source">
+                    {transcriptSourceLabel(transcriptSource)}
+                  </span>
+                )}
               </button>
               {hasHistoryTab && (
                 <button
@@ -2066,7 +2240,11 @@ function App() {
                     <dt>Phụ đề</dt>
                     <dd>
                       {transcript.length > 0
-                        ? `${transcript.length} mục${transcriptLang ? ` · ${transcriptLang}` : ''}`
+                        ? `${transcript.length} mục${transcriptLang ? ` · ${transcriptLang}` : ''}${
+                            transcriptSourceLabel(transcriptSource)
+                              ? ` · ${transcriptSourceLabel(transcriptSource)}`
+                              : ''
+                          }`
                         : '—'}
                     </dd>
                   </div>
@@ -2203,6 +2381,28 @@ function App() {
           </header>
 
           <div className="panel__body panel__body--canvas">
+            {asrProgress && (
+              <div className="asr-progress" role="status" aria-live="polite">
+                <strong>IVAN đang nghe audio để tự tạo phụ đề</strong>
+                <p>
+                  Video này không có phụ đề. Bạn có thể xem video bên dưới trong lúc chờ — thường
+                  mất 1–2 phút cho mỗi 10 phút video.
+                </p>
+                <div className="asr-progress__meta">
+                  <span>
+                    {asrProgress.stage === 'downloading'
+                      ? 'Đang tải audio'
+                      : asrProgress.stage === 'transcribing'
+                        ? 'Đang nghe và chép lại'
+                        : 'Đang xếp hàng'}
+                  </span>
+                  <span>Đã chờ {formatTime(asrProgress.elapsedSeconds)}</span>
+                </div>
+                <button type="button" className="btn btn--outline btn--sm" onClick={() => void cancelAsr()}>
+                  Huỷ
+                </button>
+              </div>
+            )}
             <Suspense fallback={<div className="canvas-loading">Đang tải sơ đồ…</div>}>
               <MindMap
                 ref={mindmapRef}

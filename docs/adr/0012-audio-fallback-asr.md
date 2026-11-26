@@ -1,9 +1,12 @@
 # ADR 0012 — Transcribe the audio when a video has no captions
 
 ## Status
-Accepted 2026-11-22 — scope and limits approved, no implementation yet.
-The four open questions (sign-in, daily limit, maximum duration, default-off
-rollout) were resolved as recorded in §2 and §9.
+Accepted 2026-11-22 — scope and limits approved. The four open questions
+(sign-in, daily limit, maximum duration, default-off rollout) were resolved as
+recorded in §2 and §9. **Implemented 2026-11-26 on `feature/asr-runtime`:**
+backend runtime, tests, frontend 202/polling flow and provenance badges are in
+place. `ASR_ENABLED` defaults to `false`, so the rollout remains an explicit
+owner decision; no provider call is made by the test suite.
 
 ## Context
 
@@ -335,22 +338,34 @@ limiter.
 - **Trigger ASR on `age_restricted` / `ip_blocked` too** — rejected: those mean
   the server cannot reach YouTube at all, so the download would fail too.
 
-## Implementation plan
+## Implementation notes
 
-1. **Backend, no UI** — `backend/asr.py` (download + Gemini + cue repair),
-   `video_transcripts` table and `projects.transcript_source`
-   (`alembic/versions/0010_asr_fallback.py`, `down_revision =
-   "0009_content_verified"` — 0009 is already taken by the share-policy
-   migration), job store and three endpoints, settings, error codes, quota.
-   Unit tests with a fake downloader and a fake Gemini client: the fallback
-   decision table, cue parsing (all three repair paths), job state machine,
-   owner-only access, TTL sweep.
-2. **Frontend** — 202 handling, polling, progress panel with cancel, `ready`
-   reuse of `applyLoadResult`, new error copy.
-3. **Provenance** — badge in the transcript tab and the project list,
-   `transcript_source` written on every load path.
-4. **Docs** — this ADR accepted, `docs/architecture.md` gains the job and the
-   table, `.env.example` gains the `ASR_*` block, README notes the ffmpeg
-   requirement.
+Shipped in small commits on `feature/asr-runtime`, PR into `develop`:
 
-Each step is a separate commit on `feature/asr-fallback`, PR into `develop`.
+1. **Backend runtime** (`backend/asr.py`, `app/services/asr_jobs.py`, three
+   routes in `backend/main.py`, `ASR_*` settings, `asr:user:<id>` quota, error
+   codes) with `backend/tests/test_asr.py` using a fake downloader and a fake
+   Gemini client. Tests cover the fallback decision table, all three cue
+   parsing paths, the job state machine, owner-only access, cancellation,
+   duration refusal, cache reuse and stable failure codes. No test constructs
+   a real provider client.
+2. **Migration** — `alembic/versions/0013_asr_fallback.py` revises
+   `0012_self_check_review`: it creates `video_transcripts` and adds
+   `projects.transcript_source`. Earlier plan numbers were stale — the next
+   free revision after the self-check work is 0013.
+3. **Frontend** — `fetchTranscript` returns either a session payload or a 202
+   descriptor, polls every 2 s via an authenticated `GET`, renders the
+   *đang nghe audio* panel with elapsed time and **Huỷ**, and reuses
+   `applyLoadResult` for the final `session`. Error copy lives in
+   `lib/youtube.ts`; a policy refusal never gains an `.srt` hint.
+4. **Provenance** — `transcript_source` is written on every load path
+   (caption switch, saved project, upload, ASR completion) and surfaced in the
+   transcript tab, session summary and dashboard list.
+5. **Docs** — this ADR, `docs/architecture.md`, `.env.example` and the README
+   deployment notes describe the flag, the job and the ffmpeg/yt-dlp
+   requirements.
+
+Deploy checklist: run `alembic upgrade head`, install `ffmpeg` in the image
+(already in the Dockerfile), then set `ASR_ENABLED=true` deliberately after
+the owner accepts the audio-access trade-off in §9. With the flag off,
+`POST /transcript` answers exactly as before.
