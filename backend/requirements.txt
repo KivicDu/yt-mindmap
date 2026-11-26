@@ -3,6 +3,8 @@ uvicorn[standard]==0.54.0
 pydantic==2.14.0
 python-multipart==0.0.32
 youtube-transcript-api==1.2.4
+# ADR 0012: audio fallback (ffmpeg is installed in the image).
+yt-dlp==2025.6.30
 httpx==0.28.1
 python-dotenv==1.2.4
 sse-starlette==3.5.0

@@ -15,6 +15,10 @@ class ProjectCreate(BaseModel):
     nodes: list[dict[str, Any]] = Field(default_factory=list)
     transcript: list[dict[str, Any]] = Field(default_factory=list)
     transcript_language: str | None = Field(default=None, max_length=20)
+    transcript_source: str = Field(
+        default="youtube_auto",
+        pattern="^(youtube_manual|youtube_auto|upload|asr)$",
+    )
     summary_so_far: str = ""
     consumed_until: float = 0.0
     is_draft: bool = False
@@ -30,6 +34,9 @@ class ProjectUpdate(BaseModel):
     nodes: list[dict[str, Any]] | None = None
     transcript: list[dict[str, Any]] | None = None
     transcript_language: str | None = Field(default=None, max_length=20)
+    transcript_source: str | None = Field(
+        default=None, pattern="^(youtube_manual|youtube_auto|upload|asr)$"
+    )
     summary_so_far: str | None = None
     consumed_until: float | None = None
     is_draft: bool | None = None

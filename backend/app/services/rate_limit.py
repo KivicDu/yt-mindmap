@@ -93,6 +93,9 @@ auth_limiter = SlidingWindowLimiter()
 ai_limiter = SlidingWindowLimiter()
 get_limiter = SlidingWindowLimiter()
 ai_quota = DailyQuota()
+# ADR 0012: audio transcription is billed per run, so it gets its own daily
+# allowance. This one is keyed `asr:user:<id>` and never touches ai_quota.
+asr_quota = DailyQuota()
 
 
 def reset_rate_limits() -> None:
@@ -101,3 +104,4 @@ def reset_rate_limits() -> None:
     ai_limiter.reset()
     get_limiter.reset()
     ai_quota.reset()
+    asr_quota.reset()

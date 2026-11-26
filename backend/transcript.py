@@ -11,6 +11,9 @@ Two things this module deliberately does *not* do:
 """
 
 import re
+from collections.abc import Iterator
+from dataclasses import dataclass
+from typing import Any
 from urllib.parse import parse_qs, urlsplit
 
 from youtube_transcript_api import YouTubeTranscriptApi
@@ -249,10 +252,25 @@ def list_transcript_languages(url: str) -> list[dict[str, object]]:
     return items
 
 
-def fetch_transcript(
-    url: str, lang: str | None = None
-) -> tuple[list[dict[str, object]], str]:
-    """Fetch captions for ``url`` and return ``(entries, language_code)``.
+@dataclass
+class TranscriptResult:
+    """Captions plus the ADR 0012 provenance bit.
+
+    Iterating still yields the original ``(entries, language)`` pair, so older
+    callers and tests keep working while new callers can read ``generated``.
+    """
+
+    entries: list[dict[str, Any]]
+    language: str
+    generated: bool = False
+
+    def __iter__(self) -> Iterator[Any]:  # type: ignore[override]
+        yield self.entries
+        yield self.language
+
+
+def fetch_transcript(url: str, lang: str | None = None) -> TranscriptResult:
+    """Fetch captions for ``url`` and report whether YouTube generated them.
 
     ``lang`` is optional: when omitted the video's own language wins. When it is
     provided (an explicit user preference) a matching track is preferred, then
@@ -286,4 +304,8 @@ def fetch_transcript(
             "empty_transcript", "The caption track for this video is empty."
         )
 
-    return entries, selected.language_code or "unknown"
+    return TranscriptResult(
+        entries,
+        selected.language_code or "unknown",
+        generated=bool(getattr(selected, "is_generated", False)),
+    )

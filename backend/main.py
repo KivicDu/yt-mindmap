@@ -16,6 +16,7 @@ from typing import Any
 import httpx
 from fastapi import Depends, FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 from sse_starlette.sse import EventSourceResponse
@@ -26,14 +27,25 @@ from app.api.deps import get_current_user, get_optional_user
 from app.api.router import api_router
 from app.core.config import get_settings
 from app.db.base import utcnow
-from app.db.session import get_db
+from app.db.session import SessionLocal, get_db
 from app.middleware.rate_limit import RateLimitMiddleware
 from app.models.project import Project
 from app.models.user import User
+from app.models.video_transcript import VideoTranscript
 from app.schemas.project import AutosaveRequest
 from app.services import content_classifier, content_policy, stream_tickets, video_visuals
 from app.services import projects as project_service
 from app.services import sharing as sharing_service
+from app.services.asr_jobs import (
+    cancel_job,
+    cleanup_asr_jobs,
+    create_job,
+    get_job,
+    job_payload,
+    sweep_audio_dir,
+)
+from app.services.rate_limit import asr_quota
+from asr import ASRError, asr_error, probe_duration, should_attempt_asr, transcribe
 from chunking import chunk_time_range, is_seek_backward, select_chunk
 from node_tree import (
     markdown_to_tree,
@@ -169,6 +181,7 @@ def save_video_cache() -> None:
 
 
 def cleanup_sessions() -> None:
+    cleanup_asr_jobs()
     now = time.time()
     stale = [
         sid for sid, session in sessions.items()
@@ -294,6 +307,8 @@ def can_stream_session(db: Session, session: dict[str, Any], user_id: str | None
 
 
 load_video_cache()
+# A crash may leave a per-job mp3 behind; nothing in data/asr is needed on boot.
+sweep_audio_dir()
 
 def cache_video_map(video_id: str | None, session: dict[str, Any]) -> None:
     if not video_id:
@@ -558,24 +573,30 @@ async def switch_transcript_language(
         )
 
     try:
-        transcript, language = await run_in_threadpool(
+        switched = await run_in_threadpool(
             fetch_transcript,
             f"https://www.youtube.com/watch?v={video_id}",
             request.language,
         )
+        transcript, language = switched
     except TranscriptError as error:
         raise HTTPException(
             status_code=error.status_code,
             detail={"code": error.code, "message": error.message},
         ) from error
 
+    source = (
+        "youtube_manual" if getattr(switched, "generated", True) is False else "youtube_auto"
+    )
     session["transcript"] = transcript
     session["language"] = language
+    session["transcript_source"] = source
     session["last_active"] = time.time()
 
     if project is not None:
         project.transcript = transcript
         project.transcript_language = language
+        project.transcript_source = source
         db.commit()
 
     owner_name = None
@@ -588,6 +609,7 @@ async def switch_transcript_language(
         "video_id": video_id,
         "title": project.title if project is not None else session.get("title"),
         "language": language,
+        "transcript_source": source,
         "cached": False,
         "role": sharing_service.role_for(db, project, user) if project else None,
         "can_edit": True,
@@ -636,16 +658,20 @@ def video_metadata(
     video_id: str,
     oembed: dict[str, Any],
     transcript: list[dict[str, Any]] | None = None,
+    duration_seconds: float | None = None,
 ) -> content_policy.VideoMetadata:
     """Turn data the endpoint already has into the gate's input."""
 
     cues = [cue for cue in (transcript or []) if isinstance(cue, dict)]
     duration = max(
-        (
-            float(cue.get("start", 0.0)) + float(cue.get("duration", 0.0))
-            for cue in cues
+        float(duration_seconds or 0.0),
+        max(
+            (
+                float(cue.get("start", 0.0)) + float(cue.get("duration", 0.0))
+                for cue in cues
+            ),
+            default=0.0,
         ),
-        default=0.0,
     )
     return content_policy.VideoMetadata(
         video_id=video_id,
@@ -671,6 +697,292 @@ def content_error(decision: content_policy.Decision) -> HTTPException:
             "message": f"Content policy: {decision.reason or 'not allowed'}",
         },
     )
+
+
+async def build_session_from_cues(
+    *,
+    video_id: str,
+    transcript: list[dict[str, Any]],
+    language: str | None,
+    oembed: dict[str, Any],
+    title: str | None,
+    source: str,
+    duration_seconds: float | None = None,
+    initial_markdown: str | None = None,
+    resume_at: float | None = None,
+    initial_nodes: list[dict[str, Any]] | None = None,
+    map_layout: str | None = None,
+) -> dict[str, Any]:
+    """Run the unchanged two content gates and create a session from any cues.
+
+    Caption cues and ADR 0012 audio cues go through the exact same policy and
+    classifier path. A successful transcription is never itself a verdict.
+    """
+    label = "unverified"
+    content_verified = False
+    decision = content_policy.evaluate(
+        video_metadata(video_id, oembed, transcript, duration_seconds)
+    )
+    if not decision.allowed:
+        raise content_error(decision)
+    label = decision.label
+    # Only an explicit allowlist or the AI verdict counts as proof for layer 3.
+    content_verified = decision.reason == "allowlist"
+
+    # Layer 2: a small AI call confirms the layer-1 guess from the cue sample.
+    # An allowlisted video is already trusted. Every AI failure stays
+    # `unverified` and lets the learner in -- a safety net must not be a lock.
+    if decision.reason != "allowlist":
+        classify_title = title or (
+            oembed.get("title") if isinstance(oembed.get("title"), str) else None
+        )
+        author_name = oembed.get("author_name")
+        visuals: list[Any] = []
+        if get_settings().CONTENT_VISUAL_CHECK_ENABLED:
+            try:
+                visuals = await run_in_threadpool(
+                    video_visuals.fetch_visuals,
+                    video_id,
+                    duration=video_visuals.duration_from_cues(transcript),
+                )
+            except Exception as exc:
+                logger.warning(
+                    "Visual sampling failed for %s: %s", video_id, type(exc).__name__
+                )
+        visual_kwargs = {"visuals": visuals} if visuals else {}
+        classification = await run_in_threadpool(
+            content_classifier.classify,
+            video_id,
+            classify_title,
+            author_name if isinstance(author_name, str) else None,
+            transcript,
+            **visual_kwargs,
+        )
+        ai_label = classification.get("label")
+        if ai_label in ("not_lecture", "sensitive"):
+            raise content_error(
+                content_policy.Decision(
+                    allowed=False,
+                    code=(
+                        "content_not_lecture"
+                        if ai_label == "not_lecture"
+                        else "content_sensitive"
+                    ),
+                    label="unverified",
+                    reason=f"classifier:{ai_label}",
+                )
+            )
+        if ai_label == "lecture":
+            label = "lecture"
+            content_verified = True
+
+    # A client restoring a map sends its own nodes/markdown/pointer. Those bytes
+    # are untrusted, so the session may be read but never promoted to the cache.
+    restore_input = bool(initial_nodes or initial_markdown is not None or resume_at is not None)
+    try:
+        session_id, cached = create_session(
+            video_id,
+            transcript,
+            initial_markdown=initial_markdown,
+            resume_at=resume_at,
+            initial_nodes=initial_nodes,
+            title=title,
+            language=language,
+            map_layout=map_layout,
+            cacheable=not restore_input,
+        )
+        sessions[session_id]["content_label"] = label
+        sessions[session_id]["content_verified"] = content_verified
+        sessions[session_id]["transcript_source"] = source
+        return {
+            "transcript": transcript,
+            "video_id": video_id,
+            "title": title,
+            "language": language,
+            "cached": cached,
+            "content_label": label,
+            "content_verified": content_verified,
+            "transcript_source": source,
+            **session_payload(session_id),
+        }
+    except Exception as e:
+        logger.warning("Could not create a study session: %s", e)
+        raise HTTPException(
+            status_code=500,
+            detail={
+                "code": "session_error",
+                "message": "Không tạo được phiên học. Thử lại sau vài phút.",
+            },
+        ) from e
+
+
+def asr_http_error(code: str) -> HTTPException:
+    error = asr_error(code)
+    return HTTPException(status_code=error.status_code, detail=error.detail())
+
+
+async def start_asr_fallback(
+    request: TranscriptRequest,
+    video_id: str,
+    oembed: dict[str, Any],
+    user: User | None,
+) -> dict[str, Any]:
+    """Queue audio transcription, or serve a finished transcript from the cache."""
+    settings = get_settings()
+    # The flag is the first gate: with it off the old caption-only answer wins,
+    # including for an anonymous visitor (ADR 0012 §1).
+    if not settings.ASR_ENABLED:
+        raise asr_http_error("asr_disabled")
+    if user is None:
+        raise asr_http_error("asr_sign_in_required")
+
+    title = request.title or (
+        oembed.get("title") if isinstance(oembed.get("title"), str) else None
+    )
+    if not title:
+        title = await _fetch_youtube_title(request.url)
+
+    # A finished transcript belongs to the video. Neither this learner nor a
+    # second one pays for the audio again, and no quota unit is consumed.
+    cached = None
+    with SessionLocal() as job_db:
+        cached = job_db.get(VideoTranscript, video_id)
+        if cached is not None:
+            cues = cached.cues or []
+            language = cached.language
+            duration = cached.duration_seconds
+    if cached is not None:
+        return await build_session_from_cues(
+            video_id=video_id,
+            transcript=cues,
+            language=language,
+            oembed=oembed,
+            title=title,
+            source="asr",
+            duration_seconds=duration,
+            initial_markdown=request.initial_markdown,
+            resume_at=request.resume_at,
+            initial_nodes=request.initial_nodes,
+            map_layout=request.map_layout,
+        )
+
+    try:
+        duration = await run_in_threadpool(probe_duration, request.url or "")
+    except ASRError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=exc.detail()) from exc
+    if duration and duration > settings.ASR_MAX_VIDEO_SECONDS:
+        raise asr_http_error("asr_too_long")
+    if ai_engine.client is None:
+        raise asr_http_error("asr_failed")
+
+    allowed, _ = asr_quota.consume(
+        f"asr:user:{user.id}", settings.ASR_DAILY_LIMIT_PER_USER
+    )
+    if not allowed:
+        raise asr_http_error("asr_quota_exceeded")
+
+    def transcriber(set_stage, should_cancel):
+        return transcribe(
+            request.url or "",
+            client=ai_engine.client,
+            model=settings.ASR_MODEL,
+            bitrate=settings.ASR_AUDIO_BITRATE,
+            duration=duration,
+            on_stage=set_stage,
+            should_cancel=should_cancel,
+        )
+
+    def finish(cues, cue_duration):
+        # This runs on the job thread: it needs its own database session and its
+        # own event loop, and it repeats the same gates as the caption path.
+        payload = asyncio.run(
+            build_session_from_cues(
+                video_id=video_id,
+                transcript=cues,
+                language=None,
+                oembed=oembed,
+                title=title,
+                source="asr",
+                duration_seconds=cue_duration or duration,
+                initial_markdown=request.initial_markdown,
+                resume_at=request.resume_at,
+                initial_nodes=request.initial_nodes,
+                map_layout=request.map_layout,
+            )
+        )
+        with SessionLocal() as job_db:
+            if job_db.get(VideoTranscript, video_id) is None:
+                job_db.add(
+                    VideoTranscript(
+                        video_id=video_id,
+                        language=None,
+                        cues=cues,
+                        source="asr",
+                        duration_seconds=cue_duration or duration,
+                    )
+                )
+                try:
+                    job_db.commit()
+                except Exception as exc:
+                    job_db.rollback()
+                    logger.warning("Could not cache ASR transcript: %s", type(exc).__name__)
+        return payload
+
+    job = create_job(
+        user_id=user.id,
+        video_id=video_id,
+        url=request.url or "",
+        title=title,
+        duration=duration,
+        transcriber=transcriber,
+        finish=finish,
+    )
+    return JSONResponse(
+        status_code=202,
+        content={
+            "status": "asr_queued",
+            "job_id": job["job_id"],
+            "video_id": video_id,
+            "title": title,
+            "language": None,
+            "content_label": "unverified",
+            "content_verified": False,
+            "transcript_source": "asr",
+            "asr": {
+                "stage": "queued",
+                "elapsed_seconds": 0.0,
+                "max_seconds": settings.ASR_MAX_VIDEO_SECONDS,
+            },
+        },
+    )
+
+
+@app.get("/transcript/asr/{job_id}")
+async def get_asr_job(
+    job_id: str,
+    user: User = Depends(get_current_user),
+):
+    cleanup_sessions()
+    job = get_job(job_id, user.id)
+    if job is None:
+        raise HTTPException(
+            status_code=404,
+            detail={"code": "asr_job_not_found", "message": "Không tìm thấy lượt nghe audio này."},
+        )
+    return job_payload(job)
+
+
+@app.delete("/transcript/asr/{job_id}")
+async def delete_asr_job(
+    job_id: str,
+    user: User = Depends(get_current_user),
+):
+    if not cancel_job(job_id, user.id):
+        raise HTTPException(
+            status_code=404,
+            detail={"code": "asr_job_not_found", "message": "Không tìm thấy lượt nghe audio này."},
+        )
+    return {"status": "cancelled"}
 
 
 @app.post("/transcript")
@@ -712,11 +1024,18 @@ async def get_transcript(
         language = project.transcript_language
         vid = project.video_id
         title = project.title
+        source = project.transcript_source or "youtube_auto"
 
         if not transcript and vid:
             try:
-                transcript, language = await run_in_threadpool(
+                refetched = await run_in_threadpool(
                     fetch_transcript, f"https://www.youtube.com/watch?v={vid}"
+                )
+                transcript, language = refetched
+                source = (
+                    "youtube_manual"
+                    if getattr(refetched, "generated", True) is False
+                    else "youtube_auto"
                 )
             except TranscriptError as e:
                 raise HTTPException(
@@ -749,6 +1068,7 @@ async def get_transcript(
         # Keep the row's verdict in the live session so autosave never demotes
         # a project simply because it was reopened.
         sessions[session_id]["content_verified"] = bool(project.content_verified)
+        sessions[session_id]["transcript_source"] = source
 
         project.last_opened_at = utcnow()
         db.commit()
@@ -759,6 +1079,7 @@ async def get_transcript(
             "video_id": vid,
             "title": title,
             "language": language,
+            "transcript_source": source,
             "map_layout": project.map_layout or "tree",
             "map_palette": project.map_palette or "paper",
             "cached": cached,
@@ -790,11 +1111,13 @@ async def get_transcript(
             )
             # A learner-supplied file has no provenance to confirm.
             sessions[session_id]["content_verified"] = False
+            sessions[session_id]["transcript_source"] = "upload"
             return {
                 "transcript": transcript,
                 "video_id": vid,
                 "title": title,
                 "language": None,
+                "transcript_source": "upload",
                 "cached": cached,
                 **session_payload(session_id),
             }
@@ -820,8 +1143,6 @@ async def get_transcript(
     if request.url:
         video_id = extract_video_id(request.url)
         oembed: dict[str, Any] = {}
-        label = "unverified"
-        content_verified = False
         if video_id:
             # Decide what we can before fetching captions, so a blocked video
             # never reaches the transcript client, the cache or the AI.
@@ -835,10 +1156,15 @@ async def get_transcript(
         try:
             # The YouTube client is synchronous; keeping it off the event loop
             # means one slow video no longer freezes every other request.
-            transcript, language = await run_in_threadpool(
-                fetch_transcript, request.url
-            )
+            result = await run_in_threadpool(fetch_transcript, request.url)
+            transcript, language = result
         except TranscriptError as e:
+            if (
+                video_id
+                and should_attempt_asr(e.code)
+                and get_settings().ASR_ENABLED
+            ):
+                return await start_asr_fallback(request, video_id, oembed, user)
             raise HTTPException(
                 status_code=e.status_code,
                 detail={"code": e.code, "message": e.message},
@@ -854,107 +1180,49 @@ async def get_transcript(
             ) from e
 
         if video_id:
-            # Length needs the captions; this is the second and last gate.
-            decision = content_policy.evaluate(
-                video_metadata(video_id, oembed, transcript)
-            )
-            if not decision.allowed:
-                raise content_error(decision)
-            label = decision.label
-            # Only an explicit allowlist or the AI verdict counts as proof for
-            # layer 3. A passing heuristic is a guess, not a confirmation.
-            content_verified = decision.reason == "allowlist"
-
-            # Layer 2: a small AI call confirms the layer-1 guess from the
-            # caption sample. An allowlisted video is already trusted, so it
-            # skips the call. Every AI failure stays `unverified` and lets the
-            # learner in -- a safety net must not become a second lock.
-            if decision.reason != "allowlist":
-                oembed_title = oembed.get("title")
-                classify_title = request.title or (
-                    oembed_title if isinstance(oembed_title, str) else None
-                )
-                author_name = oembed.get("author_name")
-                # Optional visual signal, off by default. A few bounded public
-                # JPEGs catch imagery that the caption text cannot describe.
-                # Fetch failures yield an empty list and the classifier stays
-                # text-only, so this can never block a study session.
-                visuals: list[Any] = []
-                if get_settings().CONTENT_VISUAL_CHECK_ENABLED:
-                    try:
-                        visuals = await run_in_threadpool(
-                            video_visuals.fetch_visuals,
-                            video_id,
-                            duration=video_visuals.duration_from_cues(transcript),
-                        )
-                    except Exception as exc:
-                        logger.warning(
-                            "Visual sampling failed for %s: %s", video_id, type(exc).__name__
-                        )
-                visual_kwargs = {"visuals": visuals} if visuals else {}
-                classification = await run_in_threadpool(
-                    content_classifier.classify,
-                    video_id,
-                    classify_title,
-                    author_name if isinstance(author_name, str) else None,
-                    transcript,
-                    **visual_kwargs,
-                )
-                ai_label = classification.get("label")
-                if ai_label in ("not_lecture", "sensitive"):
-                    raise content_error(
-                        content_policy.Decision(
-                            allowed=False,
-                            code=(
-                                "content_not_lecture"
-                                if ai_label == "not_lecture"
-                                else "content_sensitive"
-                            ),
-                            label="unverified",
-                            reason=f"classifier:{ai_label}",
-                        )
-                    )
-                if ai_label == "lecture":
-                    label = "lecture"
-                    content_verified = True
-
-        # A client restoring a map sends its own nodes/markdown/pointer. Those
-        # bytes are untrusted, so the resulting session may be read but never
-        # written into the shared cache under this video id.
-        restore_input = bool(
-            request.initial_nodes
-            or request.initial_markdown is not None
-            or request.resume_at is not None
-        )
-        try:
-            vid = video_id
             oembed_title = oembed.get("title")
             title = request.title or (
                 oembed_title if isinstance(oembed_title, str) else None
             )
             if not title:
                 title = await _fetch_youtube_title(request.url)
+            return await build_session_from_cues(
+                video_id=video_id,
+                transcript=transcript,
+                language=language,
+                oembed=oembed,
+                title=title,
+                # A YouTube track can be human-written or generated (ADR 0012).
+                source=(
+                    "youtube_manual" if getattr(result, "generated", True) is False
+                    else "youtube_auto"
+                ),
+                initial_markdown=request.initial_markdown,
+                resume_at=request.resume_at,
+                initial_nodes=request.initial_nodes,
+                map_layout=request.map_layout,
+            )
+
+        # A bare id without oEmbed cannot be gated or titled; keep the old
+        # minimal path so this input still returns a usable session.
+        try:
             session_id, cached = create_session(
-                vid,
+                video_id,
                 transcript,
                 initial_markdown=request.initial_markdown,
                 resume_at=request.resume_at,
                 initial_nodes=request.initial_nodes,
-                title=title,
+                title=request.title,
                 language=language,
                 map_layout=request.map_layout,
-                cacheable=not restore_input,
+                cacheable=False,
             )
-            sessions[session_id]["content_label"] = label
-            sessions[session_id]["content_verified"] = content_verified
             return {
                 "transcript": transcript,
-                "video_id": vid,
-                "title": title,
+                "video_id": video_id,
+                "title": request.title,
                 "language": language,
                 "cached": cached,
-                "content_label": label,
-                "content_verified": content_verified,
                 **session_payload(session_id),
             }
         except Exception as e:

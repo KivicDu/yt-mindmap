@@ -35,6 +35,11 @@ class Project(Base, TimestampMixin):
     nodes: Mapped[list] = mapped_column(JSON, default=list, nullable=False)
     transcript: Mapped[list] = mapped_column(JSON, default=list, nullable=False)
     transcript_language: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    # ADR 0012: where the current cues came from. Old rows read as YouTube
+    # captions; only the audio fallback writes "asr", so the UI can be honest.
+    transcript_source: Mapped[str] = mapped_column(
+        String(20), default="youtube_auto", server_default="youtube_auto", nullable=False
+    )
     summary_so_far: Mapped[str] = mapped_column(Text, default="", nullable=False)
     consumed_until: Mapped[float] = mapped_column(Float, default=0.0, nullable=False)
 
