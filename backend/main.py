@@ -322,14 +322,26 @@ def cache_video_map(video_id: str | None, session: dict[str, Any]) -> None:
     # (and an advanced AI pointer) for everyone who opens the same video later.
     if session.get("cacheable") is False:
         return
+    nodes = strip_private_fields(session.get("nodes", []))
+    markdown = session.get("markdown", "")
+    pointer = float(session.get("consumed_until", 0.0))
+    if not nodes and not markdown:
+        # An empty map with an advanced pointer would tell the next visitor
+        # those seconds were already mapped, so their map never rebuilds.
+        if pointer > 0:
+            return
+        # Nor may a fresh, empty visit erase a map already in the cache.
+        existing = video_cache.get(video_id)
+        if existing and (existing.get("nodes") or existing.get("markdown")):
+            return
     video_cache[video_id] = {
         # The tree is the source of truth; markdown is kept so an older
         # frontend or a downgraded backend can still read the cache. Guests can
         # edit notes and pins too, so the shared copy must lose those fields.
-        "nodes": strip_private_fields(session.get("nodes", [])),
-        "markdown": session.get("markdown", ""),
+        "nodes": nodes,
+        "markdown": markdown,
         "summary_so_far": session.get("summary_so_far", ""),
-        "consumed_until": float(session.get("consumed_until", 0.0)),
+        "consumed_until": pointer,
         # The same video can be mapped in four modes; a session may only reuse
         # an entry built for its own mode (ADR 0013).
         "map_mode": session.get("map_mode", "tree"),
@@ -402,6 +414,10 @@ def create_session(
         consumed_until = float(resume_at)
     elif cached:
         consumed_until = float(cached.get("consumed_until", 0.0))
+        # Older cache entries can carry a pointer but no tree. Resuming there
+        # leaves a session whose map can never rebuild; start from zero.
+        if not nodes and consumed_until > 0:
+            consumed_until = 0.0
     else:
         consumed_until = 0.0
 
@@ -1064,6 +1080,16 @@ async def get_transcript(
             )
         else:
             touch_session(session_id)
+            # A session kept alive by an open SSE stream can outlive the tree it
+            # was built with. The row is authoritative: an empty live tree must
+            # never be autosaved over a project that still has a map.
+            live = sessions[session_id]
+            if project.nodes and not live.get("nodes"):
+                restored = normalize_cached_nodes(project.nodes)
+                if restored:
+                    live["nodes"] = restored
+                    live["markdown"] = tree_to_markdown(restored)
+                    live.setdefault("maps", {})[live.get("map_mode", "tree")] = restored
 
         # Keep the row's verdict in the live session so autosave never demotes
         # a project simply because it was reopened.

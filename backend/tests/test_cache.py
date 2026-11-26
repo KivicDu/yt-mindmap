@@ -38,6 +38,36 @@ def test_cache_is_capped_and_drops_the_oldest_video(monkeypatch):
     assert set(main_module.video_cache) == {"vid1", "vid2", "vid3"}
 
 
+def test_empty_map_with_an_advanced_pointer_is_not_cached():
+    """Otherwise the next visitor sees a blank map that cannot rebuild."""
+
+    cache_video_map("vid-empty", session_payload(markdown="", consumed_until=42.0))
+    assert "vid-empty" not in main_module.video_cache
+
+
+def test_an_empty_visit_cannot_overwrite_a_cached_map():
+    mapped = session_payload(
+        nodes=[{"id": "n1", "parentId": None, "label": "Root", "time": 0.0}],
+        markdown="- [Root](#seek-1.0)",
+        consumed_until=42.0,
+    )
+    cache_video_map("vid1", mapped)
+    cache_video_map("vid1", session_payload(nodes=[], markdown="", consumed_until=0.0))
+    assert main_module.video_cache["vid1"]["nodes"]
+
+
+def test_a_poisoned_cache_pointer_starts_from_zero():
+    main_module.video_cache["vid1"] = {
+        "nodes": [],
+        "markdown": "",
+        "summary_so_far": "",
+        "consumed_until": 47.08,
+    }
+    session_id, cached = create_session("vid1", TRANSCRIPT)
+    assert cached is True
+    assert main_module.sessions[session_id]["consumed_until"] == 0.0
+
+
 def test_no_video_id_means_no_cache_entry():
     cache_video_map(None, session_payload())
     assert main_module.video_cache == {}
