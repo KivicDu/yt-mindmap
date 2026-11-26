@@ -58,6 +58,7 @@ import { parseDeepLink, stripDeepLinkFromSearch, type DeepLink } from '../../lib
 import { findEmptyMinutes } from '../../lib/coverage'
 import CoverageNotice from '../../components/CoverageNotice'
 import SelfCheckPanel from '../../components/SelfCheckPanel'
+import VideoSearch from '../../components/VideoSearch'
 import { isTypingTarget, shortcutFor } from '../../lib/shortcuts'
 import { PlaybackClock } from '../../lib/playbackClock'
 import { PlaybackProgress, PlaybackTime } from '../../components/PlaybackTime'
@@ -827,8 +828,12 @@ function App() {
     }
   }
 
-  const handleLoadVideo = async () => {
-    const trimmed = url.trim()
+  const handleLoadVideo = async (nextUrl?: string) => {
+    if (nextUrl !== undefined) {
+      setUrl(nextUrl)
+      setUrlError('')
+    }
+    const trimmed = (nextUrl ?? url).trim()
     if (!trimmed) {
       setUrlError('Dán link YouTube trước đã.')
       setStatus('Chưa có link để tải', 'error')
@@ -1720,6 +1725,8 @@ function App() {
             <img className="app-brand__mark" src="/yt-mindmap-icon.png" alt="" aria-hidden="true" />
             <span className="app-brand__text">yt-mindmap</span>
           </Link>
+
+          <VideoSearch onPick={(link) => void handleLoadVideo(link)} disabled={isLoading} />
 
           <form
             className="url-bar"
