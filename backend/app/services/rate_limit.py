@@ -64,25 +64,32 @@ class DailyQuota:
         self._counts: dict[str, tuple[date, int]] = {}
         self._lock = Lock()
 
-    def consume(
-        self, key: str, limit: int, *, today: date | None = None
+    def consume_units(
+        self, key: str, units: int, limit: int, *, today: date | None = None
     ) -> tuple[bool, int]:
-        """Consume one unit.
+        """Consume ``units`` at once.
 
         Returns ``(allowed, remaining)``. When blocked, ``remaining`` is 0 and
-        the counter is left unchanged.
+        the counter is left unchanged, so a rejected batch never spends quota.
         """
+        amount = max(0, int(units))
         current_day = datetime.now(UTC).date() if today is None else today
         with self._lock:
             day, count = self._counts.get(key, (current_day, 0))
             if day != current_day:
                 day, count = current_day, 0
-            if count >= limit:
+            if count + amount > limit:
                 self._counts[key] = (day, count)
-                return False, 0
-            count += 1
+                return False, max(0, limit - count)
+            count += amount
             self._counts[key] = (day, count)
             return True, max(0, limit - count)
+
+    def consume(
+        self, key: str, limit: int, *, today: date | None = None
+    ) -> tuple[bool, int]:
+        """Consume one unit."""
+        return self.consume_units(key, 1, limit, today=today)
 
     def reset(self) -> None:
         with self._lock:
@@ -96,6 +103,8 @@ ai_quota = DailyQuota()
 # ADR 0012: audio transcription is billed per run, so it gets its own daily
 # allowance. This one is keyed `asr:user:<id>` and never touches ai_quota.
 asr_quota = DailyQuota()
+# ADR 0016: YouTube Data API quota is shared by the whole process, not per user.
+youtube_quota = DailyQuota()
 
 
 def reset_rate_limits() -> None:
@@ -105,3 +114,4 @@ def reset_rate_limits() -> None:
     get_limiter.reset()
     ai_quota.reset()
     asr_quota.reset()
+    youtube_quota.reset()
