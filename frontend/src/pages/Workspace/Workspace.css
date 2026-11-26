@@ -8,8 +8,8 @@
   height: 100dvh;
   overflow: hidden;
   /* Belt and braces for the narrow layout, where the shell scrolls: never
-     chain an unconsumed horizontal delta up to the window. */
-  overscroll-behavior-x: none;
+     chain an unconsumed delta up to the window in either axis. */
+  overscroll-behavior: none;
   background: var(--paper);
   color: var(--ink);
 }
