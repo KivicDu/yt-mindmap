@@ -17,15 +17,20 @@ const MindMap = forwardRef<MindMapHandle, MindMapProps>((props, ref) => {
   const layout = props.layout ?? DEFAULT_STYLE.layout
   const palette = props.palette ?? DEFAULT_STYLE.palette
 
+  // The surface is its own scroll container: a wheel the map did not consume
+  // stops here instead of chaining to the page. That keeps a swipe started
+  // immediately after a previous one — while vertical momentum is still around
+  // — from scrolling the whole workspace.
+  let renderer
   if (layout === 'tree') {
-    return <TreeMap ref={ref} {...props} layout={layout} palette={palette} />
+    renderer = <TreeMap ref={ref} {...props} layout={layout} palette={palette} />
+  } else if (layout === 'tree-down') {
+    renderer = <TreeDownMap ref={ref} {...props} palette={palette} />
+  } else {
+    renderer = <RadialMap ref={ref} kind={layout} palette={palette} {...props} />
   }
 
-  if (layout === 'tree-down') {
-    return <TreeDownMap ref={ref} {...props} palette={palette} />
-  }
-
-  return <RadialMap ref={ref} kind={layout} palette={palette} {...props} />
+  return <div className="mindmap-surface">{renderer}</div>
 })
 
 MindMap.displayName = 'MindMap'

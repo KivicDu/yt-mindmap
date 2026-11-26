@@ -2,6 +2,18 @@
    Canvas
    ============================================================ */
 
+/* The map lives in its own scroll container. `overflow: hidden` makes this
+   div a scroll container; `overscroll-behavior: contain` then keeps any wheel
+   the map did not consume from chaining to the page in *either* axis — even
+   when a new swipe starts before the last one's momentum has settled. */
+.mindmap-surface {
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+  overscroll-behavior: contain;
+  touch-action: none;
+}
+
 .mindmap {
   display: block;
   width: 100%;
