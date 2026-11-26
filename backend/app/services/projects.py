@@ -414,16 +414,23 @@ def save_session(
 
     if title:
         project.title = title
-    project.nodes = session.get("nodes", [])
-    project.transcript = session.get("transcript", [])
-    project.transcript_language = session.get("language")
+    # An empty live session is not a decision to delete the map. Autosave
+    # copies session state verbatim, so writing [] here is how a saved project
+    # silently loses its mindmap on a later visit (a stale session, a recreated
+    # session, or an autosave that fired before the tree arrived). Keep every
+    # persisted content field when the incoming session carries no tree.
+    incoming_nodes = session.get("nodes") or []
+    if incoming_nodes or not project.nodes:
+        project.nodes = incoming_nodes
+        project.transcript = session.get("transcript", [])
+        project.transcript_language = session.get("language")
+        project.summary_so_far = session.get("summary_so_far", "")
+        project.consumed_until = float(session.get("consumed_until", 0.0))
     # Do not let an older session that carries no provenance overwrite a row
     # that already knows its cues came from audio or an upload.
     source = session.get("transcript_source")
     if isinstance(source, str) and source:
         project.transcript_source = source
-    project.summary_so_far = session.get("summary_so_far", "")
-    project.consumed_until = float(session.get("consumed_until", 0.0))
     # Only overwrite when this session actually carries a verdict: a session
     # restored from an old project must not silently demote that project.
     if "content_verified" in session:

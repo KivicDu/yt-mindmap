@@ -356,6 +356,10 @@ function App() {
           setMapTitle(saved.title)
         }
 
+        // Keep the browser copy until the server actually holds a map. Signing
+        // in used to delete it immediately, so a failed autosave left no copy
+        // of a guest's mindmap anywhere.
+        if (nodesRef.current.length > 0) clearLocalDraft()
         setSavedAt(new Date())
         setSaveState('saved')
         return true
@@ -402,12 +406,10 @@ function App() {
     return () => clearTimeout(timer)
   }, [authStatus, videoId, mapVersion, consumedUntil, mapTitle, transcriptLang])
 
-  // Signing in moves the map to the account; the browser copy is then stale.
+  // Do not surface the guest banner after sign-in; saveNow removes the browser
+  // copy once the account has a map, so a failed autosave keeps the fallback.
   useEffect(() => {
-    if (authStatus === 'authenticated') {
-      clearLocalDraft()
-      setPendingDraft(null)
-    }
+    if (authStatus === 'authenticated') setPendingDraft(null)
   }, [authStatus])
 
   /** Single place that swaps the tree, so the counter can never drift. */

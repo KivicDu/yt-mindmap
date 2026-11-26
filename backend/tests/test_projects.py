@@ -237,6 +237,62 @@ def test_autosave_creates_one_reusable_draft(
     assert again["title"] == "Đã lưu"
 
 
+def test_autosave_cannot_wipe_a_saved_map(client: TestClient, transcript_session: dict):
+    """An empty live session must never erase a map already in the row."""
+
+    headers = register(client)
+    project = create_project(client, headers)
+
+    # A fresh load has no tree yet; that is not a request to delete the map.
+    response = client.post(
+        "/api/projects/autosave",
+        json={
+            "session_id": transcript_session["session_id"],
+            "project_id": project["id"],
+        },
+        headers=headers,
+    )
+    assert response.status_code == 200, response.text
+    saved = response.json()
+    assert saved["node_count"] == 1
+    assert saved["consumed_until"] == 8.0
+    detail = client.get(f"/api/projects/{saved['id']}", headers=headers).json()
+    assert detail["nodes"][0]["id"] == "n1"
+
+
+def test_reopen_prefers_the_row_over_an_empty_live_session(
+    client: TestClient, db_session, monkeypatch: pytest.MonkeyPatch
+):
+    headers = register(client)
+    project = create_project(client, headers)
+
+    monkeypatch.setattr(main_module, "fetch_transcript", lambda _url: (list(CUES), "vi"))
+    session_id = client.post(
+        "/transcript", json={"url": "https://youtu.be/abcdefghijk"}
+    ).json()["session_id"]
+    client.post(
+        "/api/projects/autosave",
+        json={"session_id": session_id, "project_id": project["id"]},
+        headers=headers,
+    )
+    assert main_module.sessions[session_id]["nodes"] == []
+
+    # Simulate the row still holding the map (e.g. a version restore) while an
+    # SSE-kept session from the old visit is still alive.
+    from app.models.project import Project
+
+    row = db_session.get(Project, project["id"])
+    row.nodes = NODES
+    db_session.commit()
+
+    response = client.post(
+        "/transcript", json={"project_id": project["id"]}, headers=headers
+    )
+    assert response.status_code == 200, response.text
+    assert [node["id"] for node in response.json()["nodes"]] == ["n1"]
+    assert main_module.sessions[session_id]["nodes"]
+
+
 def test_autosave_rejects_another_users_session(
     client: TestClient, transcript_session: dict
 ):
