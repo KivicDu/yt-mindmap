@@ -267,13 +267,13 @@ const TreeMap = forwardRef<MindMapHandle, TreeMapProps>(
           // update shrinks the text below the readable floor.
           autoFit: false,
           duration: window.matchMedia('(prefers-reduced-motion: reduce)').matches ? 0 : 260,
-          // markmap turns the wheel into panning on a Mac (`scrollForPan` is
-          // true for "Macintosh" user agents) and only zooms with ctrl+wheel.
-          // A trackpad scroll then looks like the map jumping around while the
-          // zoom never changes. The wheel zooms here, like everywhere else in
-          // the app, and panning stays on drag.
-          scrollForPan: false,
-          pan: false,
+          // Two fingers moving together are a scroll: markmap turns that into
+          // panning when `scrollForPan` is on. A pinch arrives as ctrl+wheel
+          // and still reaches d3's zoom handler, which stops the pan handler
+          // from also running. `pan` installs that wheel listener, so both
+          // options are needed; drag-to-pan keeps working independently.
+          scrollForPan: true,
+          pan: true,
           fitRatio: 0.9,
           maxInitialScale: 1.5,
           maxWidth: 280,
