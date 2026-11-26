@@ -29,6 +29,8 @@ export interface ProjectSummary {
   map_layout: MapLayout
   map_palette: MapPalette
   transcript_language: string | null
+  /** The learner's chosen map language; null means "follow the captions". */
+  output_language: string | null
   transcript_source: 'youtube_manual' | 'youtube_auto' | 'upload' | 'asr'
   consumed_until: number
   created_at: string | null
@@ -375,6 +377,8 @@ export interface LocalDraft {
   nodes: MapNode[]
   consumedUntil: number
   language: string | null
+  /** The language the learner chose for the map; older drafts have none. */
+  outputLanguage?: string | null
   /** Chosen look; older drafts have none and fall back to the default. */
   mapLayout?: MapLayout
   mapPalette?: MapPalette

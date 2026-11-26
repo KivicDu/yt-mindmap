@@ -116,6 +116,8 @@ def summary(project: Project) -> dict[str, Any]:
         # The tree is nested, so the top-level list is only the number of roots.
         "node_count": count_nodes(project.nodes or []),
         "transcript_language": project.transcript_language,
+        # NULL means "follow the caption track" for old projects.
+        "output_language": project.output_language,
         "transcript_source": project.transcript_source or "youtube_auto",
         "consumed_until": round(float(project.consumed_until or 0.0), 2),
         "created_at": _iso(project.created_at),
@@ -347,6 +349,7 @@ def duplicate(db: Session, project: Project) -> Project:
         nodes=list(project.nodes or []),
         transcript=list(project.transcript or []),
         transcript_language=project.transcript_language,
+        output_language=project.output_language,
         summary_so_far=project.summary_so_far or "",
         consumed_until=float(project.consumed_until or 0.0),
         is_draft=False,
@@ -431,6 +434,8 @@ def save_session(
     source = session.get("transcript_source")
     if isinstance(source, str) and source:
         project.transcript_source = source
+    # A deliberate learner choice; None restores "follow the transcript".
+    project.output_language = session.get("output_language")
     # Only overwrite when this session actually carries a verdict: a session
     # restored from an old project must not silently demote that project.
     if "content_verified" in session:
@@ -495,6 +500,7 @@ def autosave(
             video_id=session.get("video_id"),
             title=title or session.get("title") or "Sơ đồ chưa đặt tên",
             is_draft=is_draft,
+            output_language=session.get("output_language"),
             map_layout=map_layout or "tree",
             map_palette=map_palette or "paper",
         )

@@ -62,6 +62,14 @@ import { isTypingTarget, shortcutFor } from '../../lib/shortcuts'
 import { PlaybackClock } from '../../lib/playbackClock'
 import { PlaybackProgress, PlaybackTime } from '../../components/PlaybackTime'
 import {
+  DEFAULT_OUTPUT_LANGUAGE,
+  OUTPUT_LANGUAGES,
+  normalizeOutputLanguage,
+  outputLanguageName,
+  readStoredOutputLanguage,
+  storeOutputLanguage,
+} from '../../lib/outputLanguage'
+import {
   extractVideoId,
   fetchTranscriptTrack,
   isCaptionOnlyProblem,
@@ -192,6 +200,11 @@ function App() {
   const [status, setStatusState] = useState<Status>({ kind: 'idle', text: 'Sẵn sàng' })
   const [transcript, setTranscript] = useState<TranscriptEntry[]>([])
   const [transcriptLang, setTranscriptLang] = useState<string | null>(null)
+  // What the learner wants to study in. Independent of the caption track.
+  const [outputLanguage, setOutputLanguage] = useState<string | null>(
+    () => readStoredOutputLanguage() ?? DEFAULT_OUTPUT_LANGUAGE,
+  )
+  const [outputLanguageBusy, setOutputLanguageBusy] = useState(false)
   const [transcriptSource, setTranscriptSource] = useState<TranscriptSource>(undefined)
   const [asrProgress, setAsrProgress] = useState<AsrProgress | null>(null)
   const [videoInfo, setVideoInfo] = useState<VideoInfo | null>(null)
@@ -278,6 +291,7 @@ function App() {
   const languagesRequestRef = useRef(false)
   const tabRefs = useRef<Record<string, HTMLButtonElement | null>>({})
   const styleRef = useRef(mapStyle)
+  const outputLanguageRef = useRef(outputLanguage)
   const builtModeRef = useRef(builtMode)
   // Read once, before the mount effect removes the params from the URL. The
   // jump is a one-time action, not a persistent filter on the workspace.
@@ -310,6 +324,10 @@ function App() {
   useEffect(() => {
     styleRef.current = mapStyle
   }, [mapStyle])
+
+  useEffect(() => {
+    outputLanguageRef.current = outputLanguage
+  }, [outputLanguage])
 
   useEffect(() => {
     builtModeRef.current = builtMode
@@ -396,6 +414,7 @@ function App() {
         nodes: nodesRef.current,
         consumedUntil,
         language: transcriptLang,
+        outputLanguage,
         mapLayout: styleRef.current.layout,
         mapPalette: styleRef.current.palette,
         savedAt: new Date().toISOString(),
@@ -404,7 +423,7 @@ function App() {
       setSaveState('saved')
     }, 900)
     return () => clearTimeout(timer)
-  }, [authStatus, videoId, mapVersion, consumedUntil, mapTitle, transcriptLang])
+  }, [authStatus, videoId, mapVersion, consumedUntil, mapTitle, transcriptLang, outputLanguage])
 
   // Do not surface the guest banner after sign-in; saveNow removes the browser
   // copy once the account has a map, so a failed autosave keeps the fallback.
@@ -482,6 +501,13 @@ function App() {
       setTranscript(data.transcript)
     }
     setTranscriptLang(typeof data.language === 'string' ? data.language : null)
+    // A saved project carries its own choice; an old project with no choice is
+    // deliberately left as "follow the captions" until the learner picks one.
+    if (Object.prototype.hasOwnProperty.call(data, 'output_language')) {
+      const language = normalizeOutputLanguage(data.output_language)
+      setOutputLanguage(language)
+      outputLanguageRef.current = language
+    }
     setTranscriptSource(
       ['youtube_manual', 'youtube_auto', 'upload', 'asr'].includes(data.transcript_source)
         ? data.transcript_source
@@ -682,6 +708,7 @@ function App() {
     initialNodes?: MapNode[]
     resumeAt?: number
     title?: string
+    outputLanguage?: string | null
   }): Promise<TranscriptFetchResult> => {
     const body: any = {}
     if (payload.url) body.url = payload.url
@@ -690,6 +717,9 @@ function App() {
     if (payload.initialNodes) body.initial_nodes = payload.initialNodes
     if (payload.resumeAt !== undefined) body.resume_at = payload.resumeAt
     if (payload.title) body.title = payload.title
+    if (payload.outputLanguage !== undefined) {
+      body.output_language = normalizeOutputLanguage(payload.outputLanguage)
+    }
     // The first chunk should already be extracted for the chosen mode; the
     // backend ignores this for saved projects, which carry their own.
     body.map_layout = styleRef.current.layout
@@ -777,7 +807,10 @@ function App() {
       })
 
     try {
-      const result = await fetchTranscript({ url: watchUrl(id) })
+      const result = await fetchTranscript({
+        url: watchUrl(id),
+        outputLanguage: outputLanguageRef.current,
+      })
       applyTranscriptResult(result, id, 'Đã tải phụ đề', token)
     } catch (error: unknown) {
       if (token === loadTokenRef.current) {
@@ -847,12 +880,19 @@ function App() {
     setUrlError('')
     setUrl(draft.url)
     setStatus('Đang khôi phục bản nháp…', 'busy')
+    const draftLanguage =
+      draft.outputLanguage === undefined
+        ? readStoredOutputLanguage() ?? DEFAULT_OUTPUT_LANGUAGE
+        : draft.outputLanguage
+    setOutputLanguage(draftLanguage)
+    outputLanguageRef.current = draftLanguage
     try {
       const result = await fetchTranscript({
         url: draft.url,
         initialNodes: draft.nodes,
         resumeAt: draft.consumedUntil,
         title: draft.title,
+        outputLanguage: draftLanguage,
       })
       if (token !== loadTokenRef.current) return
       const id = draft.videoId || extractVideoId(draft.url)
@@ -1113,6 +1153,52 @@ function App() {
     }
   }
 
+  /** Choose the language the map itself is written in, not the caption track. */
+  const changeOutputLanguage = async (raw: string) => {
+    const session = sessionIdRef.current
+    const code = raw === '' ? null : normalizeOutputLanguage(raw)
+    if (!session || outputLanguageBusy || code === outputLanguageRef.current) return
+    setOutputLanguageBusy(true)
+    setStatus('Đang đổi ngôn ngữ sơ đồ…', 'busy')
+    try {
+      const response = await sessionRequest('/output-language', 'POST', {
+        session_id: session,
+        project_id: projectIdRef.current,
+        output_language: code,
+      })
+      const data = await response.json().catch(() => ({}))
+      if (sessionIdRef.current !== session) return
+      if (!response.ok) {
+        const detail = data?.detail
+        const detailCode =
+          detail && typeof detail === 'object' ? detail.code : typeof detail === 'string' ? detail : undefined
+        const message =
+          detailCode === 'rebuild_required'
+            ? 'Đổi về theo phụ đề cần tạo lại sơ đồ trước.'
+            : detailCode === 'project_read_only'
+              ? 'Dự án này chỉ cho phép xem'
+              : 'Không đổi được ngôn ngữ sơ đồ'
+        setStatus(message, 'error')
+        return
+      }
+      if (Array.isArray(data.nodes)) applyNodes(data.nodes, false)
+      if (typeof data.summary === 'string') setSummary(data.summary)
+      setOutputLanguage(code)
+      outputLanguageRef.current = code
+      storeOutputLanguage(code)
+      setStatus(
+        data.translated
+          ? `Đã dịch sơ đồ sang ${outputLanguageName(code)}`
+          : `Sơ đồ sẽ tạo bằng ${outputLanguageName(code)}`,
+        'ok',
+      )
+    } catch (error: any) {
+      setStatus(`Không đổi được ngôn ngữ sơ đồ: ${error.message}`, 'error')
+    } finally {
+      setOutputLanguageBusy(false)
+    }
+  }
+
   /** Load a second caption track for the bilingual view, without switching. */
   const loadSecondary = async (code: string) => {
     const id = videoId || extractVideoId(url)
@@ -1353,6 +1439,14 @@ function App() {
             // Another tab rewrote the map for a new mode; this one is up to date.
             setBuiltMode(data.map_mode)
             setRebuildOffer(null)
+          }
+          if (
+            data?.type === 'output_language' &&
+            Object.prototype.hasOwnProperty.call(data, 'output_language')
+          ) {
+            const language = normalizeOutputLanguage(data.output_language)
+            setOutputLanguage(language)
+            outputLanguageRef.current = language
           }
           if (data && Array.isArray(data.nodes) && mindmapRef.current) {
             applyNodes(data.nodes, data?.type === 'diff')
@@ -2186,6 +2280,26 @@ function App() {
                   <span className="session__label">Chủ đề</span>
                   <strong>{mapTitle}</strong>
                 </div>
+
+                <label
+                  className="session__output-language"
+                  title="Ngôn ngữ của sơ đồ, không phụ thuộc vào ngôn ngữ phụ đề"
+                >
+                  <span>Ngôn ngữ sơ đồ</span>
+                  <select
+                    aria-label="Ngôn ngữ sơ đồ"
+                    value={outputLanguage ?? ''}
+                    disabled={!canEdit || !sessionId || outputLanguageBusy}
+                    onChange={(event) => void changeOutputLanguage(event.target.value)}
+                  >
+                    <option value="">Theo phụ đề</option>
+                    {OUTPUT_LANGUAGES.map((item) => (
+                      <option key={item.code} value={item.code}>
+                        {item.name}
+                      </option>
+                    ))}
+                  </select>
+                </label>
 
                 <div className={`summary-card${summary ? '' : ' summary-card--empty'}`}>
                   <div className="summary-card__head">
