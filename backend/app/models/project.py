@@ -35,6 +35,9 @@ class Project(Base, TimestampMixin):
     nodes: Mapped[list] = mapped_column(JSON, default=list, nullable=False)
     transcript: Mapped[list] = mapped_column(JSON, default=list, nullable=False)
     transcript_language: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    # The language the learner wants to study in, independent of the caption
+    # track. NULL means "follow the transcript language" (legacy behaviour).
+    output_language: Mapped[str | None] = mapped_column(String(20), nullable=True)
     # ADR 0012: where the current cues came from. Old rows read as YouTube
     # captions; only the audio fallback writes "asr", so the UI can be honest.
     transcript_source: Mapped[str] = mapped_column(

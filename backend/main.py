@@ -32,7 +32,7 @@ from app.middleware.rate_limit import RateLimitMiddleware
 from app.models.project import Project
 from app.models.user import User
 from app.models.video_transcript import VideoTranscript
-from app.schemas.project import AutosaveRequest
+from app.schemas.project import AutosaveRequest, OutputLanguageRequest
 from app.services import content_classifier, content_policy, stream_tickets, video_visuals
 from app.services import projects as project_service
 from app.services import sharing as sharing_service
@@ -124,6 +124,13 @@ class TranscriptRequest(BaseModel):
     # the map. `session_id` is required for that path.
     session_id: str | None = None
     language: str | None = Field(default=None, max_length=20)
+    # The language the learner wants the MAP written in. Independent of the
+    # caption track above: a Hindi transcript can produce an English map.
+    output_language: str | None = Field(
+        default=None,
+        max_length=20,
+        pattern=r"^[A-Za-z]{2,3}([-_][A-Za-z0-9]{2,8})?$",
+    )
     # The thinking mode the map is built for (ADR 0013). `tree-down` is a
     # drawing of `tree`, so it never changes what the AI extracts.
     map_layout: str | None = Field(default=None, max_length=20)
@@ -345,6 +352,7 @@ def cache_video_map(video_id: str | None, session: dict[str, Any]) -> None:
         # The same video can be mapped in four modes; a session may only reuse
         # an entry built for its own mode (ADR 0013).
         "map_mode": session.get("map_mode", "tree"),
+        "output_language": session.get("output_language"),
         "updated_at": time.time(),
     }
     if len(video_cache) > MAX_CACHED_VIDEOS:
@@ -399,13 +407,24 @@ def create_session(
     use_cache: bool = True,
     map_layout: str | None = None,
     cacheable: bool = True,
+    output_language: str | None = None,
 ) -> tuple:
     mode = normalize_mode(map_layout)
     cached = video_cache.get(video_id) if (video_id and use_cache) else None
-    # Content from another mode is not a partial map of this one: ignore it and
-    # let the session rebuild from the playhead.
+    # Content from another mode or another output language is not a partial map
+    # of this one: ignore it and let the session rebuild from the playhead.
     if cached is not None and cache_mode(cached) != mode:
         cached = None
+    if cached is not None:
+        cached_language = cached.get("output_language")
+        if cached_language != output_language:
+            # A cached map is bytes the learner may already have studied. Keep
+            # it and its own language rather than dropping it; switching is an
+            # explicit, translated choice handled by /output-language.
+            if cached.get("nodes") or cached.get("markdown"):
+                output_language = cached_language
+            else:
+                cached = None
 
     nodes = restore_nodes(initial_nodes, initial_markdown, cached)
     markdown = tree_to_markdown(nodes) if nodes else ""
@@ -433,6 +452,7 @@ def create_session(
         "video_id": video_id,
         "title": title,
         "language": language,
+        "output_language": output_language,
         "transcript": transcript,
         "consumed_until": consumed_until,
         "summary_so_far": summary_so_far,
@@ -466,6 +486,7 @@ def session_payload(session_id: str) -> dict[str, Any]:
         "title": session.get("title"),
         "summary": session.get("summary_so_far", ""),
         "map_mode": session.get("map_mode", "tree"),
+        "output_language": session.get("output_language"),
     }
 
 @app.get("/")
@@ -728,6 +749,7 @@ async def build_session_from_cues(
     resume_at: float | None = None,
     initial_nodes: list[dict[str, Any]] | None = None,
     map_layout: str | None = None,
+    output_language: str | None = None,
 ) -> dict[str, Any]:
     """Run the unchanged two content gates and create a session from any cues.
 
@@ -806,6 +828,7 @@ async def build_session_from_cues(
             language=language,
             map_layout=map_layout,
             cacheable=not restore_input,
+            output_language=output_language,
         )
         sessions[session_id]["content_label"] = label
         sessions[session_id]["content_verified"] = content_verified
@@ -880,6 +903,7 @@ async def start_asr_fallback(
             resume_at=request.resume_at,
             initial_nodes=request.initial_nodes,
             map_layout=request.map_layout,
+            output_language=request.output_language,
         )
 
     try:
@@ -924,6 +948,7 @@ async def start_asr_fallback(
                 resume_at=request.resume_at,
                 initial_nodes=request.initial_nodes,
                 map_layout=request.map_layout,
+                output_language=request.output_language,
             )
         )
         with SessionLocal() as job_db:
@@ -961,6 +986,7 @@ async def start_asr_fallback(
             "video_id": video_id,
             "title": title,
             "language": None,
+            "output_language": request.output_language,
             "content_label": "unverified",
             "content_verified": False,
             "transcript_source": "asr",
@@ -1077,6 +1103,7 @@ async def get_transcript(
                 use_cache=False,
                 map_layout=project.map_layout,
                 cacheable=False,
+                output_language=project.output_language,
             )
         else:
             touch_session(session_id)
@@ -1095,6 +1122,7 @@ async def get_transcript(
         # a project simply because it was reopened.
         sessions[session_id]["content_verified"] = bool(project.content_verified)
         sessions[session_id]["transcript_source"] = source
+        sessions[session_id]["output_language"] = project.output_language
 
         project.last_opened_at = utcnow()
         db.commit()
@@ -1134,6 +1162,7 @@ async def get_transcript(
                 language=None,
                 map_layout=request.map_layout,
                 cacheable=False,
+                output_language=request.output_language,
             )
             # A learner-supplied file has no provenance to confirm.
             sessions[session_id]["content_verified"] = False
@@ -1227,6 +1256,7 @@ async def get_transcript(
                 resume_at=request.resume_at,
                 initial_nodes=request.initial_nodes,
                 map_layout=request.map_layout,
+                output_language=request.output_language,
             )
 
         # A bare id without oEmbed cannot be gated or titled; keep the old
@@ -1242,6 +1272,7 @@ async def get_transcript(
                 language=language,
                 map_layout=request.map_layout,
                 cacheable=False,
+                output_language=request.output_language,
             )
             return {
                 "transcript": transcript,
@@ -1426,6 +1457,7 @@ async def update_map(
             summary_so_far=summary_so_far,
             time_range=time_range,
             mode=session.get("map_mode", "tree"),
+            output_language=session.get("output_language"),
         )
 
         # On AI failure, keep the pointer so the chunk is retried later.
@@ -1493,6 +1525,207 @@ async def update_map(
         }
     finally:
         lock.release()
+
+def apply_translated_labels(
+    current: list[dict[str, Any]], translated: list[Any]
+) -> None:
+    """Copy translated labels onto the stored tree, keeping learner state.
+
+    The model is asked to keep the shape exactly; a mismatch means its answer
+    is unusable and the caller must leave the existing map untouched.
+    """
+
+    if len(current) != len(translated):
+        raise ValueError("translated tree has a different shape")
+    for node, raw in zip(current, translated, strict=True):
+        if not isinstance(node, dict) or not isinstance(raw, dict):
+            raise ValueError("invalid translated node")
+        label = str(
+            raw.get("name") or raw.get("title") or raw.get("label") or ""
+        ).strip()[:200]
+        if not label:
+            raise ValueError("translated node has no label")
+        node["label"] = label
+        old_children = node.get("children") or []
+        new_children = raw.get("children") or []
+        apply_translated_labels(old_children, new_children)
+
+
+@app.post("/output-language")
+async def set_output_language(
+    request: OutputLanguageRequest,
+    user: User | None = Depends(get_optional_user),
+    db: Session = Depends(get_db),
+):
+    """Choose the language the mind map is written in.
+
+    Captions stay in their own language. On a map that already has content,
+    switching the study language translates the existing labels and summary in
+    one bounded AI call; a failed call leaves the old map intact.
+    """
+
+    cleanup_sessions()
+    session = sessions.get(request.session_id)
+    if session is None:
+        raise HTTPException(status_code=404, detail="session_lost")
+
+    attached_id = session.get("project_id")
+    if request.project_id and attached_id and request.project_id != attached_id:
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "code": "project_mismatch",
+                "message": "This session belongs to a different project.",
+            },
+        )
+    project_id = request.project_id or attached_id
+    project = db.get(Project, project_id) if project_id else None
+    if project is not None:
+        if user is None:
+            raise HTTPException(
+                status_code=401,
+                detail={
+                    "code": "not_authenticated",
+                    "message": "Sign in to change a saved project's language.",
+                },
+            )
+        role = sharing_service.role_for(db, project, user)
+        if role is None:
+            raise HTTPException(status_code=404, detail="project_not_found")
+        if not sharing_service.can_edit(role):
+            raise HTTPException(
+                status_code=403,
+                detail={
+                    "code": "project_read_only",
+                    "message": "This project was shared with you as read-only.",
+                },
+            )
+    else:
+        assert_can_edit_session(db, session, user)
+
+    previous = session.get("output_language")
+    requested = request.output_language
+    if previous == requested:
+        return {
+            "output_language": previous,
+            "nodes": session.get("nodes", []),
+            "markdown": session.get("markdown", ""),
+            "summary": session.get("summary_so_far", ""),
+            "changed": False,
+            "translated": False,
+        }
+
+    markdown = (session.get("markdown") or "").strip()
+    if requested is None:
+        if markdown:
+            raise HTTPException(
+                status_code=409,
+                detail={
+                    "code": "rebuild_required",
+                    "message": "Đổi về theo phụ đề cần tạo lại sơ đồ hiện tại.",
+                },
+            )
+        session["output_language"] = None
+        if project is not None:
+            project.output_language = None
+            db.commit()
+        return {
+            "output_language": None,
+            "nodes": session.get("nodes", []),
+            "markdown": session.get("markdown", ""),
+            "summary": session.get("summary_so_far", ""),
+            "changed": True,
+            "translated": False,
+        }
+
+    translated = False
+    if markdown:
+        if len(markdown) > MAX_RESTRUCTURE_CHARS:
+            raise HTTPException(
+                status_code=413,
+                detail={
+                    "code": "map_too_large",
+                    "message": "Sơ đồ này quá lớn để dịch trong một lần.",
+                },
+            )
+        lock = session.get("update_lock")
+        if lock is None:
+            lock = threading.Lock()
+            session["update_lock"] = lock
+        if not lock.acquire(blocking=False):
+            raise HTTPException(
+                status_code=409,
+                detail={
+                    "code": "busy",
+                    "message": "Đang cập nhật sơ đồ, thử lại sau vài giây.",
+                },
+            )
+        try:
+            outcome = await asyncio.to_thread(
+                ai_engine.relabel,
+                markdown,
+                requested,
+                session.get("summary_so_far", ""),
+            )
+        finally:
+            lock.release()
+
+        if (
+            outcome.get("error")
+            or outcome.get("note")
+            or not isinstance(outcome.get("nodes"), list)
+            or not outcome["nodes"]
+        ):
+            raise HTTPException(
+                status_code=502,
+                detail={
+                    "code": "ai_error",
+                    "message": "Không dịch được sơ đồ. Ngôn ngữ học vẫn giữ nguyên.",
+                },
+            )
+        if outcome.get("summary") is None:
+            raise HTTPException(
+                status_code=502,
+                detail={
+                    "code": "ai_error",
+                    "message": "Không dịch được phần tóm tắt. Sơ đồ vẫn giữ nguyên.",
+                },
+            )
+        try:
+            apply_translated_labels(session.get("nodes", []), outcome["nodes"])
+        except ValueError:
+            raise HTTPException(
+                status_code=502,
+                detail={
+                    "code": "ai_error",
+                    "message": "Kết quả dịch không khớp sơ đồ. Sơ đồ vẫn giữ nguyên.",
+                },
+            ) from None
+
+        if project is not None:
+            project_service.snapshot(db, project, author_id=user.id if user else None)
+        session["markdown"] = tree_to_markdown(session["nodes"])
+        session["summary_so_far"] = outcome["summary"]
+        translated = True
+
+    session["output_language"] = requested
+    if project is not None:
+        project.output_language = requested
+        db.commit()
+        db.refresh(project)
+
+    cache_video_map(session.get("video_id"), session)
+    payload = {
+        "type": "output_language",
+        "nodes": session.get("nodes", []),
+        "markdown": session.get("markdown", ""),
+        "summary": session.get("summary_so_far", ""),
+        "output_language": requested,
+        "translated": translated,
+    }
+    session.setdefault("events", []).append({"type": "output_language", "data": payload})
+    return {**payload, "changed": True}
+
 
 @app.post("/session/{session_id}/restructure")
 async def restructure_map(
@@ -1581,7 +1814,14 @@ async def restructure_map(
             },
         )
     try:
-        outcome = await asyncio.to_thread(ai_engine.restructure, markdown, target)
+        language = session.get("output_language")
+        outcome = (
+            await asyncio.to_thread(
+                ai_engine.restructure, markdown, target, language
+            )
+            if language
+            else await asyncio.to_thread(ai_engine.restructure, markdown, target)
+        )
     finally:
         lock.release()
 

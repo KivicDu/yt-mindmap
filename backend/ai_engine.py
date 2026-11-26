@@ -124,7 +124,7 @@ CIRCLE_MODE = """MODE: CIRCLE MAP (defining in context)
 The centre is a topic and the map answers "what do I know around this?".
 - Level 1 nodes are frames of context, one line each: definition, example,
   use, link to earlier knowledge, formula, sign or symbol.
-- Open the label with the frame, in the language of the lecture
+- Open the label with the frame, in the OUTPUT LANGUAGE requested below
   ("Definition: ...", "Định nghĩa: ...", "Example: ...").
 - Only add a frame the lecture actually covers; never invent a definition the
   speaker did not give.
@@ -247,16 +247,52 @@ Return ONLY this JSON object (no markdown fences, no extra text):
 {{"label": "<lecture|not_lecture|sensitive>", "reason": "<at most 160 characters>", "confidence": <number from 0 to 1>}}"""
 
 
+# Enough for the prompt to name a language instead of showing a bare code.
+_LANGUAGE_NAMES = {
+    "vi": "Vietnamese",
+    "en": "English",
+    "hi": "Hindi",
+    "es": "Spanish",
+    "fr": "French",
+    "de": "German",
+    "ja": "Japanese",
+    "ko": "Korean",
+    "zh": "Chinese",
+    "pt": "Portuguese",
+    "ru": "Russian",
+    "ar": "Arabic",
+}
+
+
+def _output_language_rule(output_language: str | None) -> str:
+    if not output_language:
+        return (
+            "OUTPUT LANGUAGE: the same language as the transcript segment below. "
+            "Do not translate."
+        )
+    base = output_language.split("-")[0].split("_")[0].lower()
+    name = _LANGUAGE_NAMES.get(base, output_language)
+    return (
+        f'OUTPUT LANGUAGE: {name} (code "{output_language}"). '
+        "Write EVERY node label and the summary in this language, even when the "
+        "transcript uses another language. Keep timestamps unchanged and keep "
+        "proper nouns and technical terms as they appear in the transcript."
+    )
+
+
 def build_incremental_prompt(
     mode: str,
     markdown_context: str,
     summary_so_far: str,
     chunk_text: str,
     time_range: tuple,
+    output_language: str | None = None,
 ) -> str:
     return f"""You build a mind map incrementally from a lecture transcript.
 
 {CONTENT_MODES[normalize_mode(mode)]}
+
+{_output_language_rule(output_language)}
 
 EXISTING MIND MAP (markdown already shown to the user):
 {markdown_context}
@@ -287,10 +323,14 @@ Return ONLY this JSON object (no markdown fences, no extra text):
 }}"""
 
 
-def build_restructure_prompt(mode: str, markdown: str) -> str:
+def build_restructure_prompt(
+    mode: str, markdown: str, output_language: str | None = None
+) -> str:
     return f"""You rewrite an existing mind map so that it follows a different mode.
 
 {CONTENT_MODES[normalize_mode(mode)]}
+
+{_output_language_rule(output_language)}
 
 EXISTING MAP (markdown, timestamps in the links):
 {markdown}
@@ -308,6 +348,39 @@ Return ONLY this JSON object (no markdown fences, no extra text):
   "nodes": [
     {{"name": "Topic", "time": 0.0, "children": [{{"name": "Point", "time": 12.0}}]}}
   ]
+}}"""
+
+
+def build_relabel_prompt(
+    markdown: str, output_language: str, summary_so_far: str = ""
+) -> str:
+    """Retarget the labels and summary of an existing map, keeping its content."""
+
+    base = output_language.split("-")[0].split("_")[0].lower()
+    name = _LANGUAGE_NAMES.get(base, output_language)
+    return f"""You translate an existing mind map into {name}.
+
+EXISTING MAP (markdown, timestamps in the links):
+{markdown}
+
+SUMMARY OF EARLIER CONTENT:
+{summary_so_far or "(none)"}
+
+TASK:
+- Keep the tree structure, the order of siblings and every "time" value.
+- Keep every node, including ones that look repetitive. Drop nothing.
+- Translate only the human-readable label of each node into {name}.
+- Translate the summary into {name} too. If there was no summary, return an empty string.
+- Keep proper nouns, abbreviations and technical terms as they are.
+- Do not add new concepts, examples or definitions.
+- Return every node's children, even when a branch is empty.
+
+Return ONLY this JSON object (no markdown fences, no extra text):
+{{
+  "nodes": [
+    {{"name": "Topic", "time": 0.0, "children": [{{"name": "Point", "time": 12.0}}]}}
+  ],
+  "summary": "the translated summary"
 }}"""
 
 
@@ -366,6 +439,20 @@ def parse_restructure_payload(text: str) -> list[dict[str, Any]]:
     """Read the rewritten tree from a restructure reply."""
     nodes = _load_json_object(text).get("nodes")
     return nodes if isinstance(nodes, list) else []
+
+
+def parse_relabel_payload(text: str) -> dict[str, Any]:
+    """Validate a relabel reply; an unusable reply yields no translation."""
+    try:
+        data = _load_json_object(text)
+    except (ValueError, TypeError):
+        return {"nodes": [], "summary": None}
+    nodes = data.get("nodes")
+    summary = data.get("summary")
+    return {
+        "nodes": nodes if isinstance(nodes, list) else [],
+        "summary": str(summary).strip()[:MAX_SUMMARY_CHARS] if summary is not None else None,
+    }
 
 
 def parse_quiz_payload(text: str) -> list[dict[str, str]]:
@@ -612,6 +699,7 @@ class MindMapAI:
         summary_so_far: str = "",
         time_range: tuple = (0, 0),
         mode: str = DEFAULT_MODE,
+        output_language: str | None = None,
     ) -> dict[str, Any]:
         if not transcript_chunk:
             return {
@@ -638,6 +726,7 @@ class MindMapAI:
             summary_so_far=summary_so_far,
             chunk_text=chunk_text,
             time_range=time_range,
+            output_language=output_language,
         )
 
         if not self.client:
@@ -700,7 +789,9 @@ class MindMapAI:
             logger.warning("Video classification failed: %s", describe_error(e))
             return {"label": "unverified", "reason": "ai_error", "confidence": 0.0}
 
-    def restructure(self, markdown: str, mode: str) -> dict[str, Any]:
+    def restructure(
+        self, markdown: str, mode: str, output_language: str | None = None
+    ) -> dict[str, Any]:
         """Rewrite an existing map into another content mode.
 
         This reorganises what the map already holds; it never re-reads the
@@ -715,12 +806,36 @@ class MindMapAI:
             return {"nodes": [], "mode": mode, "note": "AI not configured"}
 
         try:
-            response = self._generate_with_retry(build_restructure_prompt(mode, text))
+            response = self._generate_with_retry(
+                build_restructure_prompt(mode, text, output_language)
+            )
             self._record_usage(response)
             return {"nodes": parse_restructure_payload(response.text or ""), "mode": mode}
         except Exception as e:
             logger.warning("Mind map restructure failed: %s", describe_error(e))
             return {"nodes": [], "mode": mode, "error": "ai_unavailable"}
+
+    def relabel(
+        self, markdown: str, output_language: str, summary_so_far: str = ""
+    ) -> dict[str, Any]:
+        """Translate a map's labels and summary, keeping its shape and times."""
+
+        text = (markdown or "").strip()
+        if not text or not output_language:
+            return {"nodes": [], "summary": None}
+
+        if not self.client:
+            return {"nodes": [], "summary": None, "note": "AI not configured"}
+
+        try:
+            response = self._generate_with_retry(
+                build_relabel_prompt(text, output_language, summary_so_far)
+            )
+            self._record_usage(response)
+            return parse_relabel_payload(response.text or "")
+        except Exception as e:
+            logger.warning("Mind map relabel failed: %s", describe_error(e))
+            return {"nodes": [], "summary": None, "error": "ai_unavailable"}
 
     def generate_quiz(self, markdown: str) -> dict[str, Any]:
         """Idea questions from the map. The recall half works even if this fails."""
