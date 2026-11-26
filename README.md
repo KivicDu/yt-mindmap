@@ -30,6 +30,7 @@ This project creates a dual-view setup: alongside the YouTube video, there's a d
 - [x] Video playback with dual-view layout
 - [x] Real-time transcript extraction
 - [x] Incremental AI-powered mind map generation (every ~15 seconds)
+- [x] Every generated node is grounded in caption evidence before it is shown (see [ADR 0017](docs/adr/0017-grounded-map-nodes.md))
 - [x] SSE for pushing updates to the frontend
 - [x] Minimal diff merging into the mind map
 - [x] Basic controls (pause auto-updates, manual update)
@@ -236,6 +237,7 @@ yt-mindmap/
 - [ADR 0014](docs/adr/0014-self-check-and-review.md) — self-check and optional review (shipped)
 - [ADR 0015](docs/adr/0015-output-language.md) — the map follows the learner's language, not the caption's
 - [ADR 0016](docs/adr/0016-youtube-search.md) — search lectures in-app with a study-field label (default-off, needs a Data API key)
+- [ADR 0017](docs/adr/0017-grounded-map-nodes.md) — every map node is checked against captions before it is shown
 - [Backup and restore](docs/backup-restore.md) — `pg_dump` scripts and the restore runbook
 - [Contributing workflow](CONTRIBUTING.md) — branch model and commit conventions
 
