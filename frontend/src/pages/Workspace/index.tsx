@@ -183,6 +183,14 @@ async function sessionRequest(
   return authedFetch(path, method, body)
 }
 
+interface VerificationCounts {
+  checked: number
+  grounded: number
+  repaired: number
+  dropped: number
+  model_used: boolean
+}
+
 function App() {
   const { status: authStatus } = useAuth()
   const toast = useToast()
@@ -199,6 +207,7 @@ function App() {
   const [autoUpdate, setAutoUpdate] = useState(true)
   const [focusRecent, setFocusRecent] = useState(false)
   const [status, setStatusState] = useState<Status>({ kind: 'idle', text: 'Sẵn sàng' })
+  const [verification, setVerification] = useState<VerificationCounts | null>(null)
   const [transcript, setTranscript] = useState<TranscriptEntry[]>([])
   const [transcriptLang, setTranscriptLang] = useState<string | null>(null)
   // What the learner wants to study in. Independent of the caption track.
@@ -748,6 +757,7 @@ function App() {
     setPlayerError(null)
     setVideoInfo(null)
     setTranscript([])
+    setVerification(null)
     setTranscriptLang(null)
     setTranscriptSource(undefined)
     stopAsrPolling()
@@ -1021,6 +1031,17 @@ function App() {
           'error',
         )
         return
+      }
+
+      const grounded = data?.verification
+      if (grounded && typeof grounded.checked === 'number') {
+        setVerification({
+          checked: grounded.checked,
+          grounded: Number(grounded.grounded) || 0,
+          repaired: Number(grounded.repaired) || 0,
+          dropped: Number(grounded.dropped) || 0,
+          model_used: grounded.model_used === true,
+        })
       }
 
       if (data.session_lost || data.reason === 'session_lost') {
@@ -1950,6 +1971,13 @@ function App() {
           <span className="app-status__dot" aria-hidden="true" />
           <span className="app-status__text">{status.text}</span>
           <span className="app-status__meta">
+            {verification && verification.checked > 0 && (
+              <span
+                title={`${verification.grounded} nhánh có bằng chứng phụ đề · ${verification.repaired} nhánh tự sửa · ${verification.dropped} nhánh bỏ vì không khớp`}
+              >
+                Đối chiếu {verification.checked} · sửa {verification.repaired} · bỏ {verification.dropped}
+              </span>
+            )}
             {transcript.length > 0 && <span>{transcript.length} mục phụ đề</span>}
             {videoId && <PlaybackTime clock={playbackClock} className="app-status__time" />}
           </span>
