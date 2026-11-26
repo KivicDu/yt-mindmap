@@ -32,6 +32,7 @@ import {
   type TrashedProject,
 } from '../../lib/projects'
 import { dueProjects, type DueProject } from '../../lib/review'
+import { transcriptSourceLabel, type TranscriptSource } from '../../lib/youtube'
 import ShareDialog from './ShareDialog'
 import './Dashboard.css'
 
@@ -321,6 +322,9 @@ function Overview({
                     <span className="dash-item__title">{project.title}</span>
                     <span className="dash-item__meta">
                       {project.node_count} nhánh · cập nhật {formatWhen(project.updated_at)}
+                      {transcriptSourceLabel(project.transcript_source as TranscriptSource)
+                        ? ` · ${transcriptSourceLabel(project.transcript_source as TranscriptSource)}`
+                        : ''}
                     </span>
                   </Link>
                 </li>
@@ -702,6 +706,9 @@ function ProjectRow({
             <span className="dash-item__meta">
               {project.video_id ? `${project.video_id} · ` : ''}
               {project.node_count} nhánh · cập nhật {formatWhen(project.updated_at)}
+              {transcriptSourceLabel(project.transcript_source as TranscriptSource)
+                ? ` · ${transcriptSourceLabel(project.transcript_source as TranscriptSource)}`
+                : ''}
               {project.is_draft ? ' · bản nháp' : ''}
               {project.visibility !== 'private' ? ' · đang chia sẻ' : ''}
             </span>

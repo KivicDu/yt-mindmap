@@ -29,6 +29,7 @@ export interface ProjectSummary {
   map_layout: MapLayout
   map_palette: MapPalette
   transcript_language: string | null
+  transcript_source: 'youtube_manual' | 'youtube_auto' | 'upload' | 'asr'
   consumed_until: number
   created_at: string | null
   updated_at: string | null
