@@ -7,6 +7,7 @@ import {
   forwardRef,
 } from 'react'
 import type { KeyboardEvent, PointerEvent as ReactPointerEvent } from 'react'
+import { mapWheelGesture } from '../lib/mapGestures'
 import { branchColor, styleVars, type MapStyle } from '../lib/mapStyle'
 import type { SvgLayout } from '../lib/svgLayout'
 import type { MindMapHandle } from '../lib/mapView'
@@ -177,19 +178,27 @@ const SvgMapCanvas = forwardRef<MindMapHandle, SvgMapCanvasProps>(
       // preventDefault there is ignored and the browser still scrolls or
       // pinch-zooms the whole page. This handler is bound natively instead.
       event.preventDefault()
-      userMoved.current = true
       const rect = refSvg.current?.getBoundingClientRect()
       if (!rect) return
-      const px = event.clientX - rect.left
-      const py = event.clientY - rect.top
-      // A trackpad pinch arrives as ctrl+wheel with tiny deltas, so it needs a
-      // stronger factor than a normal scroll to feel the same.
-      const step = event.ctrlKey ? 0.01 : 0.0015
+      const gesture = mapWheelGesture(event, rect)
+      userMoved.current = true
+      if (gesture.type === 'pan') {
+        // The fingers push the map with them; no press-and-drag needed.
+        setView((current) => ({
+          ...current,
+          x: current.x - gesture.dx,
+          y: current.y - gesture.dy,
+        }))
+        return
+      }
       setView((current) => {
-        const next = current.k * Math.exp(-event.deltaY * step)
-        const k = Math.min(MAX_SCALE, Math.max(MIN_SCALE, next))
+        const k = Math.min(MAX_SCALE, Math.max(MIN_SCALE, current.k * gesture.factor))
         const ratio = k / current.k
-        return { k, x: px - (px - current.x) * ratio, y: py - (py - current.y) * ratio }
+        return {
+          k,
+          x: gesture.px - (gesture.px - current.x) * ratio,
+          y: gesture.py - (gesture.py - current.y) * ratio,
+        }
       })
     }, [])
 
