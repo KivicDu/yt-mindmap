@@ -1,4 +1,4 @@
-import { useEffect, useRef, forwardRef, useImperativeHandle } from 'react'
+import { useCallback, useEffect, useRef, forwardRef, useImperativeHandle } from 'react'
 import type { CSSProperties, KeyboardEvent } from 'react'
 import { Markmap } from 'markmap-view'
 import { useTheme } from '../context/ThemeContext'
@@ -11,6 +11,7 @@ import {
   type MapNode,
   type MarkmapNode,
 } from '../lib/mindmapTree'
+import { mapWheelGesture } from '../lib/mapGestures'
 import { styleVars, type MapPalette } from '../lib/mapStyle'
 import type { MindMapHandle, MindMapProps } from '../lib/mapView'
 import './MindMap.css'
@@ -259,6 +260,28 @@ const TreeMap = forwardRef<MindMapHandle, TreeMapProps>(
       return readColorVar(svg, `--mm-b${index}`, '#c4bcab')
     }
 
+    /**
+     * markmap's own wheel-to-pan listener is installed through d3 `.on()`,
+     * which Safari treats as passive: its `preventDefault()` is ignored and
+     * the whole page scrolls along with the map. Bind our own non-passive
+     * listener and let d3 keep the pinch (ctrl+wheel) path to itself.
+     */
+    const handleWheel = useCallback((event: WheelEvent) => {
+      if (event.ctrlKey) return
+      const svg = refSvg.current
+      const instance = mm.current
+      if (!svg || !instance) return
+      const gesture = mapWheelGesture(event, svg.getBoundingClientRect())
+      if (gesture.type !== 'pan') return
+      event.preventDefault()
+      const current = (svg as any).__zoom
+      if (!current) return
+      // Same translation markmap uses: move by the finger delta in screen
+      // pixels, whatever the current scale is.
+      const next = current.translate(-gesture.dx / current.k, -gesture.dy / current.k)
+      ;(instance as any).svg.call((instance as any).zoom.transform, next)
+    }, [])
+
     useEffect(() => {
       if (refSvg.current && !mm.current) {
         const svg = refSvg.current
@@ -267,13 +290,12 @@ const TreeMap = forwardRef<MindMapHandle, TreeMapProps>(
           // update shrinks the text below the readable floor.
           autoFit: false,
           duration: window.matchMedia('(prefers-reduced-motion: reduce)').matches ? 0 : 260,
-          // Two fingers moving together are a scroll: markmap turns that into
-          // panning when `scrollForPan` is on. A pinch arrives as ctrl+wheel
-          // and still reaches d3's zoom handler, which stops the pan handler
-          // from also running. `pan` installs that wheel listener, so both
-          // options are needed; drag-to-pan keeps working independently.
+          // `scrollForPan` keeps plain wheel away from d3's zoom, leaving it
+          // for our non-passive pan listener below. A pinch arrives as
+          // ctrl+wheel and still zooms through d3. markmap's own wheel pan is
+          // left off: its passive listener lets Safari scroll the page too.
           scrollForPan: true,
-          pan: true,
+          pan: false,
           fitRatio: 0.9,
           maxInitialScale: 1.5,
           maxWidth: 280,
@@ -284,6 +306,7 @@ const TreeMap = forwardRef<MindMapHandle, TreeMapProps>(
           color: colorFor,
           lineWidth: (node: any) => ((node?.state?.depth ?? 0) <= 1 ? 2 : 1.25),
         })
+        svg.addEventListener('wheel', handleWheel, { passive: false })
         // markmap rewrites every node's `class` attribute on each render — and
         // it renders again from its own ResizeObserver, after `setData` has
         // resolved. Applying the ring once is therefore not enough: it can be
@@ -312,12 +335,13 @@ const TreeMap = forwardRef<MindMapHandle, TreeMapProps>(
         if (highlightTimer.current) {
           window.clearTimeout(highlightTimer.current)
         }
+        refSvg.current?.removeEventListener('wheel', handleWheel)
         selectionObserver.current?.disconnect()
         selectionObserver.current = null
         mm.current?.destroy()
         mm.current = null
       },
-      [],
+      [handleWheel],
     )
 
     useEffect(() => {
