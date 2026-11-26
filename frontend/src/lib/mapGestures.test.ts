@@ -1,5 +1,10 @@
-import { describe, expect, it } from 'vitest'
-import { mapWheelGesture, type ViewportRect, type WheelEventLike } from './mapGestures'
+import { describe, expect, it, vi } from 'vitest'
+import {
+  consumeWheel,
+  mapWheelGesture,
+  type ViewportRect,
+  type WheelEventLike,
+} from './mapGestures'
 
 const rect: ViewportRect = { left: 100, top: 40, width: 800, height: 600 }
 
@@ -59,5 +64,36 @@ describe('mapWheelGesture', () => {
     expect(inGesture.type).toBe('zoom')
     if (inGesture.type !== 'zoom') return
     expect(inGesture.factor).toBe(0.5)
+  })
+})
+
+describe('consumeWheel', () => {
+  function consumable(overrides: Partial<WheelEventLike> = {}) {
+    return {
+      ...wheel(overrides),
+      preventDefault: vi.fn(() => {}),
+      stopPropagation: vi.fn(() => {}),
+    }
+  }
+
+  it('always cancels the default, including a pure horizontal swipe', () => {
+    // Safari reads an unconsumed deltaX as back/forward swipe navigation.
+    const event = consumable({ deltaX: 180, deltaY: 0 })
+    consumeWheel(event)
+    expect(event.preventDefault).toHaveBeenCalledOnce()
+    expect(event.stopPropagation).toHaveBeenCalledOnce()
+  })
+
+  it('lets a pinch keep travelling to the zoom handler', () => {
+    const event = consumable({ deltaY: -20, ctrlKey: true })
+    consumeWheel(event, false)
+    expect(event.preventDefault).toHaveBeenCalledOnce()
+    expect(event.stopPropagation).not.toHaveBeenCalled()
+  })
+
+  it('works even when the event has no stopPropagation method', () => {
+    const event = { ...wheel({ deltaX: -120 }), preventDefault: vi.fn() }
+    expect(() => consumeWheel(event)).not.toThrow()
+    expect(event.preventDefault).toHaveBeenCalledOnce()
   })
 })

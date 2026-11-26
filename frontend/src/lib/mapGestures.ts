@@ -24,6 +24,12 @@ export interface ViewportRect {
   readonly height: number
 }
 
+/** A wheel event the canvas is allowed to cancel. */
+export interface ConsumableWheelEvent extends WheelEventLike {
+  preventDefault(): void
+  stopPropagation?(): void
+}
+
 export type MapWheelGesture =
   | { readonly type: 'zoom'; readonly factor: number; readonly px: number; readonly py: number }
   | { readonly type: 'pan'; readonly dx: number; readonly dy: number }
@@ -33,6 +39,21 @@ const PINCH_SENSITIVITY = 0.01
 /** A mouse wheel with Ctrl sends large deltas; keep each step gentle. */
 const MIN_STEP = 0.5
 const MAX_STEP = 2
+
+/**
+ * Cancel the browser's own handling of a wheel over the map.
+ *
+ * Safari decides whether a horizontal wheel is a back/forward swipe *before*
+ * the app interprets it, and chains any delta a scroll container left over to
+ * the window. Every wheel that reaches the canvas must therefore be consumed
+ * first — including ctrl+wheel (pinch) and events that arrive before the
+ * renderer is ready. A pan is fully ours, so it also stops at the canvas;
+ * pinch still travels on to d3 so zoom keeps working.
+ */
+export function consumeWheel(event: ConsumableWheelEvent, stopAtCanvas = true): void {
+  event.preventDefault()
+  if (stopAtCanvas) event.stopPropagation?.()
+}
 
 export function mapWheelGesture(event: WheelEventLike, rect: ViewportRect): MapWheelGesture {
   const horizontalUnit =
