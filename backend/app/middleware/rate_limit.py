@@ -59,7 +59,16 @@ def is_ai_path(path: str) -> bool:
 # GETs used to be unbounded: each one can call YouTube, query a share slug, or
 # hold an SSE socket open. Paths with a parameter need patterns for the same
 # reason as the AI restructure route.
-GET_PATHS = frozenset({"/video-info", "/transcript/languages", "/transcript/track"})
+GET_PATHS = frozenset(
+    {
+        "/video-info",
+        "/transcript/languages",
+        "/transcript/track",
+        # ADR 0016: one search costs ~101 Data API units, so it joins the
+        # existing per-IP GET burst limiter on top of the process-wide quota.
+        "/api/youtube/search",
+    }
+)
 GET_PATH_PATTERNS = (
     re.compile(r"^/stream/[^/]+$"),
     re.compile(r"^/api/share/[^/]+$"),

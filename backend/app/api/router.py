@@ -2,7 +2,7 @@
 
 from fastapi import APIRouter
 
-from app.api.routes import auth, oauth, projects, review, share
+from app.api.routes import auth, oauth, projects, review, share, youtube_search
 
 api_router = APIRouter()
 # Password routes first so /auth/me, /auth/refresh, ... are registered before
@@ -12,3 +12,4 @@ api_router.include_router(oauth.router)
 api_router.include_router(projects.router)
 api_router.include_router(review.router)
 api_router.include_router(share.router)
+api_router.include_router(youtube_search.router)

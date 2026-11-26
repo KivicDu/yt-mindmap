@@ -145,6 +145,7 @@ def test_restructure_consumes_the_daily_ai_quota(
         "/stream/session-123",
         "/api/share/meta",
         "/api/share/YTMM-ABC12345",
+        "/api/youtube/search",
     ],
 )
 def test_expensive_get_paths_are_recognised(path):

@@ -234,6 +234,8 @@ yt-mindmap/
 - [ADR 0012](docs/adr/0012-audio-fallback-asr.md) — audio fallback for videos without captions (implemented, default-off via `ASR_ENABLED`)
 - [ADR 0013](docs/adr/0013-thinking-map-content.md) — the map type decides what the AI extracts
 - [ADR 0014](docs/adr/0014-self-check-and-review.md) — self-check and optional review (shipped)
+- [ADR 0015](docs/adr/0015-output-language.md) — the map follows the learner's language, not the caption's
+- [ADR 0016](docs/adr/0016-youtube-search.md) — search lectures in-app with a study-field label (default-off, needs a Data API key)
 - [Backup and restore](docs/backup-restore.md) — `pg_dump` scripts and the restore runbook
 - [Contributing workflow](CONTRIBUTING.md) — branch model and commit conventions
 

@@ -16,6 +16,7 @@ from app.services.asr_jobs import reset_asr_jobs
 from app.services.content_classifier import reset_classifier_cache
 from app.services.rate_limit import reset_rate_limits
 from app.services.review import reset_quiz_cache
+from app.services.youtube_search import reset_search_cache
 
 # SQLite is a test double only: models use portable column types and the app
 # itself runs on PostgreSQL. StaticPool keeps one in-memory database alive
@@ -51,7 +52,12 @@ def isolated_state(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     # ADR 0012 stays off unless a test explicitly turns it on, and no test may
     # reach a provider: the fake Gemini client is injected per test.
     monkeypatch.setattr(settings, "ASR_ENABLED", False)
+    # ADR 0016: no test may reach Google. Search tests turn this on explicitly
+    # with a fake Data API client; the key is never read from the real env.
+    monkeypatch.setattr(settings, "YOUTUBE_SEARCH_ENABLED", False)
+    monkeypatch.setattr(settings, "YOUTUBE_DATA_API_KEY", None)
     reset_classifier_cache()
+    reset_search_cache()
     reset_quiz_cache()
     main_module.sessions.clear()
     main_module.video_cache.clear()
@@ -63,6 +69,7 @@ def isolated_state(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     reset_asr_jobs()
     reset_rate_limits()
     reset_quiz_cache()
+    reset_search_cache()
 
 
 @pytest.fixture()

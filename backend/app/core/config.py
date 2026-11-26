@@ -10,7 +10,7 @@ from pathlib import Path
 from typing import Literal
 from urllib.parse import urlsplit
 
-from pydantic import model_validator
+from pydantic import SecretStr, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 ENV_FILE = Path(__file__).resolve().parents[2] / ".env"
@@ -104,6 +104,18 @@ class Settings(BaseSettings):
     RATE_LIMIT_GET_PER_MINUTE: int = 120
     AI_DAILY_QUOTA_PER_USER: int = 5000
     AI_DAILY_QUOTA_ANONYMOUS: int = 1000
+
+    # ADR 0016: YouTube search needs a server-side Data API key. Both the flag
+    # and the key are required, so an instance with no key keeps the old
+    # paste-a-link flow instead of making surprise billable calls.
+    YOUTUBE_SEARCH_ENABLED: bool = False
+    YOUTUBE_DATA_API_KEY: SecretStr | None = None
+    YOUTUBE_SEARCH_MAX_RESULTS: int = 8
+    YOUTUBE_SEARCH_CACHE_TTL_SECONDS: int = 600
+    # search.list costs 100 units and videos.list 1; leave headroom under the
+    # default 10.000 units/day. This is a process-wide cap, not a per-user one.
+    YOUTUBE_SEARCH_DAILY_UNITS: int = 4000
+
     # Only enable behind a reverse proxy that overwrites X-Forwarded-For;
     # otherwise a client could spoof the header and dodge IP limits.
     TRUST_PROXY_HEADERS: bool = False
