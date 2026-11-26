@@ -20,6 +20,8 @@ SEEK_PREFIX = "#seek-"
 MAX_LABEL_CHARS = 200
 MAX_NOTE_CHARS = 2000
 MAX_ALIASES = 8
+MAX_EVIDENCE_ITEMS = 2
+MAX_EVIDENCE_CHARS = 240
 
 _MARKDOWN_LINE = re.compile(r"^(?P<indent>[ \t]*)[-*]\s+(?P<body>.*)$")
 _SEEK_LINK = re.compile(r"^\[(?P<label>.*?)\]\(#seek-(?P<time>\d+(?:\.\d+)?)\)$")
@@ -55,6 +57,28 @@ def clean_note(raw: Any) -> str:
     return text[:MAX_NOTE_CHARS]
 
 
+def clean_evidence(raw: Any) -> list[dict[str, Any]]:
+    """Transcript cues that support a node (ADR 0017).
+
+    Evidence is derived from the caption stream, not learner prose, so it is
+    safe to keep in the shared video cache. Unknown keys are dropped.
+    """
+    if not isinstance(raw, list):
+        return []
+    result: list[dict[str, Any]] = []
+    for entry in raw[:MAX_EVIDENCE_ITEMS]:
+        if not isinstance(entry, dict):
+            continue
+        start = entry.get("start")
+        if isinstance(start, bool) or not isinstance(start, (int, float)) or start < 0:
+            continue
+        text = " ".join(str(entry.get("text") or "").split())[:MAX_EVIDENCE_CHARS]
+        if not text:
+            continue
+        result.append({"start": float(start), "text": text})
+    return result
+
+
 def resolve_time(raw: Any, default: float | None = None) -> float | None:
     """Pick a node's timestamp, falling back to the chunk start."""
     if isinstance(raw, bool):  # bool is an int subclass; not a timestamp
@@ -79,8 +103,13 @@ def markdown_label(label: str, time: float | None) -> str:
     return f"[{text.replace('[', '(').replace(']', ')')}]({SEEK_PREFIX}{float(time):.1f})"
 
 
-def make_node(label: str, time: float | None, parent_id: str | None) -> dict[str, Any]:
-    return {
+def make_node(
+    label: str,
+    time: float | None,
+    parent_id: str | None,
+    evidence: Any = None,
+) -> dict[str, Any]:
+    node: dict[str, Any] = {
         "id": new_id(),
         "parentId": parent_id,
         "label": label,
@@ -91,6 +120,10 @@ def make_node(label: str, time: float | None, parent_id: str | None) -> dict[str
         "pinned": False,
         "children": [],
     }
+    cleaned = clean_evidence(evidence)
+    if cleaned:
+        node["evidence"] = cleaned
+    return node
 
 
 def normalize_nodes(
@@ -110,7 +143,12 @@ def normalize_nodes(
         label = clean_label(raw.get("name") or raw.get("title") or raw.get("label"))
         if not label:
             continue
-        node = make_node(label, resolve_time(raw.get("time"), default_time), parent_id)
+        node = make_node(
+            label,
+            resolve_time(raw.get("time"), default_time),
+            parent_id,
+            raw.get("evidence"),
+        )
         node["note"] = clean_note(raw.get("note"))
         node["pinned"] = raw.get("pinned") is True
         node["children"] = normalize_nodes(
@@ -324,6 +362,9 @@ def normalize_cached_nodes(raw: Any, parent_id: str | None = None) -> list[dict[
         }
         if aliases:
             node["aliases"] = aliases
+        evidence = clean_evidence(entry.get("evidence"))
+        if evidence:
+            node["evidence"] = evidence
         node["children"] = normalize_cached_nodes(entry.get("children"), parent_id=node["id"])
         nodes.append(node)
     return nodes

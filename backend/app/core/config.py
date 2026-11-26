@@ -105,6 +105,12 @@ class Settings(BaseSettings):
     AI_DAILY_QUOTA_PER_USER: int = 5000
     AI_DAILY_QUOTA_ANONYMOUS: int = 1000
 
+    # ADR 0017: every generated node must be grounded in a transcript cue before
+    # it reaches the learner. The model pass only repairs nodes the deterministic
+    # check could not ground; it is charged as a second AI call on /update-map.
+    MAP_GROUNDING_ENABLED: bool = True
+    MAP_VERIFY_MODEL_ENABLED: bool = True
+
     # ADR 0016: YouTube search needs a server-side Data API key. Both the flag
     # and the key are required, so an instance with no key keeps the old
     # paste-a-link flow instead of making surprise billable calls.

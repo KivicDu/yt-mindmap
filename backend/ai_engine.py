@@ -384,6 +384,48 @@ Return ONLY this JSON object (no markdown fences, no extra text):
 }}"""
 
 
+MAX_VERIFY_PROMPT_CHARS = 12000
+MAX_VERIFY_ITEMS = 24
+MAX_VERIFY_QUOTE_CHARS = 240
+
+
+def build_verify_prompt(items: list[dict[str, Any]], language: str | None = None) -> str:
+    """ADR 0017: repair or drop labels that have no caption support.
+
+    Only the disputed nodes and their nearby captions are sent. The model never
+    sees the whole map again, so this stays one bounded extra call.
+    """
+    lines: list[str] = []
+    for item in items[:MAX_VERIFY_ITEMS]:
+        captions = "\n".join(
+            f"  [{cue['start']:.1f}s] {cue['text']}" for cue in item.get("captions", [])
+        )
+        lines.append(
+            f"- id: {item['path']}\n  map label: {item['label']}\n  captions:\n{captions}"
+        )
+    language_rule = (
+        f"Write corrected labels in {language}. "
+        if language
+        else "Keep the same language as the map label. "
+    )
+    return f"""You check mind-map labels against lecture captions. For each id, decide:
+repair the label so it says only what the captions actually support, or drop it.
+
+HARD RULES:
+- Use ONLY the quoted captions. No outside knowledge, no new concepts, no new timestamps.
+- {language_rule}A label is 2-6 words and names an idea, not a sentence.
+- If the captions do not support the idea at all, set "drop" to true.
+- Every kept item must include "quote": a short, verbatim snippet copied from
+  the quoted captions that contains the idea. Do not paraphrase the quote.
+- Keep each id unchanged and return every id exactly once.
+
+DISPUTED NODES:
+{chr(10).join(lines)}
+
+Return ONLY this JSON object (no markdown fences, no extra text):
+{{"items": [{{"id": "0", "label": "short grounded label", "quote": "verbatim caption words", "drop": false}}]}}"""
+
+
 def build_quiz_prompt(markdown: str) -> str:
     """Ask for 5–8 map-only idea questions with a short answer key each.
 
@@ -493,6 +535,31 @@ def parse_grade_payload(text: str) -> bool | None:
         if lowered in {"false", "no", "incorrect", "sai"}:
             return False
     return None
+
+
+def parse_verify_payload(text: str) -> dict[str, dict[str, Any]]:
+    """Read the verifier reply, indexed by the path we sent it."""
+    try:
+        data = _load_json_object(text)
+    except (ValueError, TypeError):
+        return {}
+    raw = data.get("items")
+    if not isinstance(raw, list):
+        return {}
+    decisions: dict[str, dict[str, Any]] = {}
+    for item in raw[:MAX_VERIFY_ITEMS]:
+        if not isinstance(item, dict):
+            continue
+        path = item.get("id") or item.get("path")
+        if not isinstance(path, str) or not path or path in decisions:
+            continue
+        label = str(item.get("label") or "").strip()[:120]
+        decisions[path] = {
+            "label": label or None,
+            "quote": str(item.get("quote") or "").strip()[:MAX_VERIFY_QUOTE_CHARS],
+            "drop": item.get("drop") is True,
+        }
+    return decisions
 
 
 def parse_classification(text: str) -> dict[str, Any]:
@@ -758,6 +825,25 @@ class MindMapAI:
                 # a stable code they can map to Vietnamese copy.
                 "error": "ai_unavailable",
             }
+
+    def verify_nodes(
+        self, items: list[dict[str, Any]], language: str | None = None
+    ) -> dict[str, Any]:
+        """ADR 0017: one bounded call that repairs or drops ungrounded nodes."""
+        if not items:
+            return {"decisions": {}, "skipped": True}
+        prompt = build_verify_prompt(items, language)
+        if len(prompt) > MAX_VERIFY_PROMPT_CHARS:
+            prompt = prompt[:MAX_VERIFY_PROMPT_CHARS] + "\n...(captions truncated)"
+        if not self.client:
+            return {"decisions": {}, "note": "AI not configured"}
+        try:
+            response = self._generate_with_retry(prompt)
+            self._record_usage(response)
+            return {"decisions": parse_verify_payload(response.text or "")}
+        except Exception as e:
+            logger.warning("Mind map verification failed: %s", describe_error(e))
+            return {"decisions": {}, "error": "ai_unavailable"}
 
     def classify_video(
         self,
